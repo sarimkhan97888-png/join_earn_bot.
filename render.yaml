@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: join-earn-bot
+    runtime: python
+    plan: starter          # free plan 15 min idle par so jata hai, bot band ho jayega
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    healthCheckPath: /health
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: BASE_URL
+        sync: false
+      - key: ADMIN_IDS
+        sync: false
+      - key: SUPPORT_URL
+        sync: false
+      - key: GATEWAY_URL
+        sync: false
+      - key: GATEWAY_KEY
+        sync: false
+      - key: GATEWAY_SECRET
+        sync: false
+      - key: AUTO_PAYOUT
+        value: "0"
+      - key: PYTHON_VERSION
+        value: "3.11.9"

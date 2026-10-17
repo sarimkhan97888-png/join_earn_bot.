@@ -246,7 +246,7 @@ function rWallet() {
   const m = S.me, W = S.wallet || { orders: [], withdrawals: [] };
   const st = { paid: ['g', 'Paid'], pending: ['y', 'Pending'], rejected: ['r', 'Rejected'], processing: ['b', 'Processing'], mismatch: ['r', 'Mismatch'] };
   const rows = [
-    ...W.withdrawals.map(w => ({ at: w.at, ico: '⬆️', t: 'Withdraw', s: `${fmt(w.coins)} coins → ${w.upi}`, st: w.status })),
+    ...W.withdrawals.map(w => ({ at: w.at, ico: '⬆️', t: 'Withdraw', s: `${fmt(w.coins)} coins → ₹${w.amount} (${w.upi})`, st: w.status })),
     ...W.orders.map(o => ({ at: o.at, ico: o.kind === 'premium' ? '💎' : '⬇️', t: o.kind === 'premium' ? 'Premium' : 'Deposit', s: `₹${o.amount}${o.coins ? ' · ' + fmt(o.coins) + ' coins' : ''}`, st: o.status }))
   ].sort((a, b) => new Date(b.at) - new Date(a.at));
   $('#view').innerHTML = `<h2>Wallet</h2>
@@ -269,7 +269,7 @@ function withdrawSheet() {
   openSheet(`<h3>Withdraw</h3><p>Min ${fmt(c.min_withdraw)} coins (₹${inr(c.min_withdraw)}). Balance: <b>${fmt(m.balance)}</b> coins.</p>
   <div class="cost">UPI: <b>${esc(m.upi)}</b></div>
   <label>Coins</label><input id="wc" type="number" inputmode="numeric" placeholder="${c.min_withdraw}" data-inp="wd">
-  <div class="qs"><button data-act="wmax">Max</button></div><div class="cost" id="wh">You get: ₹0</div>
+  <div class="qs"><button data-act="wmax">Max</button></div><div class="cost" id="wh">You get: ₹0 (after ${c.withdraw_tax}% tax)</div>
   <button class="btn" data-act="wdgo">Withdraw</button>`);
 }
 function showQR(o, kind) {
@@ -301,13 +301,14 @@ function rProfile() {
   <div class="card"><div class="kv"><span>Gmail</span><b>${esc(m.gmail || '—')}</b></div><div class="kv"><span>UPI ID</span><b>${esc(m.upi || '—')}</b></div><div class="kv"><span>Telegram ID</span><b>${m.id}</b></div>${m.premium ? `<div class="kv"><span>Premium till</span><b>${dateOnly(m.premium_until)}</b></div>` : ''}</div>
   <div class="card" style="padding:4px 16px">
    <div class="item" data-act="upi" style="cursor:pointer"><div class="ico">⚙️</div><div class="sp"><b>Settings</b><span class="sub">UPI ID set / change</span></div>›</div>
-   <div class="item" data-act="studio" style="cursor:pointer"><div class="ico">💎</div><div class="sp"><b>Premium</b><span class="sub">${m.premium ? 'Upload tasks, manage posts' : '₹' + S.cfg.premium_price + '/month'}</span></div>›</div>
+   <div class="item" data-act="studio" style="cursor:pointer"><div class="ico">💎</div><div class="sp"><b>Premium</b><span class="sub">${m.premium ? 'Upload tasks, manage posts' : 'Unlock karne ke liye ₹' + S.cfg.premium_price + '/month'}</span></div>›</div>
+   <div class="item" data-act="gift" style="cursor:pointer"><div class="ico">🎁</div><div class="sp"><b>Gift code</b><span class="sub">Code redeem karke coins pao</span></div>›</div>
    <div class="item" data-act="rules" style="cursor:pointer"><div class="ico">📜</div><div class="sp"><b>Rules</b><span class="sub">Earning & withdraw rules</span></div>›</div>
    <div class="item" data-act="support" style="cursor:pointer"><div class="ico">🎧</div><div class="sp"><b>Customer service</b><span class="sub">Help chahiye? Message karo</span></div>›</div></div>`;
 }
 function rulesSheet() {
   const c = S.cfg;
-  openSheet(`<h3>Rules</h3><ul class="steps"><li>Channel join karo, Check dabao: +${c.join_reward} coins, ${c.hold_hours} ghante hold me.</li><li>Hold me channel leave kiya to coins cut aur tasks block. Dobara join karne par unblock.</li><li>Min withdraw ${fmt(c.min_withdraw)} coins (100 coins = ₹1).</li><li>Ek device, ek Gmail, ek UPI = ek account. Fake accounts ban honge.</li><li>Bot Work: reward ${c.bw_min_reward}+ coins, owner approve kare to milta hai. Reject galat ho to Report karo.</li></ul><button class="btn ghost" data-act="closesheet">Close</button>`);
+  openSheet(`<h3>Rules</h3><ul class="steps"><li>Channel join karo, Check dabao: +${c.join_reward} coins, ${c.hold_hours} ghante hold me.</li><li>Hold me channel leave kiya to coins cut aur tasks block. Dobara join karne par unblock.</li><li>Min withdraw ${fmt(c.min_withdraw)} coins (100 coins = ₹1). Withdraw par ${c.withdraw_tax}% tax kat-ta hai.</li><li>Ek device, ek Gmail, ek UPI = ek account. Fake accounts ban honge.</li><li>Bot Work: reward ${c.bw_min_reward}+ coins, owner approve kare to milta hai. Reject galat ho to Report karo.</li></ul><button class="btn ghost" data-act="closesheet">Close</button>`);
 }
 async function fingerprint() {
   const c = document.createElement('canvas'), x = c.getContext('2d');
@@ -442,13 +443,21 @@ const H = {
     const j = await act('/api/verify', { gmail: $('#vg').value, fp: await fingerprint() });
     if (j.ok) { closeSheet(); await popup('ok', 'Verified', j.msg); refresh(); }
   },
+  gift() {
+    openSheet(`<h3>🎁 Gift code</h3><p>Gift code daalo aur coins seedhe balance me pao.</p>
+    <label>Code</label><input id="gc" placeholder="DIWALI500" autocapitalize="characters" autocomplete="off"><button class="btn" data-act="giftgo">Redeem</button>`);
+  },
+  async giftgo() {
+    const j = await act('/api/gift', { code: $('#gc').value });
+    if (j.ok) { closeSheet(); await popup('ok', 'Gift redeemed', j.msg); refresh(); }
+  },
   rules: rulesSheet,
   support: () => openLink(S.cfg.support_url)
 };
 function onInp(k) {
   const c = S.cfg;
   if (k === 'dep') { const v = +$('#dc').value || 0; $('#dh').innerHTML = `Pay: <b>₹${(v / c.coin_per_inr).toLocaleString('en-IN')}</b>`; }
-  if (k === 'wd') { const v = +$('#wc').value || 0; $('#wh').innerHTML = `You get: <b>₹${(v / c.coin_per_inr).toLocaleString('en-IN')}</b>`; }
+  if (k === 'wd') { const v = +$('#wc').value || 0; $('#wh').innerHTML = `You get: <b>₹${(v * (100 - c.withdraw_tax) / 100 / c.coin_per_inr).toLocaleString('en-IN', { maximumFractionDigits: 2 })}</b> <span class="sub">(${c.withdraw_tax}% tax kat ke)</span>`; }
   if (k === 'tcn') { const v = +$('#tcn').value || 0; $('#tcc').innerHTML = `Cost: <b>${fmt(v * c.ad_cost)}</b> coins (${c.ad_cost} per member)`; }
   if (k === 'bw') { const v = (+$('#br').value || 0) * (+$('#bn').value || 0); $('#bc').innerHTML = `Total cost: <b>${fmt(v)}</b> coins`; }
 }

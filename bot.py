@@ -1,5 +1,7 @@
 import asyncio
 import logging
+import re
+import secrets
 
 from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as M, MenuButtonWebApp, Update, WebAppInfo
 from telegram.error import TelegramError
@@ -33,6 +35,23 @@ async def start(update: Update, ctx):
         parse_mode="HTML", reply_markup=app_kb())
 
 
+# ---------------- admin: gift code ----------------
+async def gift_cmd(update: Update, ctx):
+    if update.effective_user.id not in config.ADMIN_IDS:
+        return
+    a = ctx.args
+    if len(a) < 2 or not a[0].isdigit() or not a[1].isdigit() or int(a[0]) < 1 or int(a[1]) < 1:
+        return await update.message.reply_text(
+            "Usage: /gift <coins> <kitne log use kar sakte> [CODE]\nExample: /gift 500 100  ya  /gift 500 100 DIWALI")
+    code = a[2].upper() if len(a) > 2 else secrets.token_hex(4).upper()
+    if not re.fullmatch(r"[A-Z0-9]{4,20}", code):
+        return await update.message.reply_text("Code 4-20 letters/numbers ka hona chahiye.")
+    if not await db.gift_create(code, int(a[0]), int(a[1])):
+        return await update.message.reply_text("Ye code pehle se hai. Dusra code chuno.")
+    await update.message.reply_text(
+        f"🎁 Gift code ban gaya\nCode: <code>{code}</code>\nCoins: {a[0]} per user\nLimit: {a[1]} users", parse_mode="HTML")
+
+
 # ---------------- admin: withdraw approve/reject ----------------
 async def on_admin_wd(update: Update, ctx):
     q = update.callback_query
@@ -54,7 +73,7 @@ async def on_admin_wd(update: Update, ctx):
         done = True
         if config.AUTO_PAYOUT:
             try:
-                done = await gateway.payout(w["upi"], w["amount_inr"], f"WD{wid}")
+                done = await gateway.payout(w["upi"], float(w["amount_inr"]), f"WD{wid}")
             except Exception:
                 log.exception("payout failed")
                 done = False
@@ -65,7 +84,7 @@ async def on_admin_wd(update: Update, ctx):
         await q.answer("✅ Approved" + ("" if config.AUTO_PAYOUT else " — UPI par manually pay kar do"),
                        show_alert=True)
         await util.notify(ctx.bot, w["user_id"],
-                          f"✅ Withdraw #{wid} paid: {util.inr(w['coins'])} → {w['upi']}")
+                          f"✅ Withdraw #{wid} paid: ₹{float(w['amount_inr']):.2f} → {w['upi']} (10% tax kat ke)")
     try:
         await q.edit_message_reply_markup(None)
     except TelegramError:
@@ -122,6 +141,7 @@ async def on_error(update, ctx):
 
 def register(app):
     app.add_handler(CommandHandler("start", start, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("gift", gift_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CallbackQueryHandler(on_admin_wd, pattern=r"^adm_"))
     app.add_handler(CallbackQueryHandler(botwork.on_cb, pattern=r"^(bws_|bwa_)"))
     app.add_handler(ChatMemberHandler(on_chat_member, ChatMemberHandler.CHAT_MEMBER))

@@ -88,7 +88,8 @@ def cfg(request):
             "hold_hours": config.HOLD_HOURS, "premium_price": config.PREMIUM_PRICE,
             "premium_days": config.PREMIUM_DAYS, "bw_min_reward": config.BW_MIN_REWARD,
             "bw_min_users": config.BW_MIN_USERS, "bw_max_users": config.BW_MAX_USERS,
-            "support_url": config.SUPPORT_URL, "bot_username": request.app["bot"].username}
+            "support_url": config.SUPPORT_URL, "bot_username": request.app["bot"].username,
+            "withdraw_tax": config.WITHDRAW_TAX_PERCENT}
 
 
 # ---------------- auth + rate limit ----------------
@@ -191,7 +192,7 @@ async def api_wallet(request):
     uid = request["u"]["id"]
     orders = [{"id": r["order_id"], "kind": r["kind"], "coins": r["coins"], "amount": r["amount_inr"],
                "status": r["status"], "at": iso(r["created_at"])} for r in await db.order_history(uid)]
-    wds = [{"id": r["id"], "coins": r["coins"], "amount": r["amount_inr"], "upi": r["upi"],
+    wds = [{"id": r["id"], "coins": r["coins"], "amount": float(r["amount_inr"]), "fee": r["fee_coins"], "upi": r["upi"],
             "status": r["status"], "at": iso(r["created_at"])} for r in await db.wd_history(uid)]
     return ok(orders=orders, withdrawals=wds)
 
@@ -250,16 +251,31 @@ async def api_withdraw(request):
     r = await db.request_withdraw(uid, coins)
     if not r:
         return err("❌ Withdraw nahi ho paya. Balance aur verification check karo.")
-    wid, upi = r
+    wid, upi, fee, net = r
     kb = M([[B("✅ Approve", callback_data=f"adm_ok:{wid}"), B("❌ Reject", callback_data=f"adm_no:{wid}")]])
     for a in config.ADMIN_IDS:
         await util.notify(request.app["bot"], a,
-                          f"💸 Withdraw #{wid}\nUser: <code>{uid}</code>\n{util.inr(coins)} → <code>{upi}</code>",
+                          f"💸 Withdraw #{wid}\nUser: <code>{uid}</code>\n{coins} coins − {fee} tax = <b>₹{net:.2f}</b> payable\nUPI: <code>{upi}</code>",
                           reply_markup=kb)
-    return ok(msg=f"Withdraw request #{wid} bhej di gayi. {util.inr(coins)} → {upi}")
+    return ok(msg=f"Withdraw request #{wid} bhej di gayi. {coins} coins − {fee} tax = ₹{net:.2f} → {upi}")
 
 
 # ---------------- profile ----------------
+@routes.post("/api/gift")
+async def api_gift(request):
+    u = request["u"]
+    code = str((await body(request)).get("code", "")).strip().upper()
+    if not u["device_ok"]:
+        return err("🔐 Gift code ke liye pehle device verify karo.")
+    if not re.fullmatch(r"[A-Z0-9]{4,20}", code):
+        return err("Sahi gift code daalo.")
+    res, coins = await db.gift_redeem(u["id"], code)
+    if res == "ok":
+        return ok(msg=f"Gift code redeem hua! +{coins} coins balance me add ho gaye.")
+    return err({"invalid": "Ye gift code galat hai.", "used_up": "Is gift code ki limit khatam ho gayi.",
+                "dup": "Tum ye code pehle use kar chuke ho."}[res])
+
+
 @routes.post("/api/upi")
 async def api_upi(request):
     upi = str((await body(request)).get("upi", "")).strip().lower()

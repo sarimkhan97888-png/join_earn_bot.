@@ -1,32 +1,30 @@
-# Join & Earn Telegram Bot
+# Join & Earn: Telegram Mini App
+
+Bot sirf `/start` par "Open App" button deta hai. Poori UI Mini App (`index.html`) me hai: Home, Tasks, Wallet, Profile,
+Premium Studio, popups, QR payment. Backend `api.py` me hai.
+
+## Files (sab GitHub repo ke root me, kisi folder me nahi)
+main.py, bot.py, botwork.py, api.py, webapp.py, db.py, gateway.py, util.py, config.py, index.html,
+requirements.txt, render.yaml, README.md, .gitignore, .env.example
 
 ## Deploy (GitHub + Render)
-1. Ye folder GitHub repo me push karo (`.env` push mat karna).
-2. Render par **PostgreSQL** banao (Free/Starter) → Internal Database URL copy karo.
-3. Render par **New → Web Service** → repo select. Build: `pip install -r requirements.txt`, Start: `python main.py`.
-   - Free web service 15 min idle par so jati hai aur bot band ho jata hai. **Starter plan lo** ya UptimeRobot se `/health` ping karo.
-4. Environment variables (`.env.example` dekho):
-   - `BOT_TOKEN` (@BotFather), `DATABASE_URL`, `BASE_URL` (Render ka URL, bina `/` ke)
-   - `ADMIN_IDS` = tumhari Telegram numeric ID (withdraw approve + reports yahin aayenge)
-   - `GATEWAY_*` gateway ki details
-5. BotFather me: `/setdomain` apna Render domain set karo (Mini App ke liye).
-6. Gateway dashboard me webhook URL: `https://<BASE_URL>/webhook/gateway`
+1. Saari files GitHub repo (Private) me upload karo.
+2. Render par PostgreSQL banao (free 30 din me expire hota hai; asli use ke liye paid ya Neon) -> Internal Database URL copy karo.
+3. Render par Web Service: Build `pip install -r requirements.txt`, Start `python main.py`, Health check `/health`.
+   Free web service so jati hai, Starter plan lo.
+4. Environment: BOT_TOKEN, DATABASE_URL, BASE_URL (Render ka URL, bina `/`), ADMIN_IDS, SUPPORT_URL, GATEWAY_URL,
+   GATEWAY_KEY, GATEWAY_SECRET, AUTO_PAYOUT=0, PYTHON_VERSION=3.11.9
+5. Gateway dashboard me webhook: `https://<BASE_URL>/webhook/gateway`
+6. Bot me `/start` bhejo -> "Open App" dabao. Menu button bhi apne aap set ho jata hai.
 
 ## Gateway API jodna
-`gateway.py` me 3 functions hain (`create_order`, `parse_webhook`, `payout`). Apni gateway ki docs ke hisaab se
-endpoint, auth header, response keys aur signature check wahi badalna hai. Baaki code ko chhuna nahi padega.
-Deposit/Premium sirf webhook se credit hota hai (user ke click se nahi).
+`gateway.py` me 3 functions hain (`create_order`, `parse_webhook`, `payout`). Apni gateway ke docs ke hisaab se badlo.
+Deposit/Premium sirf webhook se credit hota hai.
 
-## Features
-- Home / Tasks / Wallet / Profile (reply keyboard)
-- Channel join task: 100 coin per join, 24h hold, leave karne par coin cut + block, rejoin par unblock
-- Premium Rs 49/month: channel/group task upload (bot admin check), min 10 members, 110 coin per member
-- Bot Work (Premium): poster reward set karta hai (min 220), worker screenshot + refer link bhejta hai,
-  poster Done/Reject, reject par Report -> admin decide. Poster 48h me review na kare to case admin ke paas.
-- Deposit min 10,000 coins (QR gateway se), withdraw min 1,000 coins (100 coin = Rs 1)
-- Device verification (Mini App) + Gmail, ek device/Gmail/UPI = ek account
-- Withdraw admin approve karne par hi hota hai (`AUTO_PAYOUT=1` karne par gateway se auto payout)
-
-## Zaroori
-- Task wale channel me bot ko **Admin** banana hoga (join detect `chat_member` event se hota hai).
-- Coins ka ledger `ledger` table me hai, har coin movement ki entry.
+## Rules (config.py me badal sakte ho)
+- 100 coins = Rs 1, join reward 100, hold 24h, channel leave -> coins cut + block, rejoin -> unblock
+- Premium Rs 49/month: channel task (min 10 members, 110 coins per member) aur Bot Work (min reward 220)
+- Min deposit 10,000 coins, min withdraw 1,000 coins, withdraw admin approve par
+- Bot Work: worker screenshot + refer link bhejta hai, owner ko Telegram me Done/Reject milta hai,
+  reject par Report -> admin. Owner 48h me review na kare to case admin ke paas.
+- Task wale channel me bot ko Admin banana zaroori hai.

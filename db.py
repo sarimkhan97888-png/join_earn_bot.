@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 import asyncpg
 
 import config
@@ -55,8 +57,19 @@ CREATE TABLE IF NOT EXISTS bw_subs(
   UNIQUE(bw_id, worker_id)
 );
 CREATE TABLE IF NOT EXISTS withdrawals(
-  id SERIAL PRIMARY KEY, user_id BIGINT NOT NULL, coins BIGINT NOT NULL, amount_inr INT NOT NULL,
+  id SERIAL PRIMARY KEY, user_id BIGINT NOT NULL, coins BIGINT NOT NULL, amount_inr NUMERIC(12,2) NOT NULL,
+  fee_coins BIGINT NOT NULL DEFAULT 0,
   upi TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE withdrawals ALTER COLUMN amount_inr TYPE NUMERIC(12,2);
+ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS fee_coins BIGINT NOT NULL DEFAULT 0;
+CREATE TABLE IF NOT EXISTS gift_codes(
+  code TEXT PRIMARY KEY, coins INT NOT NULL, max_uses INT NOT NULL, used INT NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS gift_redeems(
+  code TEXT NOT NULL REFERENCES gift_codes(code), user_id BIGINT NOT NULL,
+  at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY(code, user_id)
 );
 """
 
@@ -253,6 +266,9 @@ async def complete_order(order_id, paid_amount):
 
 # ---------- withdrawals ----------
 async def request_withdraw(uid, coins):
+    """Return (wid, upi, fee_coins, net_inr). Tax coins me kat-ta hai, user ko net amount milta hai."""
+    fee = coins * config.WITHDRAW_TAX_PERCENT // 100
+    net_inr = Decimal(coins - fee) / Decimal(config.COIN_PER_INR)
     async with pool.acquire() as c, c.transaction():
         u = await c.fetchrow(
             """UPDATE users SET balance=balance-$1 WHERE id=$2 AND balance>=$1
@@ -260,10 +276,12 @@ async def request_withdraw(uid, coins):
         if not u:
             return None
         wid = await c.fetchval(
-            "INSERT INTO withdrawals(user_id,coins,amount_inr,upi) VALUES($1,$2,$3,$4) RETURNING id",
-            uid, coins, coins // config.COIN_PER_INR, u["upi"])
+            "INSERT INTO withdrawals(user_id,coins,amount_inr,fee_coins,upi) VALUES($1,$2,$3,$4,$5) RETURNING id",
+            uid, coins, net_inr, fee, u["upi"])
         await led(c, uid, "withdraw", -coins, wid)
-        return wid, u["upi"]
+        if fee:
+            await led(c, 0, "tax", fee, wid)
+        return wid, u["upi"], fee, net_inr
 
 
 async def wd_move(wid, frm, to):
@@ -444,7 +462,7 @@ async def recent_ledger(uid, n=15):
 
 async def wd_history(uid):
     return await pool.fetch(
-        """SELECT id, coins, amount_inr, upi, status, created_at FROM withdrawals
+        """SELECT id, coins, amount_inr, fee_coins, upi, status, created_at FROM withdrawals
            WHERE user_id=$1 ORDER BY id DESC LIMIT 10""", uid)
 
 
@@ -479,3 +497,31 @@ async def bw_set_photo(sid, file_id):
 
 async def bw_drop(sid):
     await pool.execute("DELETE FROM bw_subs WHERE id=$1 AND status='pending'", sid)
+
+
+# ---------- gift codes ----------
+async def gift_create(code, coins, uses):
+    try:
+        await pool.execute("INSERT INTO gift_codes(code,coins,max_uses) VALUES($1,$2,$3)", code, coins, uses)
+        return True
+    except asyncpg.UniqueViolationError:
+        return False
+
+
+async def gift_redeem(uid, code):
+    """Return (result, coins). result: ok / invalid / used_up / dup"""
+    try:
+        async with pool.acquire() as c, c.transaction():
+            g = await c.fetchrow("SELECT * FROM gift_codes WHERE code=$1 FOR UPDATE", code)
+            if not g:
+                return "invalid", 0
+            if g["used"] >= g["max_uses"]:
+                return "used_up", 0
+            await c.execute("INSERT INTO gift_redeems(code,user_id) VALUES($1,$2)", code, uid)
+            await c.execute("UPDATE gift_codes SET used=used+1 WHERE code=$1", code)
+            await c.execute("UPDATE users SET balance=balance+$1, total_earned=total_earned+$1 WHERE id=$2",
+                            g["coins"], uid)
+            await led(c, uid, "gift", g["coins"], code)
+            return "ok", g["coins"]
+    except asyncpg.UniqueViolationError:
+        return "dup", 0
