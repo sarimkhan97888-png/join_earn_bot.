@@ -24,7 +24,7 @@ AD_COST = 110               # advertiser ko per member (10 coin = platform fee)
 MIN_TASK_MEMBERS = 10
 MAX_TASK_MEMBERS = 100000
 MIN_DEPOSIT_COINS = 10000   # = Rs 100
-MIN_WITHDRAW_COINS = 1000   # = Rs 10
+MIN_WITHDRAW_COINS = 1500   # = Rs 15 (tax ke baad Rs 13.50; Elite payout min Rs 10)
 WITHDRAW_TAX_PERCENT = 10   # withdraw par tax (coins me kat-ta hai)
 HOLD_HOURS = 24
 MAX_DEVICE_CHANGES = 3     # device badalne par re-verify kitni baar allowed

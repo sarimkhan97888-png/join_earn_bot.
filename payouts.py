@@ -30,7 +30,7 @@ def pause(seconds):
 
 def eligible(u, net_inr, recent_count):
     """Is withdraw ko auto payout kar sakte hain?"""
-    return bool(enabled() and not u["suspect"] and float(net_inr) <= config.AUTO_PAYOUT_MAX_INR
+    return bool(enabled() and not u["suspect"] and 10 <= float(net_inr) <= config.AUTO_PAYOUT_MAX_INR
                 and recent_count <= config.AUTO_PAYOUT_DAILY)
 
 
@@ -52,8 +52,9 @@ async def send(bot, wid):
     w = await db.wd_move(wid, "pending", "sending")
     if not w:
         return "skip"
+    attempt = f"WD{wid}-{int(time.time()) % 1000000}"  # har try ka alag reference/idempotency (pichla fail hua to "in_progress" na aaye)
     try:
-        r = await gateway.payout(w["upi"], w["amount_inr"], f"WD{wid}")
+        r = await gateway.payout(w["upi"], w["amount_inr"], attempt)
     except Exception as e:  # koi bhi unexpected error = unsure, double payment ka risk nahi lena
         log.exception("payout call crashed")
         r = {"ok": False, "definite": False, "error": type(e).__name__}
@@ -68,15 +69,20 @@ async def send(bot, wid):
     if r["definite"]:
         await db.wd_move(wid, "sending", "pending")
         err = r["error"]
-        if "insufficient" in err or "too_many" in err:
+        blocked = any(x in err for x in ("plan_restricted", "not_allowed", "forbidden", "scope", "permission"))
+        if blocked:
+            pause(6 * 3600)  # Elite plan/key me payout allowed nahi: baar baar try nahi, Approve = manual paid
+        elif "insufficient" in err or "too_many" in err:
             pause(900)
+        hint = ("Elite Pay plan/key me UPI payout allowed nahi hai (Elite support se payout enable karao). "
+                "Auto 6 ghante band; ab Approve dabane par manual paid mark hoga, UPI par khud pay karo. "
+                if blocked else "Elite wallet me balance daalo. " if "insufficient" in err else "")
         await alert(bot, f"⚠️ Auto payout nahi hua #{wid}: <code>{err}</code>\n"
                          f"₹{float(w['amount_inr']):.2f} → <code>{w['upi']}</code>\n"
-                         f"{'Elite wallet me balance daalo. ' if 'insufficient' in err else ''}"
-                         f"Ab ye manual approval me hai.", admin_kb(wid))
+                         f"{hint}Ab ye manual approval me hai.", admin_kb(wid))
         return "pending"
     await alert(bot, f"🚨 <b>Payout unsure</b> #{wid} ({r['error']})\n₹{float(w['amount_inr']):.2f} → "
-                     f"<code>{w['upi']}</code>\nElite Pay dashboard me reference <code>WD{wid}</code> check karo. "
+                     f"<code>{w['upi']}</code>\nElite Pay dashboard me reference <code>{attempt}</code> check karo. "
                      f"Ho gaya ho to Mark paid, nahi hua to Refund. Auto retry nahi hoga.", fix_kb(wid))
     return "stuck"
 

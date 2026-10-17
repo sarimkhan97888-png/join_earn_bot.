@@ -377,7 +377,9 @@ async def wd_set_ref(wid, ref):
 
 async def wd_lookup(ref, reference):
     return await pool.fetchrow(
-        "SELECT * FROM withdrawals WHERE gateway_ref=$1::text OR ('WD' || id::text)=$2::text LIMIT 1", ref, reference)
+        """SELECT * FROM withdrawals WHERE gateway_ref=$1::text
+           OR ($2::text IS NOT NULL AND ($2::text = 'WD' || id::text OR $2::text LIKE 'WD' || id::text || '-%'))
+           LIMIT 1""", ref, reference)
 
 
 async def wd_processing(limit=50):
@@ -387,7 +389,8 @@ async def wd_processing(limit=50):
 
 async def wd_recent_count(uid, hours=24):
     return await pool.fetchval(
-        "SELECT count(*) FROM withdrawals WHERE user_id=$1 AND created_at > now() - make_interval(hours => $2)",
+        """SELECT count(*) FROM withdrawals WHERE user_id=$1 AND status NOT IN ('rejected','failed')
+           AND created_at > now() - make_interval(hours => $2)""",
         uid, hours)
 
 
