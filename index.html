@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
-<title>Join & Earn</title>
+<title>__APP_NAME__</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
 :root{
@@ -87,7 +87,6 @@ nav svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:1.8;st
 #loader{position:fixed;inset:0;z-index:70;background:rgba(0,0,0,.35);display:none;place-items:center}
 #loader.open{display:grid}
 .spin{display:inline-block;width:22px;height:22px;border:3px solid var(--line);border-top-color:var(--acc);border-radius:50%;animation:sp .8s linear infinite;vertical-align:middle}
-#loader .spin{width:42px;height:42px;border-width:4px}
 @keyframes sp{to{transform:rotate(360deg)}}
 .qr{display:block;width:230px;height:230px;margin:10px auto;border-radius:16px;background:#fff;padding:10px;object-fit:contain}
 .wait{text-align:center;color:var(--sub);margin-top:12px}
@@ -113,14 +112,55 @@ nav svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:1.8;st
 .b small{display:block;opacity:.65;font-size:10px;margin-top:4px;white-space:normal}
 .b.me{margin-left:auto;background:linear-gradient(135deg,var(--acc),var(--acc2));color:#fff;border-bottom-right-radius:5px}
 .b.them{background:var(--card2);border-bottom-left-radius:5px}
+
+/* ---- splash / loader / gate ---- */
+#splash{position:fixed;inset:0;z-index:100;display:flex;align-items:center;justify-content:center;overflow:hidden;color:#fff;
+  background:radial-gradient(120% 80% at 50% -10%,#3a4fd6 0%,#1a1f5e 38%,#0a0e16 75%);transition:opacity .5s ease,visibility .5s}
+#splash.hide{opacity:0;visibility:hidden}
+.sp-card{position:relative;z-index:2;text-align:center;padding:0 28px;width:100%;max-width:360px}
+.sp-banner{border-radius:26px;padding:30px 20px 24px;background:linear-gradient(135deg,rgba(255,255,255,.16),rgba(255,255,255,.05));
+  border:1px solid rgba(255,255,255,.22);box-shadow:0 24px 70px rgba(0,0,0,.45);backdrop-filter:blur(8px);animation:rise .7s ease both}
+.coin3d{width:96px;height:96px;margin:0 auto 14px;border-radius:50%;display:grid;place-items:center;font-size:46px;font-weight:800;color:#7a4300;
+  background:radial-gradient(circle at 30% 26%,#fff0b8,#ffc233 52%,#d98200);box-shadow:0 14px 44px rgba(255,179,39,.5),inset 0 -8px 14px rgba(0,0,0,.2);
+  animation:wob 1.7s ease-in-out infinite;position:relative}
+.coin3d:after{content:"";position:absolute;inset:-9px;border-radius:50%;border:2px solid rgba(255,214,102,.55);animation:ringp 1.7s ease-out infinite}
+.sp-brand{font-size:34px;font-weight:800;letter-spacing:.5px;background:linear-gradient(90deg,#fff 20%,#ffe08a 45%,#fff 70%);background-size:220% 100%;
+  -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;animation:shine 2.2s linear infinite}
+.sp-tag{margin:6px 0 18px;font-size:13px;letter-spacing:2px;text-transform:uppercase;color:#cdd6ff}
+.sp-bar{height:5px;border-radius:9px;background:rgba(255,255,255,.18);overflow:hidden}
+.sp-bar i{display:block;height:100%;width:40%;border-radius:9px;background:linear-gradient(90deg,#ffb327,#ffe08a);animation:bar 1.3s ease-in-out infinite}
+.sp-hint{margin-top:12px;font-size:12.5px;color:#cdd6ff;min-height:16px}
+.fc{position:absolute;bottom:-30px;width:14px;height:14px;border-radius:50%;background:radial-gradient(circle at 30% 30%,#fff0b8,#ffb327);opacity:0;animation:floatup 5s linear infinite}
+@keyframes wob{0%,100%{transform:rotateY(-28deg) translateY(0)}50%{transform:rotateY(28deg) translateY(-8px)}}
+@keyframes ringp{0%{transform:scale(.92);opacity:.9}100%{transform:scale(1.35);opacity:0}}
+@keyframes shine{to{background-position:-220% 0}}
+@keyframes bar{0%{margin-left:-40%}100%{margin-left:100%}}
+@keyframes rise{from{transform:translateY(24px);opacity:0}to{transform:none;opacity:1}}
+@keyframes floatup{0%{transform:translateY(0) scale(.6);opacity:0}15%{opacity:.9}100%{transform:translateY(-110vh) scale(1.1);opacity:0}}
+#loader{background:rgba(5,8,15,.55);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px)}
+.lcard{display:flex;flex-direction:column;align-items:center;gap:12px;padding:22px 30px;border-radius:22px;background:var(--card);
+  border:1px solid var(--line);box-shadow:0 20px 60px rgba(0,0,0,.45);animation:pop .18s ease}
+.lcard span{font-size:13px;color:var(--sub);font-weight:600}
+.lring{width:46px;height:46px;border-radius:50%;border:4px solid rgba(79,140,255,.18);border-top-color:var(--acc);border-right-color:var(--acc2);
+  animation:sp .8s linear infinite;position:relative}
+.lring:after{content:"";position:absolute;inset:9px;border-radius:50%;background:radial-gradient(circle at 30% 30%,#fff0b8,#ffb327);animation:pulse 1.2s ease-in-out infinite}
+@keyframes pulse{0%,100%{transform:scale(.7);opacity:.7}50%{transform:scale(1);opacity:1}}
+.gate{text-align:center;padding-top:8px}
+.gate .gi{width:78px;height:78px;border-radius:24px;margin:10px auto 12px;display:grid;place-items:center;font-size:38px;
+  background:linear-gradient(135deg,var(--acc),var(--acc2));box-shadow:0 12px 34px rgba(79,140,255,.35)}
+.gate .steps{text-align:left;max-width:360px;margin:12px auto}
+.banner button.go{border:0;color:inherit;font-family:inherit;cursor:pointer}
+@media (prefers-reduced-motion:reduce){.coin3d,.coin3d:after,.sp-brand,.sp-bar i,.fc,.lring,.lring:after{animation:none}}
 </style>
 </head>
 <body>
+<div id="splash"><i class="fc" style="left:10%;animation-delay:0s"></i><i class="fc" style="left:26%;animation-delay:1.4s"></i><i class="fc" style="left:44%;animation-delay:.6s"></i><i class="fc" style="left:63%;animation-delay:2.2s"></i><i class="fc" style="left:80%;animation-delay:.9s"></i><i class="fc" style="left:92%;animation-delay:1.8s"></i>
+<div class="sp-card"><div class="sp-banner"><div class="coin3d">₹</div><div class="sp-brand">__APP_NAME__</div><div class="sp-tag">Join · Earn · Withdraw</div><div class="sp-bar"><i></i></div><div class="sp-hint" id="spHint">Secure connection...</div></div></div></div>
 <div class="app" id="view"></div>
 <nav id="nav"></nav>
 <div id="sheet"><div class="bd" data-act="closesheet"></div><div class="pn"><div class="gr"></div><div id="sheetBody"></div></div></div>
 <div id="modal"></div>
-<div id="loader"><span class="spin"></span></div>
+<div id="loader"><div class="lcard"><div class="lring"></div><span>Please wait...</span></div></div>
 <div id="chat"><div class="ch-h"><button data-act="chatclose" aria-label="Back">‹</button><b>Customer service<span>Apni problem likho, hum reply karenge</span></b></div>
 <div id="chatBody"></div><div class="ch-f"><input id="chatIn" placeholder="Apni problem likho..." maxlength="1000" autocomplete="off"><button class="btn sm" data-act="chatsend">Send</button></div></div>
 
@@ -131,6 +171,68 @@ document.documentElement.dataset.theme = (tg && tg.colorScheme === 'light') ? 'l
 
 const S = { tab: 'home', me: null, cfg: null, blocked: [], hist: [], tasks: null, wallet: null, seg: 'ch', poll: null, studioTab: 'ch' };
 const $ = s => document.querySelector(s);
+/* ---------- sound (WebAudio, koi file nahi) ---------- */
+const Snd = (() => {
+  let ctx = null, on = true;
+  try { on = localStorage.getItem('snd') !== '0'; } catch (e) {}
+  function ac() {
+    try {
+      if (!ctx) { const C = window.AudioContext || window.webkitAudioContext; if (C) ctx = new C(); }
+      if (ctx && ctx.state === 'suspended') ctx.resume();
+    } catch (e) { ctx = null; }
+    return ctx;
+  }
+  function note(c, f, t, dur, vol, type) {
+    const o = c.createOscillator(), g = c.createGain();
+    o.type = type || 'sine'; o.frequency.value = f;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + 0.015);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(c.destination); o.start(t); o.stop(t + dur + 0.05);
+  }
+  return {
+    unlock: ac,
+    isOn: () => on,
+    set(v) { on = v; try { localStorage.setItem('snd', v ? '1' : '0'); } catch (e) {} },
+    ok() { // meetha chime: C5 - E5 - G5, halka bell overtone
+      if (!on) return; const c = ac(); if (!c) return; const t = c.currentTime;
+      [[523.25, 0], [659.25, 0.1], [783.99, 0.2]].forEach(([f, d]) => { note(c, f, t + d, 0.5, 0.13); note(c, f * 2, t + d, 0.3, 0.035); });
+    },
+    bad() { // narm do-note descent, harsh nahi
+      if (!on) return; const c = ac(); if (!c) return; const t = c.currentTime;
+      note(c, 330, t, 0.22, 0.11, 'triangle'); note(c, 247, t + 0.14, 0.3, 0.11, 'triangle');
+    },
+    tap() { if (!on) return; const c = ac(); if (!c) return; note(c, 880, c.currentTime, 0.06, 0.04); }
+  };
+})();
+document.addEventListener('pointerdown', () => Snd.unlock(), { once: true, passive: true });
+
+/* ---------- device token (random, device par bandha) + fingerprint ---------- */
+function tgStore(kind, op, key, val) {
+  return new Promise(res => {
+    try {
+      const s = tg && tg[kind];
+      if (!s || !tg.isVersionAtLeast || !tg.isVersionAtLeast('9.0')) return res(null);
+      const to = setTimeout(() => res(null), 1500);
+      const cb = (e, v) => { clearTimeout(to); res(e ? null : (typeof v === 'string' ? v : null)); };
+      if (op === 'get') s.getItem(key, cb); else s.setItem(key, val, cb);
+    } catch (e) { res(null); }
+  });
+}
+async function devToken() {
+  if (S.dev) return S.dev;
+  const key = 'dvt1', ok64 = v => v && /^[a-f0-9]{64}$/.test(v);
+  let ls = null; try { ls = localStorage.getItem(key); } catch (e) {}
+  const ss = await tgStore('SecureStorage', 'get', key), ds = await tgStore('DeviceStorage', 'get', key);
+  let t = [ss, ds, ls].find(ok64);
+  if (!t) { const a = new Uint8Array(32); crypto.getRandomValues(a); t = [...a].map(v => v.toString(16).padStart(2, '0')).join(''); }
+  try { localStorage.setItem(key, t); } catch (e) {}
+  if (ss !== t) tgStore('SecureStorage', 'set', key, t);
+  if (ds !== t) tgStore('DeviceStorage', 'set', key, t);
+  return (S.dev = t);
+}
+async function getFp() { return S.fp || (S.fp = await fingerprint()); }
+
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const fmt = n => Number(n || 0).toLocaleString('en-IN');
 const inr = c => (c / (S.cfg ? S.cfg.coin_per_inr : 100)).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -139,7 +241,7 @@ const dateOnly = iso => iso ? new Date(iso).toLocaleDateString('en-IN', { day: '
 
 /* ---------- network ---------- */
 async function api(path, data, form) {
-  const opt = { headers: { 'X-Init-Data': (tg && tg.initData) || '' } };
+  const opt = { headers: { 'X-Init-Data': (tg && tg.initData) || '', 'X-Device': await devToken(), 'X-Fp': await getFp() } };
   if (form) { opt.method = 'POST'; opt.body = form; }
   else if (data !== undefined) { opt.method = 'POST'; opt.headers['Content-Type'] = 'application/json'; opt.body = JSON.stringify(data); }
   try { const r = await fetch(path, opt); return await r.json(); }
@@ -149,7 +251,10 @@ async function act(path, data, form) {
   $('#loader').classList.add('open');
   const j = await api(path, data, form);
   $('#loader').classList.remove('open');
-  if (!j.ok) await popup('error', 'Oops', j.msg || 'Kuch galat ho gaya');
+  if (!j.ok) {
+    if (j.code === 'need_verify') { refresh(); return j; }
+    await popup('error', 'Oops', j.msg || 'Kuch galat ho gaya');
+  }
   return j;
 }
 
@@ -163,6 +268,7 @@ function popup(kind, title, msg) {
     m.classList.add('open');
     $('#mok').onclick = () => { m.classList.remove('open'); res(); };
     try { tg && tg.HapticFeedback.notificationOccurred(kind === 'ok' ? 'success' : kind === 'error' ? 'error' : 'warning'); } catch (e) {}
+    if (kind === 'ok') Snd.ok(); else if (kind === 'error') Snd.bad();
   });
 }
 function openSheet(html) { $('#sheetBody').innerHTML = html; $('#sheet').classList.add('open'); document.body.style.overflow = 'hidden'; }
@@ -197,6 +303,8 @@ async function go(tab) {
   $('#view').innerHTML = '<div class="empty"><span class="spin"></span></div>';
   window.scrollTo(0, 0);
   if (!(await loadMe())) return;
+  if (!S.me.device_ok && !S.me.admin) { rGate(); return; }
+  $('#nav').style.display = '';
   if (tab === 'tasks') { const j = await api('/api/tasks'); if (j.ok) S.tasks = j; }
   if (tab === 'wallet') { const j = await api('/api/wallet'); if (j.ok) S.wallet = j; }
   renderNav(); render();
@@ -217,7 +325,7 @@ function deviceWarn() {
 function rHome() {
   const m = S.me;
   const banner = m.premium
-    ? `<div class="banner on" data-act="studio"><span style="font-size:26px">💎</span><div><b>Premium active</b><small>till ${dateOnly(m.premium_until)}</small></div><span class="go">Upload task</span></div>`
+    ? `<div class="banner on"><span style="font-size:26px">${m.admin ? '👑' : '💎'}</span><div><b>${m.admin ? 'Admin · unlimited' : 'Premium active'}</b><small>${m.admin ? 'Tasks free, coins nahi katenge' : 'till ' + dateOnly(m.premium_until)}</small></div><button class="go" data-act="studio">➕ Add Task</button></div>`
     : `<div class="banner" data-act="studio"><span style="font-size:26px">💎</span><div><b>Get Premium · ₹${S.cfg.premium_price}/month</b><small>Apna channel / bot promote karo</small></div><span class="go">Upgrade</span></div>`;
   const hist = S.hist.length ? S.hist.map(h => {
     const k = KIND[h.kind] || ['•', h.kind]; const a = Number(h.amount);
@@ -258,7 +366,7 @@ function rTasks() {
 /* ---------- WALLET ---------- */
 function rWallet() {
   const m = S.me, W = S.wallet || { orders: [], withdrawals: [] };
-  const st = { paid: ['g', 'Paid'], pending: ['y', 'Pending'], rejected: ['r', 'Rejected'], processing: ['b', 'Processing'], mismatch: ['r', 'Mismatch'] };
+  const st = { paid: ['g', 'Paid'], pending: ['y', 'Pending'], rejected: ['r', 'Rejected'], processing: ['b', 'Processing'], sending: ['b', 'Processing'], failed: ['r', 'Failed'], mismatch: ['r', 'Mismatch'] };
   const rows = [
     ...W.withdrawals.map(w => ({ at: w.at, ico: '⬆️', t: 'Withdraw', s: `${fmt(w.coins)} coins → ₹${w.amount} (${w.upi})`, st: w.status })),
     ...W.orders.map(o => ({ at: o.at, ico: o.kind === 'premium' ? '💎' : '⬇️', t: o.kind === 'premium' ? 'Premium' : 'Deposit', s: `₹${o.amount}${o.coins ? ' · ' + fmt(o.coins) + ' coins' : ''}`, st: o.status }))
@@ -295,8 +403,9 @@ function showQR(o, kind) {
     const j = await api('/api/order?id=' + encodeURIComponent(o.order_id));
     if (j.status === 'paid') {
       clearInterval(S.poll); closeSheet();
-      await popup('ok', 'Payment successful', kind === 'premium' ? 'Premium activate ho gaya!' : `${fmt(o.coins)} coins ad balance me add ho gaye.`);
-      refresh();
+      await popup('ok', 'Payment successful', kind === 'premium' ? 'Premium activate ho gaya! Ab Add Task se apna task daalo.' : `${fmt(o.coins)} coins ad balance me add ho gaye.`);
+      await refresh();
+      if (kind === 'premium') studio();
     } else if (j.status === 'mismatch') {
       clearInterval(S.poll); closeSheet();
       await popup('error', 'Payment mismatch', 'Amount match nahi hua. Support se contact karo.');
@@ -315,7 +424,8 @@ function rProfile() {
   <div class="card"><div class="kv"><span>Gmail</span><b>${esc(m.gmail || '—')}</b></div><div class="kv"><span>UPI ID</span><b>${esc(m.upi || '—')}</b></div><div class="kv"><span>Telegram ID</span><b>${m.id}</b></div>${m.premium ? `<div class="kv"><span>Premium till</span><b>${dateOnly(m.premium_until)}</b></div>` : ''}</div>
   <div class="card" style="padding:4px 16px">
    <div class="item" data-act="upi" style="cursor:pointer"><div class="ico">⚙️</div><div class="sp"><b>Settings</b><span class="sub">UPI ID set / change</span></div>›</div>
-   <div class="item" data-act="studio" style="cursor:pointer"><div class="ico">💎</div><div class="sp"><b>Premium</b><span class="sub">${m.premium ? 'Upload tasks, manage posts' : 'Unlock karne ke liye ₹' + S.cfg.premium_price + '/month'}</span></div>›</div>
+   <div class="item" data-act="studio" style="cursor:pointer"><div class="ico">💎</div><div class="sp"><b>Premium</b><span class="sub">${m.admin ? 'Admin: unlimited, free tasks' : m.premium ? 'Add task, manage posts' : 'Unlock karne ke liye ₹' + S.cfg.premium_price + '/month'}</span></div>›</div>
+   <div class="item" data-act="sound" style="cursor:pointer"><div class="ico">${Snd.isOn() ? '🔊' : '🔇'}</div><div class="sp"><b>Sound</b><span class="sub">${Snd.isOn() ? 'On' : 'Off'} · tap to change</span></div>›</div>
    <div class="item" data-act="gift" style="cursor:pointer"><div class="ico">🎁</div><div class="sp"><b>Gift code</b><span class="sub">Code redeem karke coins pao</span></div>›</div>
    <div class="item" data-act="rules" style="cursor:pointer"><div class="ico">📜</div><div class="sp"><b>Rules</b><span class="sub">Earning & withdraw rules</span></div>›</div>
    <div class="item" data-act="support" style="cursor:pointer"><div class="ico">🎧</div><div class="sp"><b>Customer service</b><span class="sub">Apni problem likho, reply milega</span></div>›</div></div>`;
@@ -344,7 +454,7 @@ function studio() {
     return;
   }
   const tabs = [['ch', '📣 Channel'], ['bw', '🤖 Bot Work'], ['my', '📊 My posts']];
-  openSheet(`<h3>Premium Studio</h3><div class="cost">Ad balance: <b>${fmt(m.ad_balance)}</b> coins <span class="link" data-act="deposit" style="float:right">+ Deposit</span></div>
+  openSheet(`<h3>Premium Studio</h3><div class="cost">${m.admin ? '👑 Admin mode: task free, coins nahi katenge' : `Ad balance: <b>${fmt(m.ad_balance)}</b> coins <span class="link" data-act="deposit" style="float:right">+ Deposit</span>`}</div>
   <div class="tabs2">${tabs.map(([k, l]) => `<button class="${S.studioTab === k ? 'on' : ''}" data-act="stab" data-t="${k}">${l}</button>`).join('')}</div><div id="stBody"></div>`);
   stBody();
 }
@@ -474,7 +584,7 @@ const H = {
     <label>Gmail</label><input id="vg" type="email" placeholder="yourname@gmail.com" autocomplete="email" autocapitalize="off"><button class="btn" data-act="vgo">Verify</button>`);
   },
   async vgo() {
-    const j = await act('/api/verify', { gmail: $('#vg').value, fp: await fingerprint() });
+    const j = await act('/api/verify', { gmail: $('#vg').value, fp: await getFp(), dev: await devToken() });
     if (j.ok) { closeSheet(); await popup('ok', 'Verified', j.msg); refresh(); }
   },
   gift() {
@@ -486,6 +596,7 @@ const H = {
     if (j.ok) { closeSheet(); await popup('ok', 'Gift redeemed', j.msg); refresh(); }
   },
   rules: rulesSheet,
+  sound() { Snd.set(!Snd.isOn()); if (Snd.isOn()) Snd.ok(); rProfile(); },
   support: openChat,
   chatclose: closeChat,
   chatsend: chatSend
@@ -494,8 +605,8 @@ function onInp(k) {
   const c = S.cfg;
   if (k === 'dep') { const v = +$('#dc').value || 0; $('#dh').innerHTML = `Pay: <b>₹${(v / c.coin_per_inr).toLocaleString('en-IN')}</b>`; }
   if (k === 'wd') { const v = +$('#wc').value || 0; $('#wh').innerHTML = `You get: <b>₹${(v * (100 - c.withdraw_tax) / 100 / c.coin_per_inr).toLocaleString('en-IN', { maximumFractionDigits: 2 })}</b> <span class="sub">(${c.withdraw_tax}% tax kat ke)</span>`; }
-  if (k === 'tcn') { const v = +$('#tcn').value || 0; $('#tcc').innerHTML = `Cost: <b>${fmt(v * c.ad_cost)}</b> coins (${c.ad_cost} per member)`; }
-  if (k === 'bw') { const v = (+$('#br').value || 0) * (+$('#bn').value || 0); $('#bc').innerHTML = `Total cost: <b>${fmt(v)}</b> coins`; }
+  if (k === 'tcn') { const v = +$('#tcn').value || 0; $('#tcc').innerHTML = S.me.admin ? 'Cost: <b>Free</b> (admin)' : `Cost: <b>${fmt(v * c.ad_cost)}</b> coins (${c.ad_cost} per member)`; }
+  if (k === 'bw') { const v = (+$('#br').value || 0) * (+$('#bn').value || 0); $('#bc').innerHTML = S.me.admin ? 'Total cost: <b>Free</b> (admin)' : `Total cost: <b>${fmt(v)}</b> coins`; }
 }
 document.addEventListener('click', e => {
   const el = e.target.closest('[data-act]'); if (!el) return;
@@ -510,7 +621,25 @@ document.addEventListener('change', e => {
 
 document.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target && e.target.id === 'chatIn') { e.preventDefault(); chatSend(); } });
 
-go('home');
+/* ---------- gate: device verify ke bina app band ---------- */
+function rGate() {
+  $('#nav').style.display = 'none';
+  const ch = S.me.device_state === 'changed';
+  $('#view').innerHTML = `<div class="gate"><div class="gi">🔐</div><h2>${ch ? 'Naya device mila' : 'Device verification'}</h2>
+  <p>${ch ? 'Ye account pehle kisi aur device par verify tha. Wahi Gmail daalo jo pehle verify kiya tha.' : 'Fair rehne ke liye ek device par sirf ek account chalta hai. Ek baar verify karo, phir sab unlock.'}</p>
+  <ul class="steps"><li>Apna <b>Gmail</b> daalo</li><li><b>Verify</b> dabao, device is account se bind ho jayega</li><li>App data clear / naya phone ho to yahi screen dobara aayegi</li></ul>
+  <div style="text-align:left"><label>Gmail</label><input id="vg" type="email" placeholder="yourname@gmail.com" autocomplete="email" autocapitalize="off"></div>
+  <button class="btn" data-act="vgo">✅ Verify device</button>
+  <p style="margin-top:14px"><span class="link" data-act="support">🎧 Problem aa rahi hai? Customer service</span></p></div>`;
+}
+
+/* ---------- splash ---------- */
+const HINTS = ['Secure connection...', 'Wallet load ho raha hai...', 'Tasks ready ho rahe hain...'];
+let hi = 0; const hint = setInterval(() => { const e = $('#spHint'); if (e) e.textContent = HINTS[++hi % HINTS.length]; }, 750);
+function hideSplash() { clearInterval(hint); const s = $('#splash'); if (!s) return; s.classList.add('hide'); setTimeout(() => s.remove(), 700); }
+const t0 = Date.now();
+go('home').catch(() => {}).finally(() => setTimeout(hideSplash, Math.max(0, 1500 - (Date.now() - t0))));
+setTimeout(hideSplash, 8000); // network atak bhi jaye to splash na rukey
 </script>
 </body>
 </html>

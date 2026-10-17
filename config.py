@@ -4,6 +4,8 @@ BOT_TOKEN = os.environ["BOT_TOKEN"]
 DATABASE_URL = os.environ["DATABASE_URL"]
 BASE_URL = os.environ["BASE_URL"].rstrip("/")  # e.g. https://yourbot.onrender.com
 PORT = int(os.getenv("PORT", "8080"))
+APP_NAME = os.getenv("APP_NAME", "Profitix")      # loading banner / welcome me dikhta hai
+DB_POOL_MAX = int(os.getenv("DB_POOL_MAX", "15"))
 ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()]
 SUPPORT_URL = os.getenv("SUPPORT_URL", "https://t.me/telegram")
 
@@ -11,7 +13,9 @@ SUPPORT_URL = os.getenv("SUPPORT_URL", "https://t.me/telegram")
 GATEWAY_URL = os.getenv("GATEWAY_URL", "https://elitepay.co.in/api/public/v1").rstrip("/")
 GATEWAY_KEY = os.getenv("GATEWAY_KEY", "")
 GATEWAY_SECRET = os.getenv("GATEWAY_SECRET", "")
-AUTO_PAYOUT = os.getenv("AUTO_PAYOUT", "0") == "1"  # 1 = admin approve par gateway se auto UPI payout
+AUTO_PAYOUT = os.getenv("AUTO_PAYOUT", "0") == "1"  # 1 = withdraw gateway se automatic UPI payout
+AUTO_PAYOUT_MAX_INR = float(os.getenv("AUTO_PAYOUT_MAX_INR", "500"))  # isse bada withdraw admin approval me jata hai
+AUTO_PAYOUT_DAILY = int(os.getenv("AUTO_PAYOUT_DAILY", "2"))          # ek user ke 24h me max auto payouts
 
 # Economy
 COIN_PER_INR = 100          # 100 coin = Rs 1
@@ -23,6 +27,7 @@ MIN_DEPOSIT_COINS = 10000   # = Rs 100
 MIN_WITHDRAW_COINS = 1000   # = Rs 10
 WITHDRAW_TAX_PERCENT = 10   # withdraw par tax (coins me kat-ta hai)
 HOLD_HOURS = 24
+MAX_DEVICE_CHANGES = 3     # device badalne par re-verify kitni baar allowed
 PREMIUM_PRICE = 49          # Rs
 PREMIUM_DAYS = 30
 

@@ -17,7 +17,7 @@ for _n in ("httpx", "httpcore"):
 
 async def main():
     await db.init()
-    app = Application.builder().token(config.BOT_TOKEN).build()
+    app = Application.builder().token(config.BOT_TOKEN).concurrent_updates(16).build()
     bot.register(app)
 
     await app.initialize()

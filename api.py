@@ -1,4 +1,5 @@
 """JSON API for the Telegram Mini App."""
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -21,6 +22,7 @@ import config
 import db
 import gateway
 import payments
+import payouts
 import util
 
 log = logging.getLogger("api")
@@ -29,6 +31,8 @@ routes = web.RouteTableDef()
 URL_RE = re.compile(r"^https?://\S{4,300}$")
 UPI_RE = re.compile(r"^[a-zA-Z0-9.\-_]{2,}@[a-zA-Z]{2,}$")
 GMAIL_RE = re.compile(r"^[a-z0-9][a-z0-9.]{4,40}@gmail\.com$")
+HEX64 = re.compile(r"^[a-f0-9]{64}$")
+_bg = set()  # background tasks ke references (garbage collect na ho)
 
 
 # ---------------- helpers ----------------
@@ -80,7 +84,8 @@ async def body(request):
 def pub(u):
     return {"id": u["id"], "balance": u["balance"], "hold": u["hold"], "total_earned": u["total_earned"],
             "ad_balance": u["ad_balance"], "premium": util.is_prem(u), "premium_until": iso(u["premium_until"]),
-            "gmail": u["gmail"], "upi": u["upi"], "device_ok": u["device_ok"]}
+            "gmail": u["gmail"], "upi": u["upi"], "device_ok": u["device_ok"],
+            "device_state": u.get("device_state", "ok"), "admin": u["id"] in config.ADMIN_IDS}
 
 
 def cfg(request):
@@ -91,11 +96,53 @@ def cfg(request):
             "premium_days": config.PREMIUM_DAYS, "bw_min_reward": config.BW_MIN_REWARD,
             "bw_min_users": config.BW_MIN_USERS, "bw_max_users": config.BW_MAX_USERS,
             "support_url": config.SUPPORT_URL, "bot_username": request.app["bot"].username,
-            "withdraw_tax": config.WITHDRAW_TAX_PERCENT}
+            "withdraw_tax": config.WITHDRAW_TAX_PERCENT, "app_name": config.APP_NAME,
+            "auto_payout": bool(config.AUTO_PAYOUT)}
 
 
-# ---------------- auth + rate limit ----------------
+# ---------------- auth + rate limit + device check ----------------
 _rl = {}
+_rl_gc = [0.0]
+# Device verify ke bina sirf ye endpoints chalte hain (baaki sab server par block)
+OPEN_PATHS = {"/api/me", "/api/verify", "/api/support", "/api/support/send", "/api/wallet", "/api/order",
+              "/api/tasks"}
+
+
+def rate_ok(uid):
+    t = time.monotonic()
+    L = _rl.setdefault(uid, [])
+    while L and t - L[0] > 10:
+        L.pop(0)
+    L.append(t)
+    if t - _rl_gc[0] > 120:  # purane users memory se hatao (1 lakh users par leak na ho)
+        _rl_gc[0] = t
+        for k in [k for k, v in _rl.items() if not v or t - v[-1] > 10]:
+            _rl.pop(k, None)
+    return len(L) <= 30
+
+
+def sha(s):
+    return hashlib.sha256(s.encode()).hexdigest()
+
+
+async def with_device(u, dev, fp):
+    """Har request par device dobara check: stored device se match nahi hua to device_ok=False (bypass nahi)."""
+    u = dict(u)
+    u["device_db"] = bool(u["device_ok"])
+    u["device_state"] = "none"
+    if not u["device_ok"]:
+        return u
+    good = False
+    if u["id"] in config.ADMIN_IDS:
+        good = True
+    elif HEX64.match(dev) and sha(dev) == u["device_hash"]:
+        good = True
+    elif u["dev_ver"] == 1 and HEX64.match(dev) and HEX64.match(fp) and fp == u["fp"]:
+        # purani (sirf fingerprint wali) verification: chupchap naye device token par migrate
+        good = await db.rebind_device(u["id"], sha(dev), fp, counted=False)
+    u["device_ok"] = good
+    u["device_state"] = "ok" if good else "changed"
+    return u
 
 
 @web.middleware
@@ -105,17 +152,17 @@ async def auth_mw(request, handler):
     user = check_init_data(request.headers.get("X-Init-Data", ""))
     if not user:
         return web.json_response({"ok": False, "msg": "Session invalid. Bot se app dobara kholo."}, status=401)
-    t = time.monotonic()
-    L = [x for x in _rl.get(user["id"], []) if t - x < 10]
-    L.append(t)
-    _rl[user["id"]] = L
-    if len(L) > 30:
+    if not rate_ok(user["id"]):
         return web.json_response({"ok": False, "msg": "Bahut tez! Thoda ruko."}, status=429)
     try:
         u = await db.ensure_user(types.SimpleNamespace(
             id=user["id"], username=user.get("username"), first_name=user.get("first_name")))
         if u["banned"]:
             return web.json_response({"ok": False, "msg": "🚫 Account banned."}, status=403)
+        u = await with_device(u, request.headers.get("X-Device", ""), request.headers.get("X-Fp", ""))
+        if not u["device_ok"] and u["id"] not in config.ADMIN_IDS and request.path not in OPEN_PATHS:
+            return web.json_response({"ok": False, "code": "need_verify",
+                                      "msg": "🔐 Pehle device verify karo."})
         request["u"] = u
         request["tg"] = user
         return await handler(request)
@@ -260,12 +307,32 @@ async def api_withdraw(request):
     if not r:
         return err("❌ Withdraw nahi ho paya. Balance aur verification check karo.")
     wid, upi, fee, net = r
-    kb = M([[B("✅ Approve", callback_data=f"adm_ok:{wid}"), B("❌ Reject", callback_data=f"adm_no:{wid}")]])
-    for a in config.ADMIN_IDS:
-        await util.notify(request.app["bot"], a,
-                          f"💸 Withdraw #{wid}\nUser: <code>{uid}</code>\n{coins} coins − {fee} tax = <b>₹{net:.2f}</b> payable\nUPI: <code>{upi}</code>",
-                          reply_markup=kb)
-    return ok(msg=f"Withdraw request #{wid} bhej di gayi. {coins} coins − {fee} tax = ₹{net:.2f} → {upi}")
+    auto = payouts.eligible(u, net, await db.wd_recent_count(uid))
+    t = asyncio.create_task(_after_withdraw(request.app["bot"], u, wid, coins, fee, net, upi, auto))
+    _bg.add(t)
+    t.add_done_callback(_bg.discard)
+    if auto:
+        return ok(msg=f"Withdraw #{wid} process ho raha hai: ₹{net:.2f} → {upi}. 2-5 minute me aa jayega.")
+    return ok(msg=f"Withdraw request #{wid} bhej di gayi. {coins} coins − {fee} tax = ₹{net:.2f} → {upi}. "
+                  f"Admin approve karega to paisa aa jayega.")
+
+
+async def _after_withdraw(bot, u, wid, coins, fee, net, upi, auto):
+    try:
+        if auto:
+            await payouts.send(bot, wid)  # fail/unsure par payouts.send khud admin ko alert karta hai
+            return
+        why = ""
+        if u["suspect"]:
+            why += "\n⚠️ <b>Suspect:</b> iska device fingerprint kisi aur account se match karta hai. Pehle check karo."
+        if config.AUTO_PAYOUT and not u["suspect"]:
+            why += "\nℹ️ Auto limit se bahar / abhi auto pause hai, isliye manual approval."
+        for a in config.ADMIN_IDS:
+            await util.notify(bot, a,
+                              f"💸 Withdraw #{wid}\nUser: <code>{u['id']}</code>\n{coins} coins − {fee} tax = "
+                              f"<b>₹{net:.2f}</b> payable\nUPI: <code>{upi}</code>{why}", reply_markup=payouts.admin_kb(wid))
+    except Exception:
+        log.exception("after_withdraw failed for #%s", wid)
 
 
 # ---------------- profile ----------------
@@ -329,13 +396,22 @@ async def api_verify(request):
     d = await body(request)
     gmail = str(d.get("gmail", "")).strip().lower()
     fp = str(d.get("fp", ""))
+    dev = str(d.get("dev", ""))
     if u["device_ok"]:
         return ok(msg="Already verified")
+    if not HEX64.match(dev) or not HEX64.match(fp):
+        return err("Device check fail hua. App band karke dobara kholo.")
+    if u["device_db"]:  # pehle verified tha, ab naya device / data clear
+        if u["device_changes"] >= config.MAX_DEVICE_CHANGES:
+            return err("Device change ki limit khatam. Customer service se contact karo.")
+        if gmail != (u["gmail"] or ""):
+            return err("Wahi Gmail daalo jo pehle verify kiya tha.")
+        if not await db.rebind_device(u["id"], sha(dev), fp):
+            return err("Ye device kisi aur account se linked hai.")
+        return ok(msg="Naya device verify ho gaya!")
     if not GMAIL_RE.match(gmail):
         return err("Sahi Gmail daalo (@gmail.com).")
-    if not re.fullmatch(r"[a-f0-9]{64}", fp):
-        return err("Device check fail hua.")
-    if not await db.set_device(u["id"], gmail, fp):
+    if await db.set_device(u["id"], gmail, sha(dev), fp) != "ok":
         return err("Ye device ya Gmail kisi aur account se linked hai.")
     return ok(msg="Device verified! Ab tasks aur withdraw use kar sakte ho.")
 
@@ -411,12 +487,13 @@ async def api_task_create(request):
     if not (config.MIN_TASK_MEMBERS <= n <= config.MAX_TASK_MEMBERS):
         return err(f"Members {config.MIN_TASK_MEMBERS} se {config.MAX_TASK_MEMBERS} ke beech rakho.")
     cost = n * config.AD_COST
-    if u["ad_balance"] < cost:
+    admin = u["id"] in config.ADMIN_IDS  # admin ke liye task free (coins nahi katte)
+    if not admin and u["ad_balance"] < cost:
         return err(f"Coins kam hain. Chahiye {cost}, ad balance {u['ad_balance']}. Wallet se deposit karo.")
     r = await resolve_chat(request, d.get("chat"), True)
     if isinstance(r, str):
         return err(r)
-    tid = await db.create_task(u["id"], r["chat_id"], r["title"], r["link"], n)
+    tid = await db.create_task(u["id"], r["chat_id"], r["title"], r["link"], n, free=admin)
     if not tid:
         return err("Ad balance kam hai. Pehle deposit karo.")
     return ok(msg=f"Task #{tid} live ho gaya! {r['title']} ke liye {n} members.")
@@ -456,7 +533,7 @@ async def api_bw_create(request):
         return err(f"Reward min {config.BW_MIN_REWARD} coins hona chahiye.")
     if not (config.BW_MIN_USERS <= n <= config.BW_MAX_USERS):
         return err(f"Users {config.BW_MIN_USERS} se {config.BW_MAX_USERS} ke beech rakho.")
-    bid = await db.bw_create(u["id"], title, link, reward, n)
+    bid = await db.bw_create(u["id"], title, link, reward, n, free=u["id"] in config.ADMIN_IDS)
     if not bid:
         return err(f"Ad balance kam hai. Chahiye {reward * n} coins. Wallet se deposit karo.")
     return ok(msg=f"Bot work #{bid} live ho gaya!")

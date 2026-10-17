@@ -80,12 +80,39 @@ CREATE TABLE IF NOT EXISTS gift_redeems(
   code TEXT NOT NULL REFERENCES gift_codes(code), user_id BIGINT NOT NULL,
   at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY(code, user_id)
 );
+
+-- ---- migrations / indexes (har start par safe) ----
+ALTER TABLE users ADD COLUMN IF NOT EXISTS fp TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS dev_ver INT NOT NULL DEFAULT 1;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS device_changes INT NOT NULL DEFAULT 0;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS suspect BOOLEAN NOT NULL DEFAULT FALSE;
+UPDATE users SET fp=device_hash WHERE fp IS NULL AND device_hash IS NOT NULL;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS free BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE botworks ADD COLUMN IF NOT EXISTS free BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS gateway_ref TEXT;
+CREATE INDEX IF NOT EXISTS comp_user_status ON completions(user_id, status);
+CREATE INDEX IF NOT EXISTS comp_hold_release ON completions(release_at) WHERE status='hold';
+CREATE INDEX IF NOT EXISTS comp_recheck ON completions(last_checked) WHERE status IN ('hold','ok');
+CREATE INDEX IF NOT EXISTS tasks_active ON tasks(created_at) WHERE status='active';
+CREATE INDEX IF NOT EXISTS tasks_owner ON tasks(owner_id, id DESC);
+CREATE INDEX IF NOT EXISTS ledger_user ON ledger(user_id, id DESC);
+CREATE INDEX IF NOT EXISTS orders_user ON orders(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS orders_ref ON orders(gateway_ref);
+CREATE INDEX IF NOT EXISTS orders_pending ON orders(created_at) WHERE status='pending';
+CREATE INDEX IF NOT EXISTS wd_user ON withdrawals(user_id, id DESC);
+CREATE INDEX IF NOT EXISTS wd_status ON withdrawals(status);
+CREATE INDEX IF NOT EXISTS bws_bw ON bw_subs(bw_id, status);
+CREATE INDEX IF NOT EXISTS bws_worker ON bw_subs(worker_id, id DESC);
+CREATE INDEX IF NOT EXISTS bws_status ON bw_subs(status, created_at);
+CREATE INDEX IF NOT EXISTS bw_owner ON botworks(owner_id, id DESC);
+CREATE INDEX IF NOT EXISTS users_fp ON users(fp);
 """
 
 
 async def init():
     global pool
-    pool = await asyncpg.create_pool(config.DATABASE_URL, min_size=1, max_size=8)
+    pool = await asyncpg.create_pool(config.DATABASE_URL, min_size=2, max_size=config.DB_POOL_MAX,
+                                     command_timeout=30, max_inactive_connection_lifetime=300)
     async with pool.acquire() as c:
         await c.execute(SCHEMA)
 
@@ -96,6 +123,10 @@ async def led(c, uid, kind, amount, ref=""):
 
 # ---------- users ----------
 async def ensure_user(tu):
+    # Har API call par write nahi: sirf naya user ya naam badla ho tabhi UPSERT (1 lakh users par bloat se bachata hai)
+    u = await pool.fetchrow("SELECT * FROM users WHERE id=$1", tu.id)
+    if u and u["username"] == tu.username and u["first_name"] == tu.first_name:
+        return u
     return await pool.fetchrow(
         """INSERT INTO users(id,username,first_name) VALUES($1,$2,$3)
            ON CONFLICT(id) DO UPDATE SET username=EXCLUDED.username, first_name=EXCLUDED.first_name
@@ -116,17 +147,20 @@ async def set_upi(uid, upi):
 
 
 # ---------- tasks ----------
-async def create_task(owner, chat_id, title, link, target):
+async def create_task(owner, chat_id, title, link, target, free=False):
+    """free=True (sirf admin): ad balance se coin nahi katta, aur cancel par refund bhi nahi milta."""
     cost = target * config.AD_COST
     async with pool.acquire() as c, c.transaction():
-        ok = await c.fetchval(
-            "UPDATE users SET ad_balance=ad_balance-$1 WHERE id=$2 AND ad_balance>=$1 RETURNING id", cost, owner)
-        if not ok:
-            return None
+        if not free:
+            ok = await c.fetchval(
+                "UPDATE users SET ad_balance=ad_balance-$1 WHERE id=$2 AND ad_balance>=$1 RETURNING id", cost, owner)
+            if not ok:
+                return None
         tid = await c.fetchval(
-            "INSERT INTO tasks(owner_id,chat_id,title,link,target) VALUES($1,$2,$3,$4,$5) RETURNING id",
-            owner, chat_id, title, link, target)
-        await led(c, owner, "task_escrow", -cost, tid)
+            "INSERT INTO tasks(owner_id,chat_id,title,link,target,free) VALUES($1,$2,$3,$4,$5,$6) RETURNING id",
+            owner, chat_id, title, link, target, free)
+        if not free:
+            await led(c, owner, "task_escrow", -cost, tid)
         return tid
 
 
@@ -135,10 +169,11 @@ async def cancel_task(tid, owner):
         t = await c.fetchrow("SELECT * FROM tasks WHERE id=$1 AND owner_id=$2 FOR UPDATE", tid, owner)
         if not t or t["status"] != "active":
             return None
-        refund = (t["target"] - t["joined"]) * config.AD_COST
+        refund = 0 if t["free"] else (t["target"] - t["joined"]) * config.AD_COST
         await c.execute("UPDATE tasks SET status='cancelled' WHERE id=$1", tid)
-        await c.execute("UPDATE users SET ad_balance=ad_balance+$1 WHERE id=$2", refund, owner)
-        await led(c, owner, "task_refund", refund, tid)
+        if refund:
+            await c.execute("UPDATE users SET ad_balance=ad_balance+$1 WHERE id=$2", refund, owner)
+            await led(c, owner, "task_refund", refund, tid)
         return refund
 
 
@@ -177,7 +212,8 @@ async def claim(task_id, uid):
                         new_joined, "done" if new_joined >= t["target"] else "active", task_id)
         await c.execute("UPDATE users SET hold=hold+$1 WHERE id=$2", config.JOIN_REWARD, uid)
         await led(c, uid, "hold", config.JOIN_REWARD, cid)
-        await led(c, 0, "fee", config.AD_COST - config.JOIN_REWARD, cid)
+        if not t["free"]:
+            await led(c, 0, "fee", config.AD_COST - config.JOIN_REWARD, cid)
         return "ok"
 
 
@@ -318,6 +354,32 @@ async def wd_move(wid, frm, to):
     return await pool.fetchrow("UPDATE withdrawals SET status=$3 WHERE id=$1 AND status=$2 RETURNING *", wid, frm, to)
 
 
+async def wd_get(wid):
+    return await pool.fetchrow("SELECT * FROM withdrawals WHERE id=$1", wid)
+
+
+async def wd_set_ref(wid, ref):
+    return await pool.fetchrow(
+        "UPDATE withdrawals SET status='processing', gateway_ref=$2 WHERE id=$1 AND status='sending' RETURNING *",
+        wid, ref)
+
+
+async def wd_lookup(ref, reference):
+    return await pool.fetchrow(
+        "SELECT * FROM withdrawals WHERE gateway_ref=$1::text OR ('WD' || id::text)=$2::text LIMIT 1", ref, reference)
+
+
+async def wd_processing(limit=50):
+    return await pool.fetch(
+        "SELECT * FROM withdrawals WHERE status='processing' AND gateway_ref IS NOT NULL ORDER BY id LIMIT $1", limit)
+
+
+async def wd_recent_count(uid, hours=24):
+    return await pool.fetchval(
+        "SELECT count(*) FROM withdrawals WHERE user_id=$1 AND created_at > now() - make_interval(hours => $2)",
+        uid, hours)
+
+
 async def wd_refund(w):
     async with pool.acquire() as c, c.transaction():
         await c.execute("UPDATE users SET balance=balance+$1 WHERE id=$2", w["coins"], w["user_id"])
@@ -327,17 +389,19 @@ async def wd_refund(w):
 # ---------- bot work ----------
 # Escrow: poster ke ad_balance se reward*target pehle hi kat jata hai.
 # Slot "used" = us task ki har submission jo 'closed' nahi hai.
-async def bw_create(owner, title, link, reward, n):
+async def bw_create(owner, title, link, reward, n, free=False):
     cost = reward * n
     async with pool.acquire() as c, c.transaction():
-        ok = await c.fetchval(
-            "UPDATE users SET ad_balance=ad_balance-$1 WHERE id=$2 AND ad_balance>=$1 RETURNING id", cost, owner)
-        if not ok:
-            return None
+        if not free:
+            ok = await c.fetchval(
+                "UPDATE users SET ad_balance=ad_balance-$1 WHERE id=$2 AND ad_balance>=$1 RETURNING id", cost, owner)
+            if not ok:
+                return None
         bid = await c.fetchval(
-            "INSERT INTO botworks(owner_id,title,link,reward,target) VALUES($1,$2,$3,$4,$5) RETURNING id",
-            owner, title, link, reward, n)
-        await led(c, owner, "bw_escrow", -cost, bid)
+            "INSERT INTO botworks(owner_id,title,link,reward,target,free) VALUES($1,$2,$3,$4,$5,$6) RETURNING id",
+            owner, title, link, reward, n, free)
+        if not free:
+            await led(c, owner, "bw_escrow", -cost, bid)
         return bid
 
 
@@ -355,7 +419,7 @@ async def bw_cancel(bid, owner):
         if not b or b["status"] != "active":
             return None
         used = await _bw_used(c, bid)
-        refund = (b["target"] - used) * b["reward"]
+        refund = 0 if b["free"] else (b["target"] - used) * b["reward"]
         await c.execute("UPDATE botworks SET status='cancelled', target=$2 WHERE id=$1", bid, used)
         if refund > 0:
             await c.execute("UPDATE users SET ad_balance=ad_balance+$1 WHERE id=$2", refund, owner)
@@ -414,7 +478,7 @@ async def bw_mine(uid):
 
 async def _bw_lock(c, sid):
     return await c.fetchrow(
-        """SELECT s.*, b.owner_id, b.reward, b.title FROM bw_subs s JOIN botworks b ON b.id=s.bw_id
+        """SELECT s.*, b.owner_id, b.reward, b.title, b.free FROM bw_subs s JOIN botworks b ON b.id=s.bw_id
            WHERE s.id=$1 FOR UPDATE OF s""", sid)
 
 
@@ -428,8 +492,9 @@ async def _bw_pay(c, s):
 async def _bw_close(c, s):
     await c.execute("UPDATE bw_subs SET status='closed', decided_at=now() WHERE id=$1", s["id"])
     await c.execute("UPDATE botworks SET target=target-1 WHERE id=$1", s["bw_id"])
-    await c.execute("UPDATE users SET ad_balance=ad_balance+$1 WHERE id=$2", s["reward"], s["owner_id"])
-    await led(c, s["owner_id"], "bw_refund", s["reward"], s["id"])
+    if not s["free"]:
+        await c.execute("UPDATE users SET ad_balance=ad_balance+$1 WHERE id=$2", s["reward"], s["owner_id"])
+        await led(c, s["owner_id"], "bw_refund", s["reward"], s["id"])
 
 
 async def bw_review(sid, owner, approve):
@@ -512,13 +577,35 @@ async def pending_orders(uid):
         uid)
 
 
-async def set_device(uid, gmail, fp):
-    """False agar ye device ya Gmail kisi aur account se linked hai."""
+async def set_device(uid, gmail, dev_hash, fp):
+    """Naya device bind. Return 'ok' / 'taken' (device ya Gmail kisi aur account se linked).
+    Agar same fingerprint kisi aur verified account ka hai to suspect flag lagta hai (withdraw manual review)."""
     try:
-        await pool.execute("UPDATE users SET gmail=$1, device_hash=$2, device_ok=TRUE WHERE id=$3", gmail, fp, uid)
+        async with pool.acquire() as c, c.transaction():
+            dup = await c.fetchval("SELECT EXISTS(SELECT 1 FROM users WHERE fp=$1 AND id<>$2 AND device_ok)", fp, uid)
+            await c.execute(
+                """UPDATE users SET gmail=$1, device_hash=$2, fp=$3, device_ok=TRUE, dev_ver=2, suspect=$4
+                   WHERE id=$5""", gmail, dev_hash, fp, bool(dup), uid)
+        return "ok"
+    except asyncpg.UniqueViolationError:
+        return "taken"
+
+
+async def rebind_device(uid, dev_hash, fp, counted=True):
+    """Verified user ka device badla (ya legacy migration). False agar ye device kisi aur account ka hai."""
+    try:
+        await pool.execute(
+            """UPDATE users SET device_hash=$2, fp=$3, dev_ver=2, device_changes=device_changes+$4
+               WHERE id=$1 AND device_ok""", uid, dev_hash, fp, 1 if counted else 0)
         return True
     except asyncpg.UniqueViolationError:
         return False
+
+
+async def reset_device(uid):
+    return await pool.fetchval(
+        """UPDATE users SET device_ok=FALSE, device_hash=NULL, gmail=NULL, fp=NULL, device_changes=0,
+           suspect=FALSE, dev_ver=2 WHERE id=$1 RETURNING id""", uid)
 
 
 async def bw_set_photo(sid, file_id):
