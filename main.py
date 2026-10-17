@@ -17,11 +17,13 @@ async def main():
     app = Application.builder().token(config.BOT_TOKEN).build()
     bot.register(app)
 
+    await app.initialize()
+    await bot.post_init(app)
+
     runner = web.AppRunner(make_web(app))
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", config.PORT).start()
 
-    await app.initialize()
     await app.start()
     await app.updater.start_polling(
         allowed_updates=["message", "callback_query", "chat_member"], drop_pending_updates=True)

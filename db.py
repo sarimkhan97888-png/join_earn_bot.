@@ -434,3 +434,48 @@ async def bw_close_expired(hours):
                 await _bw_close(c, s)
                 n += 1
     return n
+
+
+# ---------- mini app helpers ----------
+async def recent_ledger(uid, n=15):
+    return await pool.fetch(
+        "SELECT kind, amount, created_at FROM ledger WHERE user_id=$1 ORDER BY id DESC LIMIT $2", uid, n)
+
+
+async def wd_history(uid):
+    return await pool.fetch(
+        """SELECT id, coins, amount_inr, upi, status, created_at FROM withdrawals
+           WHERE user_id=$1 ORDER BY id DESC LIMIT 10""", uid)
+
+
+async def order_history(uid):
+    return await pool.fetch(
+        """SELECT order_id, kind, coins, amount_inr, status, created_at FROM orders
+           WHERE user_id=$1 ORDER BY created_at DESC LIMIT 10""", uid)
+
+
+async def order_get(order_id, uid):
+    return await pool.fetchrow("SELECT status FROM orders WHERE order_id=$1 AND user_id=$2", order_id, uid)
+
+
+async def pending_orders(uid):
+    return await pool.fetchval(
+        "SELECT count(*) FROM orders WHERE user_id=$1 AND status='pending' AND created_at > now() - interval '1 hour'",
+        uid)
+
+
+async def set_device(uid, gmail, fp):
+    """False agar ye device ya Gmail kisi aur account se linked hai."""
+    try:
+        await pool.execute("UPDATE users SET gmail=$1, device_hash=$2, device_ok=TRUE WHERE id=$3", gmail, fp, uid)
+        return True
+    except asyncpg.UniqueViolationError:
+        return False
+
+
+async def bw_set_photo(sid, file_id):
+    await pool.execute("UPDATE bw_subs SET photo_id=$2 WHERE id=$1", sid, file_id)
+
+
+async def bw_drop(sid):
+    await pool.execute("DELETE FROM bw_subs WHERE id=$1 AND status='pending'", sid)
