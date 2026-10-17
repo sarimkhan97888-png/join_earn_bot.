@@ -150,6 +150,24 @@ async def gw_cmd(update: Update, ctx):
     await update.message.reply_text(text[:3800])
 
 
+# ---------------- admin: apne account me balance ----------------
+async def addbal_cmd(update: Update, ctx):
+    """/addbalance 5000 (withdraw balance) ya /addbalance ad 5000 (ad balance). Sirf admin, sirf apne account me."""
+    uid = update.effective_user.id
+    if uid not in config.ADMIN_IDS:
+        return
+    a = [x.lower() for x in ctx.args if x.lower() != "balance"]  # "/add balance 500" bhi chalega
+    ad = bool(a and a[0] == "ad")
+    if ad:
+        a = a[1:]
+    if len(a) != 1 or not a[0].isdigit() or not (0 < int(a[0]) <= 100_000_000):
+        return await update.message.reply_text(
+            "Usage:\n/addbalance 5000 → withdraw balance me\n/addbalance ad 5000 → ad balance me")
+    await db.ensure_user(update.effective_user)
+    v = await db.admin_add(uid, int(a[0]), ad)
+    await update.message.reply_text(f"✅ +{int(a[0]):,} coins {'ad balance' if ad else 'balance'} me add. Naya: {v:,}")
+
+
 # ---------------- admin: gift code ----------------
 async def gift_cmd(update: Update, ctx):
     if update.effective_user.id not in config.ADMIN_IDS:
@@ -301,6 +319,7 @@ def register(app):
     app.add_handler(CommandHandler("gift", gift_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("cancel", cancel_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("gw", gw_cmd, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler(["addbalance", "add_balance", "add"], addbal_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("resetdev", resetdev_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CallbackQueryHandler(on_support_reply_btn, pattern=r"^sup_reply:"))
     app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, on_admin_text))

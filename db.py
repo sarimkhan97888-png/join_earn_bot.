@@ -354,6 +354,17 @@ async def wd_move(wid, frm, to):
     return await pool.fetchrow("UPDATE withdrawals SET status=$3 WHERE id=$1 AND status=$2 RETURNING *", wid, frm, to)
 
 
+async def admin_add(uid, coins, ad=False):
+    """Admin apne account me coins jodta hai. Return naya balance (ya None)."""
+    col = "ad_balance" if ad else "balance"
+    async with pool.acquire() as c, c.transaction():
+        v = await c.fetchval(f"UPDATE users SET {col}={col}+$1 WHERE id=$2 RETURNING {col}", coins, uid)
+        if v is None:
+            return None
+        await led(c, uid, "admin_add", coins, "ad" if ad else "bal")
+        return v
+
+
 async def wd_get(wid):
     return await pool.fetchrow("SELECT * FROM withdrawals WHERE id=$1", wid)
 
