@@ -101,6 +101,18 @@ nav svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:1.8;st
 .sp>b{display:block}.sp>.sub{display:block;margin-top:2px}
 .prev{max-width:100%;max-height:200px;border-radius:12px;margin:6px 0;display:block}
 .cost{background:var(--card2);border-radius:13px;padding:11px 13px;margin:2px 0 12px;font-size:14px}
+#chat{position:fixed;inset:0;z-index:50;background:var(--bg);display:none;flex-direction:column}
+#chat.open{display:flex}
+.ch-h{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line);background:var(--card)}
+.ch-h button{border:0;background:var(--card2);color:var(--text);width:36px;height:36px;border-radius:12px;font-size:22px;line-height:1}
+.ch-h b{font-size:16px}.ch-h span{display:block;font-size:12px;color:var(--sub);font-weight:400}
+#chatBody{flex:1;overflow:auto;padding:14px 14px 6px;max-width:540px;width:100%;margin:0 auto}
+.ch-f{display:flex;gap:8px;padding:10px 12px calc(10px + env(safe-area-inset-bottom));border-top:1px solid var(--line);background:var(--card)}
+.ch-f input{margin:0;flex:1}
+.b{max-width:82%;padding:10px 13px;border-radius:18px;margin:6px 0;line-height:1.4;word-break:break-word;white-space:pre-wrap;width:fit-content}
+.b small{display:block;opacity:.65;font-size:10px;margin-top:4px;white-space:normal}
+.b.me{margin-left:auto;background:linear-gradient(135deg,var(--acc),var(--acc2));color:#fff;border-bottom-right-radius:5px}
+.b.them{background:var(--card2);border-bottom-left-radius:5px}
 </style>
 </head>
 <body>
@@ -109,6 +121,8 @@ nav svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:1.8;st
 <div id="sheet"><div class="bd" data-act="closesheet"></div><div class="pn"><div class="gr"></div><div id="sheetBody"></div></div></div>
 <div id="modal"></div>
 <div id="loader"><span class="spin"></span></div>
+<div id="chat"><div class="ch-h"><button data-act="chatclose" aria-label="Back">‹</button><b>Customer service<span>Apni problem likho, hum reply karenge</span></b></div>
+<div id="chatBody"></div><div class="ch-f"><input id="chatIn" placeholder="Apni problem likho..." maxlength="1000" autocomplete="off"><button class="btn sm" data-act="chatsend">Send</button></div></div>
 
 <script>
 const tg = window.Telegram && window.Telegram.WebApp;
@@ -275,7 +289,7 @@ function withdrawSheet() {
 function showQR(o, kind) {
   openSheet(`<h3 style="text-align:center">Pay ₹${o.amount}</h3>${o.qr ? `<img class="qr" src="${esc(o.qr)}" alt="QR">` : ''}
   <p style="text-align:center">Kisi bhi UPI app se scan karke pay karo.<br><span class="sub">Order ${esc(o.order_id)}</span></p>
-  ${o.pay_url ? `<button class="btn ghost" data-act="paylink" data-url="${esc(o.pay_url)}">Open UPI app</button>` : ''}
+  ${o.pay_url ? `<button class="btn ghost" data-act="paylink" data-url="${esc(o.pay_url)}">${/^upi:/i.test(o.pay_url) ? 'Open UPI app' : 'Open payment page'}</button>` : ''}
   <div class="wait"><span class="spin"></span>&nbsp; Payment ka wait...</div>`);
   S.poll = setInterval(async () => {
     const j = await api('/api/order?id=' + encodeURIComponent(o.order_id));
@@ -304,7 +318,7 @@ function rProfile() {
    <div class="item" data-act="studio" style="cursor:pointer"><div class="ico">💎</div><div class="sp"><b>Premium</b><span class="sub">${m.premium ? 'Upload tasks, manage posts' : 'Unlock karne ke liye ₹' + S.cfg.premium_price + '/month'}</span></div>›</div>
    <div class="item" data-act="gift" style="cursor:pointer"><div class="ico">🎁</div><div class="sp"><b>Gift code</b><span class="sub">Code redeem karke coins pao</span></div>›</div>
    <div class="item" data-act="rules" style="cursor:pointer"><div class="ico">📜</div><div class="sp"><b>Rules</b><span class="sub">Earning & withdraw rules</span></div>›</div>
-   <div class="item" data-act="support" style="cursor:pointer"><div class="ico">🎧</div><div class="sp"><b>Customer service</b><span class="sub">Help chahiye? Message karo</span></div>›</div></div>`;
+   <div class="item" data-act="support" style="cursor:pointer"><div class="ico">🎧</div><div class="sp"><b>Customer service</b><span class="sub">Apni problem likho, reply milega</span></div>›</div></div>`;
 }
 function rulesSheet() {
   const c = S.cfg;
@@ -377,13 +391,33 @@ function compress(file) {
   });
 }
 
+/* ---------- SUPPORT CHAT ---------- */
+async function chatLoad(force) {
+  const j = await api('/api/support'); if (!j.ok) return;
+  if (!force && j.msgs.length === S.chatCount) return;
+  S.chatCount = j.msgs.length;
+  const b = $('#chatBody');
+  b.innerHTML = j.msgs.length ? j.msgs.map(m => `<div class="b ${m.from === 'user' ? 'me' : 'them'}">${esc(m.text)}<small>${m.from === 'user' ? '' : 'Support · '}${when(m.at)}</small></div>`).join('')
+    : '<div class="empty"><i>🎧</i>Apni problem neeche likho.<br>Support team jaldi reply karegi.</div>';
+  b.scrollTop = b.scrollHeight;
+}
+function openChat() { $('#chat').classList.add('open'); document.body.style.overflow = 'hidden'; S.chatCount = -1; chatLoad(true); S.chatPoll = setInterval(() => chatLoad(false), 5000); }
+function closeChat() { clearInterval(S.chatPoll); $('#chat').classList.remove('open'); document.body.style.overflow = ''; }
+async function chatSend() {
+  const el = $('#chatIn'), t = el.value.trim(); if (!t) return;
+  el.value = '';
+  const j = await api('/api/support/send', { text: t });
+  if (!j.ok) { el.value = t; await popup('error', 'Oops', j.msg || 'Send nahi hua'); return; }
+  chatLoad(true);
+}
+
 /* ---------- events ---------- */
 const H = {
   reload: () => location.reload(),
   go: d => go(d.tab),
   closesheet: closeSheet,
   open: d => openLink(d.url),
-  paylink: d => { window.location.href = d.url; },
+  paylink: d => { if (/^https?:/i.test(d.url)) openLink(d.url); else window.location.href = d.url; },
   seg: d => { S.seg = d.seg; rTasks(); },
   async check(d) {
     const j = await act('/api/task/check', { id: +d.id });
@@ -452,7 +486,9 @@ const H = {
     if (j.ok) { closeSheet(); await popup('ok', 'Gift redeemed', j.msg); refresh(); }
   },
   rules: rulesSheet,
-  support: () => openLink(S.cfg.support_url)
+  support: openChat,
+  chatclose: closeChat,
+  chatsend: chatSend
 };
 function onInp(k) {
   const c = S.cfg;
@@ -471,6 +507,8 @@ document.addEventListener('change', e => {
     const p = $('#bprev'); p.src = URL.createObjectURL(e.target.files[0]); p.style.display = 'block';
   }
 });
+
+document.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target && e.target.id === 'chatIn') { e.preventDefault(); chatSend(); } });
 
 go('home');
 </script>

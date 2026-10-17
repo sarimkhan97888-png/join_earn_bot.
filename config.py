@@ -8,7 +8,7 @@ ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()]
 SUPPORT_URL = os.getenv("SUPPORT_URL", "https://t.me/telegram")
 
 # Payment gateway (apni API ke hisaab se gateway.py adapt karna)
-GATEWAY_URL = os.getenv("GATEWAY_URL", "")
+GATEWAY_URL = os.getenv("GATEWAY_URL", "https://elitepay.co.in/api/public/v1").rstrip("/")
 GATEWAY_KEY = os.getenv("GATEWAY_KEY", "")
 GATEWAY_SECRET = os.getenv("GATEWAY_SECRET", "")
 AUTO_PAYOUT = os.getenv("AUTO_PAYOUT", "0") == "1"  # 1 = admin approve par gateway se auto UPI payout

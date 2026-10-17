@@ -2,6 +2,7 @@
 import base64
 import hashlib
 import hmac
+import html
 import io
 import json
 import logging
@@ -19,6 +20,7 @@ import botwork
 import config
 import db
 import gateway
+import payments
 import util
 
 log = logging.getLogger("api")
@@ -207,7 +209,11 @@ async def make_order(request, kind, coins, amount):
     except Exception:
         log.exception("gateway create_order failed")
         return err("❌ Payment gateway abhi available nahi. Baad me try karo.")
-    await db.new_order(order_id, uid, kind, coins, amount)
+    if not res.get("ref"):
+        log.error("gateway response me payment id nahi mili; keys=%s",
+                  list(res.get("raw", {}).keys()) if isinstance(res.get("raw"), dict) else None)
+        return err("Payment gateway se payment ID nahi mili. Support se contact karo.")
+    await db.new_order(order_id, uid, kind, coins, amount, res["ref"])
     qr = res.get("qr_url")
     if not qr and res.get("upi_url"):
         bio = io.BytesIO()
@@ -231,8 +237,10 @@ async def api_premium_buy(request):
 
 @routes.get("/api/order")
 async def api_order(request):
-    o = await db.order_get(request.query.get("id", ""), request["u"]["id"])
-    return ok(status=o["status"] if o else "none")
+    row = await db.order_row(request.query.get("id", ""))
+    if not row or row["user_id"] != request["u"]["id"]:
+        return ok(status="none")
+    return ok(status=await payments.settle(request.app["bot"], row, min_gap=4))
 
 
 @routes.post("/api/withdraw")
@@ -261,6 +269,35 @@ async def api_withdraw(request):
 
 
 # ---------------- profile ----------------
+@routes.get("/api/support")
+async def api_support(request):
+    rows = await db.sup_list(request["u"]["id"])
+    return ok(msgs=[{"from": r["sender"], "text": r["text"], "at": iso(r["created_at"])} for r in rows])
+
+
+@routes.post("/api/support/send")
+async def api_support_send(request):
+    uid = request["u"]["id"]
+    text = str((await body(request)).get("text", "")).strip()[:1000]
+    if not text:
+        return err("Message khali hai.")
+    if await db.sup_recent_count(uid) >= 20:
+        return err("Bahut zyada messages ho gaye. Thodi der baad likho.")
+    await db.sup_add(uid, "user", text)
+    tg = request["tg"]
+    name = f"@{tg['username']}" if tg.get("username") else (tg.get("first_name") or str(uid))
+    kb = M([[B("💬 Reply", callback_data=f"sup_reply:{uid}")]])
+    for a in config.ADMIN_IDS:
+        try:
+            m = await request.app["bot"].send_message(
+                a, f"🎧 <b>Support</b>\nFrom: {html.escape(name)} (<code>{uid}</code>)\n\n{html.escape(text)}",
+                parse_mode="HTML", reply_markup=kb)
+            await db.sup_notif_add(a, m.message_id, uid)
+        except TelegramError:
+            log.warning("support notify failed for admin %s", a)
+    return ok()
+
+
 @routes.post("/api/gift")
 async def api_gift(request):
     u = request["u"]

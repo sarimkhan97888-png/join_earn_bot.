@@ -4,10 +4,9 @@ import os
 from aiohttp import web
 
 import api
-import config
 import db
 import gateway
-import util
+import payments
 
 log = logging.getLogger("web")
 INDEX = os.path.join(os.path.dirname(os.path.abspath(__file__)), "index.html")
@@ -22,23 +21,18 @@ async def app_page(request):
 
 
 async def gateway_hook(request):
+    """Webhook sirf trigger hai. Payload par bharosa nahi: order dhoondh ke gateway ke status API se verify karte hain."""
     try:
         data = await request.json()
     except Exception:
-        return web.Response(status=400, text="bad json")
-    parsed = gateway.parse_webhook(request.headers, data)
-    if not parsed:
-        return web.Response(status=403, text="bad signature")
-    order_id, paid, amount = parsed
-    if not paid or not order_id:
-        return web.Response(text="ignored")
-    o = await db.complete_order(order_id, amount)
+        try:
+            data = dict(await request.post())
+        except Exception:
+            data = {}
+    order_id, ref = gateway.parse_webhook(request.headers, data)
+    o = await db.order_lookup(ref, order_id)
     if o:
-        if o["kind"] == "deposit":
-            msg = f"✅ <b>Deposit successful!</b>\n+{o['coins']} coins ad balance me add ho gaye."
-        else:
-            msg = f"✅ <b>Premium activated!</b> {config.PREMIUM_DAYS} din ke liye."
-        await util.notify(request.app["bot"], o["user_id"], msg)
+        await payments.settle(request.app["bot"], o)
     return web.Response(text="ok")
 
 

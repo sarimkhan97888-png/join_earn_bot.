@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS orders(
   coins BIGINT NOT NULL DEFAULT 0, amount_inr INT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS gateway_ref TEXT;
 CREATE TABLE IF NOT EXISTS botworks(
   id SERIAL PRIMARY KEY, owner_id BIGINT NOT NULL, title TEXT NOT NULL, link TEXT NOT NULL,
   reward INT NOT NULL, target INT NOT NULL, status TEXT NOT NULL DEFAULT 'active',
@@ -66,6 +67,14 @@ ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS fee_coins BIGINT NOT NULL DEFAU
 CREATE TABLE IF NOT EXISTS gift_codes(
   code TEXT PRIMARY KEY, coins INT NOT NULL, max_uses INT NOT NULL, used INT NOT NULL DEFAULT 0,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS support_msgs(
+  id BIGSERIAL PRIMARY KEY, user_id BIGINT NOT NULL, sender TEXT NOT NULL, text TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS support_user_idx ON support_msgs(user_id, id);
+CREATE TABLE IF NOT EXISTS support_notifs(
+  admin_id BIGINT NOT NULL, msg_id BIGINT NOT NULL, user_id BIGINT NOT NULL, PRIMARY KEY(admin_id, msg_id)
 );
 CREATE TABLE IF NOT EXISTS gift_redeems(
   code TEXT NOT NULL REFERENCES gift_codes(code), user_id BIGINT NOT NULL,
@@ -239,9 +248,30 @@ async def release(comp_id):
 
 
 # ---------- orders ----------
-async def new_order(order_id, uid, kind, coins, amount_inr):
-    await pool.execute("INSERT INTO orders(order_id,user_id,kind,coins,amount_inr) VALUES($1,$2,$3,$4,$5)",
-                       order_id, uid, kind, coins, amount_inr)
+async def new_order(order_id, uid, kind, coins, amount_inr, gateway_ref=None):
+    await pool.execute(
+        "INSERT INTO orders(order_id,user_id,kind,coins,amount_inr,gateway_ref) VALUES($1,$2,$3,$4,$5,$6)",
+        order_id, uid, kind, coins, amount_inr, gateway_ref)
+
+
+async def order_row(order_id):
+    return await pool.fetchrow("SELECT * FROM orders WHERE order_id=$1", order_id)
+
+
+async def order_lookup(ref, order_id):
+    return await pool.fetchrow(
+        "SELECT * FROM orders WHERE gateway_ref=$1::text OR order_id=$2::text ORDER BY created_at DESC LIMIT 1",
+        ref, order_id)
+
+
+async def order_set_status(order_id, status):
+    await pool.execute("UPDATE orders SET status=$2 WHERE order_id=$1 AND status='pending'", order_id, status)
+
+
+async def pending_gateway_orders():
+    return await pool.fetch(
+        """SELECT * FROM orders WHERE status='pending' AND gateway_ref IS NOT NULL
+           AND created_at > now() - interval '24 hours' ORDER BY created_at LIMIT 50""")
 
 
 async def complete_order(order_id, paid_amount):
@@ -525,3 +555,32 @@ async def gift_redeem(uid, code):
             return "ok", g["coins"]
     except asyncpg.UniqueViolationError:
         return "dup", 0
+
+
+# ---------- support chat ----------
+async def sup_add(uid, sender, text):
+    return await pool.fetchval(
+        "INSERT INTO support_msgs(user_id,sender,text) VALUES($1,$2,$3) RETURNING id", uid, sender, text)
+
+
+async def sup_list(uid, limit=60):
+    rows = await pool.fetch(
+        "SELECT sender, text, created_at FROM support_msgs WHERE user_id=$1 ORDER BY id DESC LIMIT $2", uid, limit)
+    return list(reversed(rows))
+
+
+async def sup_recent_count(uid):
+    return await pool.fetchval(
+        "SELECT count(*) FROM support_msgs WHERE user_id=$1 AND sender='user' AND created_at > now() - interval '1 hour'",
+        uid)
+
+
+async def sup_notif_add(admin_id, msg_id, uid):
+    await pool.execute(
+        "INSERT INTO support_notifs(admin_id,msg_id,user_id) VALUES($1,$2,$3) ON CONFLICT DO NOTHING",
+        admin_id, msg_id, uid)
+
+
+async def sup_notif_pop(uid):
+    """Is user ke saare admin notifications ki list de aur DB se hata de (delete karne ke liye)."""
+    return await pool.fetch("DELETE FROM support_notifs WHERE user_id=$1 RETURNING admin_id, msg_id", uid)

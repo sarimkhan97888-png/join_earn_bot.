@@ -1,16 +1,20 @@
 import asyncio
+import html
+import json
 import logging
 import re
 import secrets
+import time
 
 from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as M, MenuButtonWebApp, Update, WebAppInfo
 from telegram.error import TelegramError
-from telegram.ext import CallbackQueryHandler, ChatMemberHandler, CommandHandler, filters
+from telegram.ext import CallbackQueryHandler, ChatMemberHandler, CommandHandler, MessageHandler, filters
 
 import botwork
 import config
 import db
 import gateway
+import payments
 import util
 
 log = logging.getLogger("bot")
@@ -33,6 +37,92 @@ async def start(update: Update, ctx):
     await update.message.reply_text(
         "👋 <b>Welcome!</b>\nChannels join karo, coins kamao aur UPI me withdraw karo 💰\n\nNeeche button se app kholo 👇",
         parse_mode="HTML", reply_markup=app_kb())
+
+
+# ---------------- admin: support reply ----------------
+async def on_support_reply_btn(update: Update, ctx):
+    q = update.callback_query
+    aid = q.from_user.id
+    if aid not in config.ADMIN_IDS:
+        return await q.answer("Not allowed", show_alert=True)
+    uid = int(q.data.split(":")[1])
+    state = ctx.application.bot_data.setdefault("sup_reply", {})
+    old = state.get(aid)
+    if old:
+        try:
+            await ctx.bot.delete_message(aid, old["prompt"])
+        except TelegramError:
+            pass
+    await q.answer()
+    prompt = await ctx.bot.send_message(
+        aid, f"✍️ User <code>{uid}</code> ko reply likho (cancel: /cancel):", parse_mode="HTML")
+    state[aid] = {"uid": uid, "prompt": prompt.message_id}
+
+
+async def on_admin_text(update: Update, ctx):
+    aid = update.effective_user.id
+    st = ctx.application.bot_data.get("sup_reply", {}).get(aid)
+    if aid not in config.ADMIN_IDS or not st:
+        return
+    text = (update.message.text or "").strip()[:1000]
+    if not text:
+        return
+    uid = st["uid"]
+    ctx.application.bot_data["sup_reply"].pop(aid, None)
+    await db.sup_add(uid, "admin", text)
+    await util.notify(ctx.bot, uid, f"🎧 <b>Support reply</b>\n\n{html.escape(text)}\n\n"
+                                    f"Poori chat: App → Profile → Customer service")
+    # reply ho gaya: is user ke saare support notifications aur prompt delete
+    for r in await db.sup_notif_pop(uid):
+        try:
+            await ctx.bot.delete_message(r["admin_id"], r["msg_id"])
+        except TelegramError:
+            pass
+    try:
+        await ctx.bot.delete_message(aid, st["prompt"])
+    except TelegramError:
+        pass
+
+
+async def cancel_cmd(update: Update, ctx):
+    aid = update.effective_user.id
+    st = ctx.application.bot_data.get("sup_reply", {}).pop(aid, None)
+    if st:
+        try:
+            await ctx.bot.delete_message(aid, st["prompt"])
+        except TelegramError:
+            pass
+        await update.message.reply_text("Cancel ho gaya. Notification abhi bhi upar hai, Reply dobara dabao.")
+
+
+# ---------------- admin: gateway test ----------------
+async def gw_cmd(update: Update, ctx):
+    uid = update.effective_user.id
+    if uid not in config.ADMIN_IDS:
+        return
+    a = ctx.args
+    usage = "Usage:\n/gw balance\n/gw create 10\n/gw status <paymentId>"
+    if not a:
+        return await update.message.reply_text(usage)
+    try:
+        if a[0] == "balance":
+            raw = await gateway.get_balance()
+        elif a[0] == "create":
+            amount = int(a[1]) if len(a) > 1 and a[1].isdigit() else 10
+            res = await gateway.create_order(f"T{uid}{int(time.time())}", amount, "gwtest")
+            raw = {"parsed": {k: v for k, v in res.items() if k != "raw"}, "raw": res["raw"]}
+        elif a[0] == "status" and len(a) > 1:
+            state, amt, raw0 = await gateway.check_payment(a[1])
+            raw = {"parsed_state": state, "parsed_amount": str(amt), "raw": raw0}
+        else:
+            return await update.message.reply_text(usage)
+        text = json.dumps(raw, indent=1, ensure_ascii=False, default=str)
+    except Exception as e:
+        text = f"Error: {type(e).__name__}: {e}"
+    for s in (config.GATEWAY_KEY, config.GATEWAY_SECRET):
+        if s:
+            text = text.replace(s, "***")
+    await update.message.reply_text(text[:3800])
 
 
 # ---------------- admin: gift code ----------------
@@ -135,6 +225,13 @@ async def job_recheck(ctx):
         await asyncio.sleep(0.05)
 
 
+async def job_orders(ctx):
+    """Webhook na aaye to bhi pending deposits/premium ko gateway se verify karke credit karo."""
+    for o in await db.pending_gateway_orders():
+        await payments.settle(ctx.bot, o, min_gap=60)
+        await asyncio.sleep(0.2)
+
+
 async def on_error(update, ctx):
     log.error("Unhandled error", exc_info=ctx.error)
 
@@ -142,6 +239,10 @@ async def on_error(update, ctx):
 def register(app):
     app.add_handler(CommandHandler("start", start, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("gift", gift_cmd, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("cancel", cancel_cmd, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("gw", gw_cmd, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CallbackQueryHandler(on_support_reply_btn, pattern=r"^sup_reply:"))
+    app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, on_admin_text))
     app.add_handler(CallbackQueryHandler(on_admin_wd, pattern=r"^adm_"))
     app.add_handler(CallbackQueryHandler(botwork.on_cb, pattern=r"^(bws_|bwa_)"))
     app.add_handler(ChatMemberHandler(on_chat_member, ChatMemberHandler.CHAT_MEMBER))
@@ -149,3 +250,4 @@ def register(app):
     app.job_queue.run_repeating(job_release, interval=300, first=60)
     app.job_queue.run_repeating(job_recheck, interval=600, first=120)
     app.job_queue.run_repeating(botwork.job, interval=900, first=180)
+    app.job_queue.run_repeating(job_orders, interval=120, first=90)

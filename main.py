@@ -10,6 +10,9 @@ import db
 from webapp import make_web
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+# httpx har request ka poora URL INFO me log karta hai (bot token / gateway key leak ho sakti hai). Band karo.
+for _n in ("httpx", "httpcore"):
+    logging.getLogger(_n).setLevel(logging.WARNING)
 
 
 async def main():
