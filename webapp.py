@@ -49,5 +49,6 @@ def make_web(ptb_app):
     app.router.add_get("/", health)
     app.router.add_get("/health", health)
     app.router.add_get("/app", app_page)
+    app.router.add_get("/webhook/gateway", health)  # kuch gateways URL check GET se karte hain
     app.router.add_post("/webhook/gateway", gateway_hook)
     return app
