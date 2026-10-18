@@ -112,6 +112,13 @@ CREATE TABLE IF NOT EXISTS referrals(
 CREATE INDEX IF NOT EXISTS ref_referrer ON referrals(referrer_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS ref_pending ON referrals(status) WHERE status='pending';
 ALTER TABLE support_msgs ADD COLUMN IF NOT EXISTS has_photo BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE support_msgs ADD COLUMN IF NOT EXISTS has_voice BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE completions ADD COLUMN IF NOT EXISTS rejoin_paid BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS debt BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS last_alert TIMESTAMPTZ;
+ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE bw_subs ADD COLUMN IF NOT EXISTS report_sent BOOLEAN NOT NULL DEFAULT FALSE;
+CREATE INDEX IF NOT EXISTS wd_status_idx ON withdrawals(status, id);
 ALTER TABLE support_notifs ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();
 CREATE TABLE IF NOT EXISTS support_files(msg_id BIGINT PRIMARY KEY, data BYTEA NOT NULL);
 CREATE TABLE IF NOT EXISTS support_threads(
@@ -130,7 +137,11 @@ async def init():
     pool = await asyncpg.create_pool(config.DATABASE_URL, min_size=2, max_size=config.DB_POOL_MAX,
                                      command_timeout=30, max_inactive_connection_lifetime=300)
     async with pool.acquire() as c:
-        await c.execute(SCHEMA)
+        await c.execute("SELECT pg_advisory_lock(727001)")  # 2 instance ek saath boot ho to schema DDL takrao nahi
+        try:
+            await c.execute(SCHEMA)
+        finally:
+            await c.execute("SELECT pg_advisory_unlock(727001)")
 
 
 async def led(c, uid, kind, amount, ref=""):
@@ -206,7 +217,7 @@ async def open_tasks(uid):
         """SELECT t.* FROM tasks t
            WHERE t.status='active' AND t.joined<t.target AND t.owner_id<>$1
              AND NOT EXISTS(SELECT 1 FROM completions c WHERE c.chat_id=t.chat_id AND c.user_id=$1)
-           ORDER BY t.created_at LIMIT 8""", uid)
+           ORDER BY md5(t.id::text || $1::bigint::text) LIMIT 8""", uid)  # har user ko alag mix: dead task sabke aage na atke
 
 
 async def claim(task_id, uid):
@@ -236,8 +247,9 @@ async def claim(task_id, uid):
 # ---------- joins / membership ----------
 async def record_join(chat_id, uid):
     await pool.execute(
-        "INSERT INTO joins(chat_id,user_id) VALUES($1,$2) ON CONFLICT(chat_id,user_id) DO UPDATE SET at=now()",
-        chat_id, uid)
+        """INSERT INTO joins(chat_id,user_id) SELECT $1::bigint,$2::bigint
+           WHERE EXISTS(SELECT 1 FROM tasks WHERE chat_id=$1::bigint AND status='active')
+           ON CONFLICT(chat_id,user_id) DO UPDATE SET at=now()""", chat_id, uid)
 
 
 async def joined_after(chat_id, uid, since):
@@ -256,9 +268,24 @@ async def left_chats(uid):
 
 
 async def unblock(chat_id, uid):
-    r = await pool.execute(
-        "UPDATE completions SET status='rejoined' WHERE chat_id=$1 AND user_id=$2 AND status='left'", chat_id, uid)
-    return r.endswith("1")
+    """Left channel dobara join kiya. Pehli baar sirf REJOIN_PERCENT% coins (24h hold me), aage 0 coins.
+    Return coins (int, 0 bhi ho sakta) ya None agar koi 'left' record nahi tha."""
+    async with pool.acquire() as c, c.transaction():
+        r = await c.fetchrow(
+            "SELECT * FROM completions WHERE chat_id=$1 AND user_id=$2 AND status='left' FOR UPDATE", chat_id, uid)
+        if not r:
+            return None
+        if r["rejoin_paid"]:
+            await c.execute("UPDATE completions SET status='ok', reward=0, last_checked=now() WHERE id=$1", r["id"])
+            return 0
+        coins = r["reward"] * config.REJOIN_PERCENT // 100
+        await c.execute(
+            """UPDATE completions SET status='hold', reward=$2, rejoin_paid=TRUE, last_checked=now(),
+               release_at=now() + make_interval(hours => $3) WHERE id=$1""", r["id"], coins, config.HOLD_HOURS)
+        if coins:
+            await c.execute("UPDATE users SET hold=hold+$1 WHERE id=$2", coins, uid)
+            await led(c, uid, "hold", coins, r["id"])
+        return coins
 
 
 async def revoke(comp_id):
@@ -266,12 +293,18 @@ async def revoke(comp_id):
         r = await c.fetchrow("SELECT * FROM completions WHERE id=$1 FOR UPDATE", comp_id)
         if not r or r["status"] not in ("hold", "ok"):
             return None
+        cut = r["reward"]
         if r["status"] == "hold":
-            await c.execute("UPDATE users SET hold=GREATEST(hold-$1,0) WHERE id=$2", r["reward"], r["user_id"])
+            await c.execute("UPDATE users SET hold=GREATEST(hold-$1,0) WHERE id=$2", cut, r["user_id"])
         else:
-            await c.execute("UPDATE users SET balance=GREATEST(balance-$1,0) WHERE id=$2", r["reward"], r["user_id"])
+            # coins pehle hi withdraw ho chuke ho sakte hain: jitna balance me hai utna kaato, baaki "debt" (agli kamai se kategi)
+            bal = await c.fetchval("SELECT balance FROM users WHERE id=$1 FOR UPDATE", r["user_id"])
+            cut = min(int(bal or 0), r["reward"])
+            await c.execute("UPDATE users SET balance=balance-$1, debt=debt+$2 WHERE id=$3",
+                            cut, r["reward"] - cut, r["user_id"])
         await c.execute("UPDATE completions SET status='left' WHERE id=$1", comp_id)
-        await led(c, r["user_id"], "revoke", -r["reward"], comp_id)
+        if cut:
+            await led(c, r["user_id"], "revoke", -cut, comp_id)
         return r
 
 
@@ -291,11 +324,17 @@ async def release(comp_id):
         r = await c.fetchrow("SELECT * FROM completions WHERE id=$1 FOR UPDATE", comp_id)
         if not r or r["status"] != "hold":
             return None
+        debt = await c.fetchval("SELECT debt FROM users WHERE id=$1 FOR UPDATE", r["user_id"])
+        pay = min(int(debt or 0), r["reward"])      # purana leave-debt pehle kat-ta hai
+        credit = r["reward"] - pay
         await c.execute(
-            """UPDATE users SET hold=GREATEST(hold-$1,0), balance=balance+$1, total_earned=total_earned+$1
-               WHERE id=$2""", r["reward"], r["user_id"])
+            """UPDATE users SET hold=GREATEST(hold-$1,0), balance=balance+$2, total_earned=total_earned+$2,
+               debt=debt-$3 WHERE id=$4""", r["reward"], credit, pay, r["user_id"])
         await c.execute("UPDATE completions SET status='ok' WHERE id=$1", comp_id)
-        await led(c, r["user_id"], "release", r["reward"], comp_id)
+        if r["reward"]:
+            await led(c, r["user_id"], "release", r["reward"], comp_id)
+        if pay:
+            await led(c, r["user_id"], "debt_pay", -pay, comp_id)
         return r
 
 
@@ -323,7 +362,7 @@ async def order_set_status(order_id, status):
 async def pending_gateway_orders():
     return await pool.fetch(
         """SELECT * FROM orders WHERE status='pending' AND gateway_ref IS NOT NULL
-           AND created_at > now() - interval '24 hours' ORDER BY created_at LIMIT 50""")
+           AND created_at > now() - interval '24 hours' ORDER BY created_at DESC LIMIT 100""")
 
 
 async def complete_order(order_id, paid_amount):
@@ -354,7 +393,7 @@ async def request_withdraw(uid, coins):
     async with pool.acquire() as c, c.transaction():
         u = await c.fetchrow(
             """UPDATE users SET balance=balance-$1 WHERE id=$2 AND balance>=$1
-               AND device_ok AND NOT banned AND upi IS NOT NULL RETURNING upi""", coins, uid)
+               AND device_ok AND NOT banned AND debt=0 AND upi IS NOT NULL RETURNING upi""", coins, uid)
         if not u:
             return None
         wid = await c.fetchval(
@@ -367,7 +406,35 @@ async def request_withdraw(uid, coins):
 
 
 async def wd_move(wid, frm, to):
-    return await pool.fetchrow("UPDATE withdrawals SET status=$3 WHERE id=$1 AND status=$2 RETURNING *", wid, frm, to)
+    return await pool.fetchrow(
+        "UPDATE withdrawals SET status=$3, updated_at=now() WHERE id=$1 AND status=$2 RETURNING *", wid, frm, to)
+
+
+async def wd_move_refund(wid, frm, to):
+    """Status change + coins refund EK transaction me (beech me crash hone par coins zaya nahi hote)."""
+    async with pool.acquire() as c, c.transaction():
+        w = await c.fetchrow(
+            "UPDATE withdrawals SET status=$3, updated_at=now() WHERE id=$1 AND status=$2 RETURNING *", wid, frm, to)
+        if not w:
+            return None
+        await c.execute("UPDATE users SET balance=balance+$1 WHERE id=$2", w["coins"], w["user_id"])
+        await led(c, w["user_id"], "withdraw_refund", w["coins"], w["id"])
+        return w
+
+
+async def wd_touch_alert(wid):
+    await pool.execute("UPDATE withdrawals SET last_alert=now() WHERE id=$1", wid)
+
+
+async def wd_stuck(limit=20):
+    """Jinka admin alert shayad gaya hi nahi (restart/crash) ya jo atak gaye: pending >5min, sending >10min,
+    aur pichla alert 3 ghante se purana (reminder bhi)."""
+    return await pool.fetch(
+        """SELECT * FROM withdrawals
+           WHERE ((status='pending' AND created_at < now() - interval '5 minutes')
+               OR (status='sending' AND updated_at < now() - interval '10 minutes'))
+             AND (last_alert IS NULL OR last_alert < now() - interval '3 hours')
+           ORDER BY id LIMIT $1""", limit)
 
 
 async def admin_add(uid, coins, ad=False):
@@ -387,7 +454,7 @@ async def wd_get(wid):
 
 async def wd_set_ref(wid, ref):
     return await pool.fetchrow(
-        "UPDATE withdrawals SET status='processing', gateway_ref=$2 WHERE id=$1 AND status='sending' RETURNING *",
+        "UPDATE withdrawals SET status='processing', gateway_ref=$2, updated_at=now() WHERE id=$1 AND status='sending' RETURNING *",
         wid, ref)
 
 
@@ -565,6 +632,15 @@ async def bw_auto_report(hours):
            WHERE status='pending' AND created_at < now() - make_interval(hours => $1) RETURNING id""", hours)
 
 
+async def bw_mark_report_sent(sid):
+    await pool.execute("UPDATE bw_subs SET report_sent=TRUE WHERE id=$1", sid)
+
+
+async def bw_unsent_reports(limit=20):
+    return await pool.fetch(
+        "SELECT id FROM bw_subs WHERE status='reported' AND NOT report_sent ORDER BY id LIMIT $1", limit)
+
+
 async def bw_close_expired(hours):
     """Reject ke baad report window nikal gayi: slot band, coins poster ko wapas."""
     rows = await pool.fetch(
@@ -607,15 +683,15 @@ async def pending_orders(uid):
         uid)
 
 
-async def set_device(uid, gmail, dev_hash, fp):
-    """Naya device bind. Return 'ok' / 'taken' (device ya Gmail kisi aur account se linked).
+async def set_device(uid, dev_hash, fp):
+    """Telegram ID + device bind. Return 'ok' / 'taken' (device kisi aur account se linked).
     Agar same fingerprint kisi aur verified account ka hai to suspect flag lagta hai (withdraw manual review)."""
     try:
         async with pool.acquire() as c, c.transaction():
             dup = await c.fetchval("SELECT EXISTS(SELECT 1 FROM users WHERE fp=$1 AND id<>$2 AND device_ok)", fp, uid)
             await c.execute(
-                """UPDATE users SET gmail=$1, device_hash=$2, fp=$3, device_ok=TRUE, dev_ver=2, suspect=$4
-                   WHERE id=$5""", gmail, dev_hash, fp, bool(dup), uid)
+                """UPDATE users SET device_hash=$1, fp=$2, device_ok=TRUE, dev_ver=2, suspect=(suspect OR $3)
+                   WHERE id=$4""", dev_hash, fp, bool(dup), uid)
         return "ok"
     except asyncpg.UniqueViolationError:
         return "taken"
@@ -683,25 +759,26 @@ async def gift_redeem(uid, code):
 
 
 # ---------- support chat ----------
-async def sup_add(uid, sender, text, photo=None):
-    """Support message (text aur/ya photo). Thread summary bhi update hoti hai (admin inbox ke liye)."""
+async def sup_add(uid, sender, text, photo=None, voice=None):
+    """Support message (text aur/ya photo ya voice). Thread summary bhi update hoti hai (admin inbox ke liye)."""
     async with pool.acquire() as c, c.transaction():
         mid = await c.fetchval(
-            "INSERT INTO support_msgs(user_id,sender,text,has_photo) VALUES($1,$2,$3,$4) RETURNING id",
-            uid, sender, text, photo is not None)
-        if photo is not None:
-            await c.execute("INSERT INTO support_files(msg_id,data) VALUES($1,$2)", mid, photo)
+            "INSERT INTO support_msgs(user_id,sender,text,has_photo,has_voice) VALUES($1,$2,$3,$4,$5) RETURNING id",
+            uid, sender, text, photo is not None, voice is not None)
+        blob = photo if photo is not None else voice
+        if blob is not None:
+            await c.execute("INSERT INTO support_files(msg_id,data) VALUES($1,$2)", mid, blob)
         await c.execute(
             """INSERT INTO support_threads(user_id,last_sender,last_text,last_at) VALUES($1,$2,$3,now())
                ON CONFLICT(user_id) DO UPDATE SET last_sender=EXCLUDED.last_sender,
                last_text=EXCLUDED.last_text, last_at=now()""",
-            uid, sender, (text or "📷 Photo")[:80])
+            uid, sender, (text or ("🎤 Voice" if voice is not None else "📷 Photo"))[:80])
         return mid
 
 
 async def sup_list(uid, limit=60):
     rows = await pool.fetch(
-        "SELECT id, sender, text, has_photo, created_at FROM support_msgs WHERE user_id=$1 ORDER BY id DESC LIMIT $2",
+        "SELECT id, sender, text, has_photo, has_voice, created_at FROM support_msgs WHERE user_id=$1 ORDER BY id DESC LIMIT $2",
         uid, limit)
     return list(reversed(rows))
 
@@ -711,10 +788,10 @@ async def sup_file(mid):
         "SELECT f.data, m.user_id FROM support_files f JOIN support_msgs m ON m.id=f.msg_id WHERE f.msg_id=$1", mid)
 
 
-async def sup_recent_photos(uid):
+async def sup_recent_photos(uid, hours=1):
     return await pool.fetchval(
-        """SELECT count(*) FROM support_msgs WHERE user_id=$1 AND sender='user' AND has_photo
-           AND created_at > now() - interval '1 hour'""", uid)
+        """SELECT count(*) FROM support_msgs WHERE user_id=$1 AND sender='user' AND (has_photo OR has_voice)
+           AND created_at > now() - make_interval(hours => $2)""", uid, hours)
 
 
 async def sup_threads(limit=40):
@@ -731,10 +808,10 @@ async def sup_notif_recent(uid):
 
 
 async def sup_cleanup():
-    """30 din purani support photos hata do (DB size control)."""
+    """14 din purani support photo/voice hata do (DB size control)."""
     await pool.execute(
         """DELETE FROM support_files WHERE msg_id IN
-           (SELECT id FROM support_msgs WHERE has_photo AND created_at < now() - interval '30 days')""")
+           (SELECT id FROM support_msgs WHERE (has_photo OR has_voice) AND created_at < now() - interval '14 days')""")
 
 
 # ---------- referrals ----------
@@ -763,6 +840,9 @@ async def ref_complete(referred):
             "UPDATE referrals SET status='done', done_at=now() WHERE referred_id=$1 AND status='pending' RETURNING referrer_id",
             referred)
         if not r:
+            return None
+        if await c.fetchval("SELECT banned FROM users WHERE id=$1", r["referrer_id"]) is not False:
+            await c.execute("UPDATE referrals SET status='void' WHERE referred_id=$1", referred)  # banned/gayab referrer
             return None
         await c.execute("UPDATE users SET balance=balance+$1, total_earned=total_earned+$1 WHERE id=$2",
                         config.REFER_REWARD, r["referrer_id"])

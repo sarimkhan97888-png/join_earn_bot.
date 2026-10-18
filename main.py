@@ -29,7 +29,7 @@ async def main():
 
     await app.start()
     await app.updater.start_polling(
-        allowed_updates=["message", "callback_query", "chat_member"], drop_pending_updates=True)
+        allowed_updates=["message", "callback_query", "chat_member"], drop_pending_updates=False)  # deploy ke beech ke join/leave events na khoyen
     try:
         await asyncio.Event().wait()
     finally:

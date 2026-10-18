@@ -19,6 +19,9 @@ async def settle(bot, o, min_gap=0):
     if min_gap and now - _last.get(o["order_id"], 0) < min_gap:
         return "pending"
     _last[o["order_id"]] = now
+    if len(_last) > 5000:
+        for k in [k for k, v in _last.items() if now - v > 600]:
+            _last.pop(k, None)
     try:
         state, amt, _ = await gateway.check_payment(o["gateway_ref"])
     except Exception:

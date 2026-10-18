@@ -5,6 +5,7 @@ pending --claim--> sending --gateway OK--> processing --status API--> paid | fai
                       |-- unsure (timeout/5xx) --> sending (admin check karega, auto retry kabhi nahi)
 """
 import asyncio
+import html
 import logging
 import time
 
@@ -34,9 +35,14 @@ def eligible(u, net_inr, recent_count):
                 and recent_count <= config.AUTO_PAYOUT_DAILY)
 
 
-async def alert(bot, text, kb=None):
+async def alert(bot, text, kb=None, wid=None):
     for a in config.ADMIN_IDS:
         await util.notify(bot, a, text, reply_markup=kb)
+    if wid:
+        try:
+            await db.wd_touch_alert(wid)  # job dobara turant alert na bheje
+        except Exception:
+            log.exception("wd_touch_alert failed %s", wid)
 
 
 def admin_kb(wid):
@@ -59,7 +65,19 @@ async def send(bot, wid):
         log.exception("payout call crashed")
         r = {"ok": False, "definite": False, "error": type(e).__name__}
     if r["ok"]:
-        await db.wd_set_ref(wid, r["ref"])
+        saved = None
+        for i in range(3):  # paisa ja chuka hai: status save karne ke liye retry
+            try:
+                saved = await db.wd_set_ref(wid, r["ref"])
+                break
+            except Exception:
+                log.exception("wd_set_ref failed #%s try %s", wid, i + 1)
+                await asyncio.sleep(1 + i)
+        if not saved:
+            await alert(bot, f"🚨 <b>Payout bhej diya par status save nahi hua</b> #{wid}\nElite payout id: "
+                             f"<code>{html.escape(str(r['ref']))}</code>\nElite dashboard check karo. Paisa gaya ho to "
+                             f"Mark paid (Refund mat karna).", fix_kb(wid), wid=wid)
+            return "stuck"
         if r["receive"] and abs(r["receive"] - float(w["amount_inr"])) > 0.5:
             pause(10 ** 7)  # galat amount (wallet currency alag?) -> auto payout band, admin dekhe
             await alert(bot, f"🚨 <b>Payout amount mismatch</b> #{wid}\nBheja ₹{float(w['amount_inr']):.2f}, "
@@ -77,13 +95,13 @@ async def send(bot, wid):
         hint = ("Elite Pay plan/key me UPI payout allowed nahi hai (Elite support se payout enable karao). "
                 "Auto 6 ghante band; ab Approve dabane par manual paid mark hoga, UPI par khud pay karo. "
                 if blocked else "Elite wallet me balance daalo. " if "insufficient" in err else "")
-        await alert(bot, f"⚠️ Auto payout nahi hua #{wid}: <code>{err}</code>\n"
-                         f"₹{float(w['amount_inr']):.2f} → <code>{w['upi']}</code>\n"
-                         f"{hint}Ab ye manual approval me hai.", admin_kb(wid))
+        await alert(bot, f"⚠️ Auto payout nahi hua #{wid}: <code>{html.escape(err)}</code>\n"
+                         f"₹{float(w['amount_inr']):.2f} → <code>{html.escape(w['upi'])}</code>\n"
+                         f"{hint}Ab ye manual approval me hai.", admin_kb(wid), wid=wid)
         return "pending"
-    await alert(bot, f"🚨 <b>Payout unsure</b> #{wid} ({r['error']})\n₹{float(w['amount_inr']):.2f} → "
-                     f"<code>{w['upi']}</code>\nElite Pay dashboard me reference <code>{attempt}</code> check karo. "
-                     f"Ho gaya ho to Mark paid, nahi hua to Refund. Auto retry nahi hoga.", fix_kb(wid))
+    await alert(bot, f"🚨 <b>Payout unsure</b> #{wid} ({html.escape(str(r['error']))})\n₹{float(w['amount_inr']):.2f} → "
+                     f"<code>{html.escape(w['upi'])}</code>\nElite Pay dashboard me reference <code>{attempt}</code> check karo. "
+                     f"Ho gaya ho to Mark paid, nahi hua to Refund. Auto retry nahi hoga.", fix_kb(wid), wid=wid)
     return "stuck"
 
 
@@ -95,6 +113,9 @@ async def settle(bot, w, min_gap=0):
     if min_gap and now - _last.get(w["id"], 0) < min_gap:
         return "processing"
     _last[w["id"]] = now
+    if len(_last) > 5000:  # chhoti memory leak band: purani entries hatao
+        for k in [k for k, v in _last.items() if now - v > 600]:
+            _last.pop(k, None)
     try:
         state, _ = await gateway.check_payout(w["gateway_ref"])
     except Exception:
@@ -108,9 +129,8 @@ async def settle(bot, w, min_gap=0):
                               f"✅ Withdraw #{w['id']} paid: ₹{float(w['amount_inr']):.2f} → {w['upi']}")
         return "paid"
     if state == "failed":
-        done = await db.wd_move(w["id"], "processing", "failed")
+        done = await db.wd_move_refund(w["id"], "processing", "failed")
         if done:
-            await db.wd_refund(done)
             await util.notify(bot, w["user_id"],
                               f"❌ Withdraw #{w['id']} fail hua. {done['coins']} coins wapas balance me add ho gaye.")
             await alert(bot, f"ℹ️ Payout #{w['id']} fail hua, user ko refund ho gaya.")

@@ -157,6 +157,18 @@ nav svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:1.8;st
 #chatPrev.on{display:flex;align-items:center;gap:10px}
 #chatPrev img{height:54px;border-radius:10px}
 .ch-f .btn.sm{flex:none}
+.cimg{cursor:zoom-in}
+#zoom{position:fixed;inset:0;z-index:70;background:rgba(0,0,0,.94);display:none;overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none}
+#zoom.open{display:block}
+#zoom img{position:absolute;left:50%;top:50%;max-width:100vw;max-height:100vh;transform-origin:0 0;will-change:transform}
+#zoom .zx{position:absolute;top:calc(12px + env(safe-area-inset-top));right:14px;z-index:2;width:42px;height:42px;border-radius:50%;border:0;background:rgba(255,255,255,.16);color:#fff;font-size:20px;cursor:pointer}
+#zoom .zh{position:absolute;bottom:calc(14px + env(safe-area-inset-bottom));left:0;right:0;text-align:center;color:#ffffff99;font-size:12px;pointer-events:none}
+.vmsg{display:block;width:230px;max-width:100%;height:38px;margin-bottom:4px}
+#recBar{display:none;align-items:center}
+#recBar.on{display:flex}
+.rdot{width:12px;height:12px;border-radius:50%;background:#ff3b4e;animation:rblink 1s ease-in-out infinite;flex:none}
+@keyframes rblink{50%{opacity:.25}}
+#recT{font-variant-numeric:tabular-nums;min-width:40px}
 </style>
 </head>
 <body>
@@ -166,9 +178,11 @@ nav svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:1.8;st
 <nav id="nav"></nav>
 <div id="sheet"><div class="bd" data-act="closesheet"></div><div class="pn"><div class="gr"></div><div id="sheetBody"></div></div></div>
 <div id="modal"></div>
+<div id="zoom"><button class="zx" data-act="zclose" aria-label="Close">✕</button><img alt=""><div class="zh">Pinch / double-tap se zoom</div></div>
 <div id="loader"><div class="lcard"><div class="lring"></div><span>Please wait...</span></div></div>
 <div id="chat"><div class="ch-h"><button data-act="chatclose" aria-label="Back">‹</button><div class="sp"><b id="chTitle">Customer service</b><span id="chSub">Apni problem likho, hum reply karenge</span></div></div>
-<div id="chatBody"></div><div id="chatPrev"></div><div class="ch-f" id="chatFoot"><button class="btn sm ghost" data-act="chatpick" aria-label="Photo">📷</button><input id="chatFile" type="file" accept="image/*" hidden><input id="chatIn" placeholder="Apni problem likho..." maxlength="1000" autocomplete="off"><button class="btn sm" data-act="chatsend">Send</button></div></div>
+<div id="chatBody"></div><div id="chatPrev"></div><div class="ch-f" id="chatFoot"><button class="btn sm ghost" data-act="chatpick" aria-label="Photo">📷</button><button class="btn sm ghost" data-act="recstart" aria-label="Voice" id="micBtn">🎤</button><input id="chatFile" type="file" accept="image/*" hidden><input id="chatIn" placeholder="Apni problem likho..." maxlength="1000" autocomplete="off"><button class="btn sm" data-act="chatsend">Send</button></div>
+<div class="ch-f" id="recBar"><span class="rdot"></span><b id="recT">0:00</b><span class="sub sp">Recording... bolo</span><button class="btn sm ghost" data-act="reccancel" aria-label="Cancel">✕</button><button class="btn sm" data-act="recsend">Send 🎤</button></div></div>
 
 <script>
 const tg = window.Telegram && window.Telegram.WebApp;
@@ -332,7 +346,7 @@ const KIND = {
   hold: ['⏳', 'Join reward (hold)'], release: ['💰', 'Reward released'], revoke: ['🚫', 'Reward cut (channel left)'],
   admin_add: ['👑', 'Admin credit'], referral: ['🤝', 'Referral reward'], deposit: ['⬇️', 'Deposit'], premium: ['💎', 'Premium'], withdraw: ['⬆️', 'Withdraw'], withdraw_refund: ['↩️', 'Withdraw refund'],
   bw_reward: ['🤖', 'Bot work reward'], task_escrow: ['📣', 'Channel task created'], task_refund: ['↩️', 'Task refund'],
-  bw_escrow: ['🤖', 'Bot work created'], bw_refund: ['↩️', 'Bot work refund']
+  bw_escrow: ['🤖', 'Bot work created'], debt_pay: ['⚖️', 'Purana leave hisaab kata'], bw_refund: ['↩️', 'Bot work refund']
 };
 function deviceWarn() {
   return S.me.device_ok ? '' : `<div class="card warnbox"><div class="row"><div class="ico">🔐</div><div class="sp"><b>Device verify karo</b><div class="sub">Tasks aur withdraw ke liye zaroori hai</div></div><button class="btn sm" data-act="verify">Verify</button></div></div>`;
@@ -436,7 +450,7 @@ function rProfile() {
   $('#view').innerHTML = `<div class="card" style="text-align:center"><div class="avatar">${av}</div><h3>${esc(name)}</h3><div class="sub">${u.username ? '@' + esc(u.username) : 'ID ' + m.id}</div>
   <div style="margin-top:10px">${m.premium ? '<span class="chip g">💎 Premium</span>' : '<span class="chip">Free user</span>'} ${m.device_ok ? '<span class="chip g">Device verified</span>' : '<span class="chip y">Not verified</span>'}</div></div>
   ${deviceWarn()}
-  <div class="card"><div class="kv"><span>Gmail</span><b>${esc(m.gmail || '—')}</b></div><div class="kv"><span>UPI ID</span><b>${esc(m.upi || '—')}</b></div><div class="kv"><span>Telegram ID</span><b>${m.id}</b></div>${m.premium ? `<div class="kv"><span>Premium till</span><b>${dateOnly(m.premium_until)}</b></div>` : ''}</div>
+  <div class="card"><div class="kv"><span>UPI ID</span><b>${esc(m.upi || '—')}</b></div><div class="kv"><span>Telegram ID</span><b>${m.id}</b></div>${m.premium ? `<div class="kv"><span>Premium till</span><b>${dateOnly(m.premium_until)}</b></div>` : ''}</div>
   <div class="card" style="padding:4px 16px">
    <div class="item" data-act="upi" style="cursor:pointer"><div class="ico">⚙️</div><div class="sp"><b>Settings</b><span class="sub">UPI ID set / change</span></div>›</div>
    <div class="item" data-act="studio" style="cursor:pointer"><div class="ico">💎</div><div class="sp"><b>Premium</b><span class="sub">${m.admin ? 'Admin: unlimited, free tasks' : m.premium ? 'Add task, manage posts' : 'Unlock karne ke liye ₹' + S.cfg.premium_price + '/month'}</span></div>›</div>
@@ -449,7 +463,7 @@ function rProfile() {
 }
 function rulesSheet() {
   const c = S.cfg;
-  openSheet(`<h3>Rules</h3><ul class="steps"><li>Channel join karo, Check dabao: +${c.join_reward} coins, ${c.hold_hours} ghante hold me.</li><li>Hold me channel leave kiya to coins cut aur tasks block. Dobara join karne par unblock.</li><li>Min withdraw ${fmt(c.min_withdraw)} coins (100 coins = ₹1). Withdraw par ${c.withdraw_tax}% tax kat-ta hai.</li><li>Ek device, ek Gmail, ek UPI = ek account. Fake accounts ban honge.</li><li>Bot Work: reward ${c.bw_min_reward}+ coins, owner approve kare to milta hai. Reject galat ho to Report karo.</li><li>Refer: dost ka pehla withdraw paid hone par +${c.refer_reward} coins.</li><li>Channel leave kiya to poora app block, dobara join karne par chalega.</li></ul><button class="btn ghost" data-act="closesheet">Close</button>`);
+  openSheet(`<h3>Rules</h3><ul class="steps"><li>Channel join karo, Check dabao: +${c.join_reward} coins, ${c.hold_hours} ghante hold me.</li><li>Hold me channel leave kiya to coins cut aur tasks block. Dobara join karne par unblock.</li><li>Min withdraw ${fmt(c.min_withdraw)} coins (100 coins = ₹1). Withdraw par ${c.withdraw_tax}% tax kat-ta hai.</li><li>Ek device, ek UPI = ek account. Fake accounts ban honge.</li><li>Bot Work: reward ${c.bw_min_reward}+ coins, owner approve kare to milta hai. Reject galat ho to Report karo.</li><li>Refer: dost ka pehla withdraw paid hone par +${c.refer_reward} coins.</li><li>Channel leave kiya to poora app block, dobara join karne par chalega. Rejoin par sirf 50% coins milte hain (ek baar).</li></ul><button class="btn ghost" data-act="closesheet">Close</button>`);
 }
 async function fingerprint() {
   const c = document.createElement('canvas'), x = c.getContext('2d');
@@ -532,6 +546,80 @@ async function chatImg(el) { // photo auth header ke saath fetch -> blob
     S.img[id] = URL.createObjectURL(await r.blob()); el.src = S.img[id];
   } catch (e) { const d = document.createElement('div'); d.className = 'sub'; d.textContent = '📷 Photo expired'; el.replaceWith(d); }
 }
+async function chatVoice(el) { // voice bhi auth header ke saath blob bana ke
+  const id = el.dataset.vid;
+  if (S.img['v' + id]) { el.src = S.img['v' + id]; return; }
+  try {
+    const r = await fetch('/api/support/photo?id=' + id, { headers: { 'X-Init-Data': (tg && tg.initData) || '', 'X-Device': await devToken(), 'X-Fp': await getFp() } });
+    if (!r.ok) throw 0;
+    S.img['v' + id] = URL.createObjectURL(await r.blob()); el.src = S.img['v' + id];
+  } catch (e) { const d = document.createElement('div'); d.className = 'sub'; d.textContent = '🎤 Voice expired'; el.replaceWith(d); }
+}
+/* ---- photo zoom (pinch, drag, double-tap) ---- */
+const Z = { s: 1, x: 0, y: 0, pts: {}, d0: 0, s0: 1, last: 0, mx: 0, my: 0 };
+function zApply() { const i = $('#zoom img'); i.style.transform = `translate(calc(-50% + ${Z.x}px), calc(-50% + ${Z.y}px)) scale(${Z.s})`; }
+function zOpen(src) { const z = $('#zoom'); Z.s = 1; Z.x = 0; Z.y = 0; Z.pts = {}; z.querySelector('img').src = src; zApply(); z.classList.add('open'); }
+function zClose() { $('#zoom').classList.remove('open'); $('#zoom img').removeAttribute('src'); }
+function zClamp() { if (Z.s <= 1) { Z.s = 1; Z.x = 0; Z.y = 0; } else { const i = $('#zoom img'), mx = Math.max(0, (i.clientWidth * Z.s - innerWidth) / 2), my = Math.max(0, (i.clientHeight * Z.s - innerHeight) / 2); Z.x = Math.max(-mx, Math.min(mx, Z.x)); Z.y = Math.max(-my, Math.min(my, Z.y)); } }
+(() => {
+  const z = $('#zoom'), dist = () => { const p = Object.values(Z.pts); return Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y); };
+  z.addEventListener('pointerdown', e => {
+    if (e.target.closest('.zx')) return;
+    z.setPointerCapture(e.pointerId); Z.pts[e.pointerId] = { x: e.clientX, y: e.clientY };
+    if (Object.keys(Z.pts).length === 2) { Z.d0 = dist(); Z.s0 = Z.s; }
+    else { const t = Date.now(); if (t - Z.last < 300) { Z.s = Z.s > 1 ? 1 : 2.6; zClamp(); zApply(); Z.last = 0; } else Z.last = t; }
+  });
+  z.addEventListener('pointermove', e => {
+    const p = Z.pts[e.pointerId]; if (!p) return;
+    const n = Object.keys(Z.pts).length;
+    if (n === 2) { p.x = e.clientX; p.y = e.clientY; Z.s = Math.max(1, Math.min(6, Z.s0 * dist() / Z.d0)); }
+    else if (Z.s > 1) { Z.x += e.clientX - p.x; Z.y += e.clientY - p.y; p.x = e.clientX; p.y = e.clientY; }
+    zClamp(); zApply();
+  });
+  const up = e => { delete Z.pts[e.pointerId]; };
+  z.addEventListener('pointerup', up); z.addEventListener('pointercancel', up);
+  z.addEventListener('wheel', e => { e.preventDefault(); Z.s = Math.max(1, Math.min(6, Z.s * (e.deltaY < 0 ? 1.15 : 0.87))); zClamp(); zApply(); }, { passive: false });
+})();
+/* ---- voice record ---- */
+const Rec = { mr: null, chunks: [], t0: 0, tm: null, stream: null };
+function recUi(on) { $('#recBar').classList.toggle('on', on); $('#chatFoot').style.display = on ? 'none' : ''; }
+function recCleanup() { clearInterval(Rec.tm); try { Rec.stream && Rec.stream.getTracks().forEach(t => t.stop()); } catch (e) {} Rec.mr = null; Rec.stream = null; recUi(false); }
+async function recStart() {
+  if (Rec.mr) return;
+  if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder)) return popup('error', 'Voice', 'Is phone/app me voice record support nahi hai.');
+  try { Rec.stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+  catch (e) { return popup('error', 'Mic permission', 'Microphone ki permission nahi mili. Phone settings me Telegram ko mic allow karo, phir dobara try karo.'); }
+  const mt = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus'].find(t => MediaRecorder.isTypeSupported(t));
+  try { Rec.mr = new MediaRecorder(Rec.stream, Object.assign({ audioBitsPerSecond: 24000 }, mt ? { mimeType: mt } : {})); }
+  catch (e) { recCleanup(); return popup('error', 'Voice', 'Voice record shuru nahi hui.'); }
+  Rec.chunks = []; Rec.mr.ondataavailable = e => { if (e.data && e.data.size) Rec.chunks.push(e.data); };
+  Rec.mr.start(1000); Rec.t0 = Date.now(); recUi(true); $('#recT').textContent = '0:00';
+  Rec.tm = setInterval(() => {
+    const s = Math.floor((Date.now() - Rec.t0) / 1000); $('#recT').textContent = Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+    if (s >= 60) recSend();
+  }, 250);
+}
+function recStop() {
+  return new Promise(res => {
+    const mr = Rec.mr; if (!mr) return res(null);
+    const dur = Date.now() - Rec.t0;
+    mr.onstop = () => { const b = Rec.chunks.length ? new Blob(Rec.chunks, { type: mr.mimeType || 'audio/webm' }) : null; recCleanup(); res(b && dur >= 1000 ? b : null); };
+    try { mr.stop(); } catch (e) { recCleanup(); res(null); }
+  });
+}
+function recCancel() { const mr = Rec.mr; if (mr) { mr.onstop = null; try { mr.stop(); } catch (e) {} } recCleanup(); }
+async function recSend() {
+  if (S.sending || !Rec.mr) return;
+  const blob = await recStop();
+  if (!blob) return popup('error', 'Voice', 'Voice bahut choti thi. Thoda lamba bolo.');
+  S.sending = true;
+  const fd = new FormData(); fd.append('text', ''); if (S.chat.mode === 'admin') fd.append('uid', S.chat.uid);
+  fd.append('voice', blob, 'v.' + (/mp4/.test(blob.type) ? 'm4a' : /ogg/.test(blob.type) ? 'ogg' : 'webm'));
+  const j = await api(chatPaths().send, undefined, fd);
+  S.sending = false;
+  if (!j.ok) { await popup('error', 'Oops', j.msg || 'Voice send nahi hui'); return; }
+  Snd.ok(); chatLoad(true);
+}
 async function chatLoad(force) {
   if (document.hidden && !force) return;
   if (S.chat.mode === 'inbox') return inboxLoad(force);
@@ -541,9 +629,10 @@ async function chatLoad(force) {
   const sig = j.msgs.length + ':' + (j.msgs.length ? j.msgs[j.msgs.length - 1].id : 0);
   if (!force && sig === S.chatSig) return; S.chatSig = sig;
   const me = admin ? 'admin' : 'user', b = $('#chatBody');
-  b.innerHTML = j.msgs.length ? j.msgs.map(m => `<div class="b ${m.from === me ? 'me' : 'them'}">${m.photo ? `<img class="cimg" data-mid="${m.id}" alt="photo">` : ''}${m.text ? esc(m.text) : ''}<small>${m.from === me ? '' : (admin ? 'User · ' : 'Support · ')}${when(m.at)}</small></div>`).join('')
+  b.innerHTML = j.msgs.length ? j.msgs.map(m => `<div class="b ${m.from === me ? 'me' : 'them'}">${m.photo ? `<img class="cimg" data-mid="${m.id}" data-act="zoom" alt="photo">` : ''}${m.voice ? `<audio class="vmsg" controls preload="metadata" data-vid="${m.id}"></audio>` : ''}${m.text ? esc(m.text) : ''}<small>${m.from === me ? '' : (admin ? 'User · ' : 'Support · ')}${when(m.at)}</small></div>`).join('')
     : `<div class="empty"><i>🎧</i>${admin ? 'Abhi koi message nahi.' : 'Apni problem neeche likho (photo bhi bhej sakte ho).<br>Support team jaldi reply karegi.'}</div>`;
   b.querySelectorAll('img[data-mid]').forEach(chatImg);
+  b.querySelectorAll('audio[data-vid]').forEach(chatVoice);
   b.scrollTop = b.scrollHeight;
 }
 async function inboxLoad(force) {
@@ -554,7 +643,7 @@ async function inboxLoad(force) {
     : '<div class="empty"><i>📭</i>Koi support chat nahi.</div>';
 }
 function showChat(mode, uid, fromInbox) {
-  S.chat = { mode, uid: uid || 0, fromInbox: !!fromInbox }; S.chatSig = ''; chatPrevClear();
+  recCancel(); S.chat = { mode, uid: uid || 0, fromInbox: !!fromInbox }; S.chatSig = ''; chatPrevClear();
   $('#chat').classList.add('open'); document.body.style.overflow = 'hidden';
   $('#chatFoot').style.display = mode === 'inbox' ? 'none' : '';
   $('#chTitle').textContent = mode === 'inbox' ? 'Support inbox' : mode === 'admin' ? 'Chat' : 'Customer service';
@@ -562,7 +651,7 @@ function showChat(mode, uid, fromInbox) {
   $('#chatBody').innerHTML = '<div class="empty"><span class="spin"></span></div>';
   clearInterval(S.chatPoll); chatLoad(true); S.chatPoll = setInterval(() => chatLoad(false), 5000);
 }
-function closeChat() { clearInterval(S.chatPoll); $('#chat').classList.remove('open'); document.body.style.overflow = ''; }
+function closeChat() { recCancel(); clearInterval(S.chatPoll); $('#chat').classList.remove('open'); document.body.style.overflow = ''; }
 function chatBack() { if (S.chat.mode === 'admin' && S.chat.fromInbox) showChat('inbox'); else closeChat(); }
 function chatPrevClear() {
   S.chatPhoto = null; const pv = $('#chatPrev'); if (pv) { pv.innerHTML = ''; pv.classList.remove('on'); }
@@ -657,11 +746,10 @@ const H = {
     if (j.ok) { closeSheet(); await popup('ok', 'Saved', j.msg); refresh(); }
   },
   verify() {
-    openSheet(`<h3>🔐 Device verification</h3><p>Apna Gmail daalo. Ek device = ek account, ek Gmail = ek account.</p>
-    <label>Gmail</label><input id="vg" type="email" placeholder="yourname@gmail.com" autocomplete="email" autocapitalize="off"><button class="btn" data-act="vgo">Verify</button>`);
+    openSheet(`<h3>🔐 Device verification</h3><p>Telegram ID + ye device save honge. Ek device = ek account.</p><button class="btn" data-act="vgo">Verify</button>`);
   },
   async vgo() {
-    const j = await act('/api/verify', { gmail: $('#vg').value, fp: await getFp(), dev: await devToken() });
+    const j = await act('/api/verify', { fp: await getFp(), dev: await devToken() });
     if (j.ok) { closeSheet(); await popup('ok', 'Verified', j.msg); refresh(); }
   },
   gift() {
@@ -687,7 +775,12 @@ const H = {
   chatclose: chatBack,
   chatsend: chatSend,
   chatpick: () => $('#chatFile').click(),
-  chatunpick: chatPrevClear
+  chatunpick: chatPrevClear,
+  zoom(d) { const u = S.img[d.mid]; if (u) zOpen(u); },
+  zclose: zClose,
+  recstart: recStart,
+  recsend: recSend,
+  reccancel: recCancel
 };
 function onInp(k) {
   const c = S.cfg;
@@ -723,8 +816,7 @@ function rGate() {
   }
   $('#view').innerHTML = `<div class="gate"><div class="gi">🔐</div><h2>Device verification</h2>
   <p>Fair rehne ke liye ek device par sirf ek account chalta hai. Tumhari Telegram ID (<b>${S.me.id}</b>) aur ye device aapas me bind honge. Aage har baar app kholne par check hoga.</p>
-  <ul class="steps"><li>Apna <b>Gmail</b> daalo</li><li><b>Verify</b> dabao: Telegram ID + device save ho jayenge</li><li>Doosre device ya doosre account se kholne par <b>block</b> ho jayega</li></ul>
-  <div style="text-align:left"><label>Gmail</label><input id="vg" type="email" placeholder="yourname@gmail.com" autocomplete="email" autocapitalize="off"></div>
+  <ul class="steps"><li><b>Verify</b> dabao: Telegram ID + device save ho jayenge</li><li>Doosre device ya doosre account se kholne par <b>block</b> ho jayega</li></ul>
   <button class="btn" data-act="vgo">✅ Verify device</button>
   <p style="margin-top:14px"><span class="link" data-act="support">🎧 Problem aa rahi hai? Customer service</span></p></div>`;
 }
@@ -733,7 +825,7 @@ function rGate() {
 function rBlocked() {
   $('#nav').style.display = 'none';
   $('#view').innerHTML = `<div class="gate"><div class="gi" style="background:linear-gradient(135deg,#ff5c6c,#ff9a5c);box-shadow:0 12px 34px rgba(255,92,108,.35)">🚫</div><h2>App block hai</h2>
-  <p>Tumne neeche ke channel leave kar diye hain. Dobara join karo, phir <b>Re-check</b> dabao.</p>
+  <p>Tumne neeche ke channel leave kar diye hain. Dobara join karo, phir <b>Re-check</b> dabao. Rejoin par sirf <b>50%</b> coins milenge (24 ghante hold me).</p>
   <div class="card" style="padding:4px 16px;text-align:left">${S.blocked.map(b => `<div class="item"><div class="ico">📣</div><div class="sp"><b>${esc(b.title)}</b></div>${b.link ? `<button class="btn sm ghost" data-act="open" data-url="${esc(b.link)}">Join</button>` : ''}</div>`).join('')}</div>
   <button class="btn" data-act="rejoin">✅ Re-check</button>
   <p style="margin-top:14px"><span class="link" data-act="support">🎧 Customer service</span></p></div>`;
@@ -747,6 +839,22 @@ const t0 = Date.now();
 function deepLink() { // admin ko notification ke button se seedha us user ki chat
   try { const sp = +new URLSearchParams(location.search).get('support'); if (sp && S.me && S.me.admin) { history.replaceState(null, '', location.pathname); showChat('admin', sp, false); } } catch (e) {}
 }
+/* ---------- /verify page: bot ke "Verify Device" button se khulta hai ---------- */
+async function verifyPage() {
+  $('#nav').style.display = 'none';
+  const show = (ok, t, m) => {
+    $('#view').innerHTML = `<div class="gate"><div class="gi"${ok ? '' : ' style="background:linear-gradient(135deg,#ff5c6c,#ff9a5c)"'}>${ok ? '✅' : '🚫'}</div><h2>${t}</h2><p>${m}</p><button class="btn" data-act="vclose">Bot par wapas jao</button></div>`;
+  };
+  $('#view').innerHTML = '<div class="gate"><div class="gi">🔐</div><h2>Device check ho raha hai...</h2><div class="empty"><span class="spin"></span></div></div>';
+  let j;
+  try { j = await api('/api/verify', { fp: await getFp(), dev: await devToken() }); } catch (e) { j = { ok: false, msg: 'Network error. Dobara try karo.' }; }
+  if (j.ok) { Snd.ok(); show(true, 'Verification pass!', 'Telegram ID + device save ho gaye. Bot par wapas jao, wahan <b>Open App</b> dabao.'); setTimeout(() => { try { tg.close(); } catch (e) {} }, 2200); }
+  else { Snd.bad(); show(false, 'Verification fail', esc(j.msg || 'Device verify nahi hua.')); }
+}
+H.vclose = () => { try { tg.close(); } catch (e) {} };
+if (location.pathname === '/verify') {
+  verifyPage().finally(() => setTimeout(hideSplash, Math.max(0, 900 - (Date.now() - t0))));
+} else
 go('home').catch(() => {}).finally(() => { setTimeout(hideSplash, Math.max(0, 900 - (Date.now() - t0))); deepLink(); });
 setTimeout(hideSplash, 8000); // network atak bhi jaye to splash na rukey
 </script>

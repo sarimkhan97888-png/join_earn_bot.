@@ -30,7 +30,6 @@ routes = web.RouteTableDef()
 
 URL_RE = re.compile(r"^https?://\S{4,300}$")
 UPI_RE = re.compile(r"^[a-zA-Z0-9.\-_]{2,}@[a-zA-Z]{2,}$")
-GMAIL_RE = re.compile(r"^[a-z0-9][a-z0-9.]{4,40}@gmail\.com$")
 HEX64 = re.compile(r"^[a-f0-9]{64}$")
 _bg = set()  # background tasks ke references (garbage collect na ho)
 
@@ -47,7 +46,8 @@ def check_init_data(init_data: str):
     if not hmac.compare_digest(hmac.new(secret, s.encode(), hashlib.sha256).hexdigest(), h):
         return None
     try:
-        if time.time() - int(data.get("auth_date", "0")) > 86400:
+        age = time.time() - int(data.get("auth_date", "0"))
+        if age > 6 * 3600 or age < -300:  # 6h se purana (replay) ya future date reject
             return None
         return json.loads(data["user"])
     except Exception:
@@ -69,7 +69,7 @@ def iso(dt):
 def to_int(v, default=0):
     try:
         return int(v)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
 
 
@@ -85,7 +85,7 @@ def pub(u):
     return {"id": u["id"], "balance": u["balance"], "hold": u["hold"], "total_earned": u["total_earned"],
             "ad_balance": u["ad_balance"], "premium": util.is_prem(u), "premium_until": iso(u["premium_until"]),
             "gmail": u["gmail"], "upi": u["upi"], "device_ok": u["device_ok"],
-            "device_state": u.get("device_state", "ok"), "admin": u["id"] in config.ADMIN_IDS}
+            "device_state": u.get("device_state", "ok"), "admin": u["id"] in config.ADMIN_IDS, "debt": u.get("debt", 0)}
 
 
 def cfg(request):
@@ -267,12 +267,14 @@ async def api_check(request):
 async def api_rejoin(request):
     uid = request["u"]["id"]
     bot = request.app["bot"]
+    got = 0
     for r in await db.left_chats(uid):
         if await util.member_status(bot, r["chat_id"], uid):
-            await db.unblock(r["chat_id"], uid)
+            got += await db.unblock(r["chat_id"], uid) or 0
     if await db.left_chats(uid):
         return err("❌ Abhi bhi kuch channels join nahi kiye.")
-    return ok(msg="Unblocked! Ab tasks kar sakte ho.")
+    extra = f" {got} coins ({config.REJOIN_PERCENT}%) {config.HOLD_HOURS}h hold me mile." if got else ""
+    return ok(msg="Unblocked! Ab tasks kar sakte ho." + extra)
 
 
 # ---------------- wallet ----------------
@@ -345,6 +347,9 @@ async def api_withdraw(request):
         return err("🚫 Tum blocked ho. Pehle left channel rejoin karo.")
     if not u["upi"]:
         return err("Pehle Profile me apna UPI ID set karo.")
+    if u.get("debt", 0) > 0:
+        return err(f"⚠️ Tumne pehle channel leave kiya tha, {u['debt']} coins ka hisaab baaki hai. "
+                   f"Agle channel rewards se ye kat-ta rahega; poora kat-ne ke baad withdraw khulega.")
     if coins < config.MIN_WITHDRAW_COINS or coins % config.COIN_PER_INR or coins > u["balance"]:
         return err(f"Min {config.MIN_WITHDRAW_COINS} coins, 100 ke multiple me, aur max {u['balance']}.")
     r = await db.request_withdraw(uid, coins)
@@ -371,10 +376,9 @@ async def _after_withdraw(bot, u, wid, coins, fee, net, upi, auto):
             why += "\n⚠️ <b>Suspect:</b> iska device fingerprint kisi aur account se match karta hai. Pehle check karo."
         if config.AUTO_PAYOUT and not u["suspect"]:
             why += "\nℹ️ Auto limit se bahar / abhi auto pause hai, isliye manual approval."
-        for a in config.ADMIN_IDS:
-            await util.notify(bot, a,
-                              f"💸 Withdraw #{wid}\nUser: <code>{u['id']}</code>\n{coins} coins − {fee} tax = "
-                              f"<b>₹{net:.2f}</b> payable\nUPI: <code>{upi}</code>{why}", reply_markup=payouts.admin_kb(wid))
+        await payouts.alert(bot, f"💸 Withdraw #{wid}\nUser: <code>{u['id']}</code>\n{coins} coins − {fee} tax = "
+                                 f"<b>₹{net:.2f}</b> payable\nUPI: <code>{html.escape(upi)}</code>{why}",
+                            payouts.admin_kb(wid), wid=wid)
     except Exception:
         log.exception("after_withdraw failed for #%s", wid)
 
@@ -385,39 +389,58 @@ def is_admin(request):
 
 
 def sniff_mime(b):
+    if b[:4] == b"\x1a\x45\xdf\xa3":
+        return "audio/webm"
+    if b[:4] == b"OggS":
+        return "audio/ogg"
+    if b[4:8] == b"ftyp":
+        return "audio/mp4"
     return "image/png" if b[:4] == b"\x89PNG" else "image/webp" if b[:4] == b"RIFF" else "image/jpeg"
 
 
+def _voice_ok(b):
+    """Voice note: webm (Chrome/Android), ogg, mp4/m4a (iOS) ka asli header check."""
+    return b[:4] == b"\x1a\x45\xdf\xa3" or b[:4] == b"OggS" or b[4:8] == b"ftyp"
+
+
 async def read_text_photo(request):
-    """JSON {text,...} ya multipart (text, photo, uid). Return (fields dict, photo bytes|None) ya (None, error)."""
-    fields, photo = {}, None
+    """JSON {text,...} ya multipart (text, photo, voice, uid). Return (fields, photo|None, voice|None) ya (None, error, None)."""
+    fields, photo, voice = {}, None, None
     if (request.content_type or "").startswith("multipart/"):
         try:
             reader = await request.multipart()
             async for part in reader:
-                if part.name == "photo":
+                if part.name in ("photo", "voice"):
+                    lim = 1_500_000 if part.name == "photo" else 900_000
                     buf = bytearray()
                     while True:
                         chunk = await part.read_chunk(65536)
                         if not chunk:
                             break
                         buf += chunk
-                        if len(buf) > 1_500_000:
-                            return None, "Photo 1.5MB se chhoti bhejo."
-                    photo = bytes(buf)
+                        if len(buf) > lim:
+                            return None, ("Photo 1.5MB se chhoti bhejo." if part.name == "photo" else "Voice bahut lambi hai (max 60 sec)."), None
+                    if part.name == "photo":
+                        photo = bytes(buf)
+                    else:
+                        voice = bytes(buf)
                 else:
-                    fields[part.name] = (await part.text())[:1100]
+                    fields[part.name] = ((await part.read_chunk(4096)) or b"").decode("utf-8", "ignore")[:1100]  # sirf pehla 4KB, bada part memory na khaye
         except Exception:
-            return None, "Upload fail hua. Dobara try karo."
+            return None, "Upload fail hua. Dobara try karo.", None
     else:
         fields = await body(request)
     if photo is not None and (not photo or not _img_ok(photo)):
-        return None, "Sirf photo (JPG/PNG/WEBP) bhej sakte ho."
-    return fields, photo
+        return None, "Sirf photo (JPG/PNG/WEBP) bhej sakte ho.", None
+    if voice is not None and (len(voice) < 200 or not _voice_ok(voice)):
+        return None, "Voice sahi record nahi hui. Dobara try karo.", None
+    if photo is not None and voice is not None:
+        return None, "Ek message me photo ya voice, dono nahi.", None
+    return fields, photo, voice
 
 
 def msg_json(rows):
-    return [{"id": r["id"], "from": r["sender"], "text": r["text"], "photo": r["has_photo"], "at": iso(r["created_at"])}
+    return [{"id": r["id"], "from": r["sender"], "text": r["text"], "photo": r["has_photo"], "voice": r["has_voice"], "at": iso(r["created_at"])}
             for r in rows]
 
 
@@ -440,17 +463,20 @@ async def api_support_send(request):
     uid = request["u"]["id"]
     if not cooldown(uid, "sup", 1.5):
         return too_fast()
-    fields, photo = await read_text_photo(request)
+    fields, photo, voice = await read_text_photo(request)
     if fields is None:
         return err(photo)
     text = str(fields.get("text", "")).strip()[:1000]
-    if not text and photo is None:
+    if not text and photo is None and voice is None:
         return err("Message khali hai.")
     if await db.sup_recent_count(uid) >= 20:
         return err("Bahut zyada messages ho gaye. Thodi der baad likho.")
-    if photo is not None and await db.sup_recent_photos(uid) >= 5:
-        return err("Ek ghante me 5 photo hi bhej sakte ho.")
-    await db.sup_add(uid, "user", text, photo)
+    if photo is not None or voice is not None:
+        if await db.sup_recent_photos(uid) >= 5:
+            return err("Ek ghante me 5 photo/voice hi bhej sakte ho.")
+        if await db.sup_recent_photos(uid, 24) >= 15:
+            return err("Aaj ke liye photo/voice ki limit ho gayi. Kal bhejo ya text likho.")
+    await db.sup_add(uid, "user", text, photo, voice)
     # Admin ko sirf ek link-wala notification (message text DM me nahi). Reply Mini App ke andar hota hai.
     if not await db.sup_notif_recent(uid):
         tg = request["tg"]
@@ -492,18 +518,18 @@ async def api_admin_chat(request):
 async def api_admin_reply(request):
     if not is_admin(request):
         return err("Not allowed")
-    fields, photo = await read_text_photo(request)
+    fields, photo, voice = await read_text_photo(request)
     if fields is None:
         return err(photo)
     uid = to_int(fields.get("uid"))
     text = str(fields.get("text", "")).strip()[:1000]
-    if not text and photo is None:
+    if not text and photo is None and voice is None:
         return err("Message khali hai.")
     if not await db.get_user(uid):
         return err("User nahi mila.")
-    await db.sup_add(uid, "admin", text, photo)
+    await db.sup_add(uid, "admin", text, photo, voice)
     bot = request.app["bot"]
-    body_txt = html.escape(text) if text else "📷 Photo bheji gayi hai."
+    body_txt = html.escape(text) if text else ("🎤 Voice message bheja gaya hai." if voice is not None else "📷 Photo bheji gayi hai.")
     await util.notify(bot, uid, f"🎧 <b>Support reply</b>\n\n{body_txt}\n\nPoori chat: App → Profile → Customer service")
     for r in await db.sup_notif_pop(uid):  # reply ho gaya: admin ke saare notification delete
         try:
@@ -561,7 +587,6 @@ async def api_upi(request):
 async def api_verify(request):
     u = request["u"]
     d = await body(request)
-    gmail = str(d.get("gmail", "")).strip().lower()
     fp = str(d.get("fp", ""))
     dev = str(d.get("dev", ""))
     if u["device_ok"]:
@@ -570,13 +595,16 @@ async def api_verify(request):
         return too_fast()
     if not HEX64.match(dev) or not HEX64.match(fp):
         return err("Device check fail hua. App band karke dobara kholo.")
-    if u["device_db"] or u["device_state"] == "other":  # device ya account mismatch: self-service verify nahi, block
-        return err("🚫 Device mismatch. Account block hai, Customer service se contact karo.")
-    if not GMAIL_RE.match(gmail):
-        return err("Sahi Gmail daalo (@gmail.com).")
-    if await db.set_device(u["id"], gmail, sha(dev), fp) != "ok":
-        return err("Ye device ya Gmail kisi aur account se linked hai.")
-    return ok(msg="Device verified! Ab tasks aur withdraw use kar sakte ho.")
+    bot = request.app["bot"]
+    if u["device_db"] or u["device_state"] == "other" or await db.set_device(u["id"], sha(dev), fp) != "ok":
+        # device/ID mismatch ya device kisi aur account ka: block (self-service verify nahi)
+        await db.flag_suspect(u["id"])
+        await util.notify(bot, u["id"], "🚫 <b>Device verification fail</b>\nYe device kisi aur account se linked hai "
+                          "ya tumhara account pehle kisi aur device se verify tha. Account block hai, Customer service se contact karo.")
+        return err("🚫 Device verification fail. Account block hai, Customer service se contact karo.")
+    await util.notify(bot, u["id"], "✅ <b>Device verify ho gaya!</b>\nTelegram ID + device save ho gaye. Ab app kholo 👇",
+                      reply_markup=M([[B("🚀 Open App", web_app=WebAppInfo(url=f"{config.BASE_URL}/app"))]]))
+    return ok(msg="Device verified! Bot par wapas jao aur Open App dabao.")
 
 
 # ---------------- premium: channel task posting ----------------
@@ -748,7 +776,7 @@ async def api_bw_submit(request):
                         return err("Screenshot 5MB se chhota bhejo.")
                 photo = bytes(buf)
             else:
-                fields[part.name] = (await part.text())[:400]
+                fields[part.name] = ((await part.read_chunk(4096)) or b"").decode("utf-8", "ignore")[:400]
     except Exception:
         return err("Upload fail hua. Dobara try karo.")
     if not photo or not _img_ok(photo):

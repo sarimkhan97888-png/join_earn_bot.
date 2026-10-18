@@ -64,8 +64,8 @@ async def start(update: Update, ctx):
     if not u["device_ok"]:
         await update.message.reply_text(
             f"👋 <b>{app} me welcome!</b>\n\n🔐 Shuru karne se pehle <b>Device Verification</b> zaroori hai "
-            f"(ek device = ek account).\nNeeche button dabao, Gmail daalo aur verify karo.",
-            parse_mode="HTML", reply_markup=M([[B("🔐 Verify Device", web_app=WebAppInfo(url=f"{config.BASE_URL}/app"))]]))
+            f"(ek device = ek account).\nNeeche button dabao, verification page khulega. Pass hone par yahin bot par wapas aa jaoge, phir app khulega.",
+            parse_mode="HTML", reply_markup=M([[B("🔐 Verify Device", web_app=WebAppInfo(url=f"{config.BASE_URL}/verify"))]]))
         return
     await update.message.reply_text(
         f"👋 <b>{app}</b>\nChannels join karo, coins kamao aur UPI me withdraw karo 💰\n\n"
@@ -78,7 +78,7 @@ async def resetdev_cmd(update: Update, ctx):
         return
     a = ctx.args
     if not a or not a[0].lstrip("-").isdigit():
-        return await update.message.reply_text("Usage: /resetdev <user_id>\nUser ka device/Gmail unlink ho jayega, wo dobara verify karega.")
+        return await update.message.reply_text("Usage: /resetdev <user_id>\nUser ka device unlink ho jayega, wo dobara verify karega.")
     if await db.reset_device(int(a[0])):
         await update.message.reply_text(f"✅ User {a[0]} ka device reset ho gaya.")
         await util.notify(ctx.bot, int(a[0]), "🔐 Tumhara device reset ho gaya. App kholo aur dobara verify karo.")
@@ -187,10 +187,9 @@ async def on_admin_wd(update: Update, ctx):
 
     tax = config.WITHDRAW_TAX_PERCENT
     if act == "adm_no":
-        w = await db.wd_move(wid, "pending", "rejected")
+        w = await db.wd_move_refund(wid, "pending", "rejected")
         if not w:
             return await ans("Already processed")
-        await db.wd_refund(w)
         await ans("Rejected & refunded")
         await util.notify(ctx.bot, w["user_id"], f"❌ Withdraw #{wid} reject hua, coins wapas mil gaye.")
     elif act == "adm_ok":
@@ -218,10 +217,9 @@ async def on_admin_wd(update: Update, ctx):
         await ans("✅ Paid mark ho gaya")
         await util.notify(ctx.bot, w["user_id"], f"✅ Withdraw #{wid} paid: ₹{float(w['amount_inr']):.2f} → {w['upi']}")
     elif act == "adm_refund":
-        w = await db.wd_move(wid, "sending", "failed")
+        w = await db.wd_move_refund(wid, "sending", "failed")
         if not w:
             return await ans("Already processed")
-        await db.wd_refund(w)
         await ans("↩️ User ko refund ho gaya")
         await util.notify(ctx.bot, w["user_id"], f"❌ Withdraw #{wid} fail hua, coins wapas mil gaye.")
     try:
@@ -231,6 +229,13 @@ async def on_admin_wd(update: Update, ctx):
 
 
 # ---------------- chat member events ----------------
+def rejoin_msg(got):
+    if got:
+        return (f"✅ Rejoin ho gaya. <b>{got}</b> coins ({config.REJOIN_PERCENT}%) {config.HOLD_HOURS}h hold me mile. "
+                f"Agar koi aur channel leave kiya hai to unhe bhi rejoin karo.")
+    return "✅ Rejoin ho gaya. (Is channel ka reward ek baar hi milta hai.) Agar koi aur channel leave kiya hai to unhe bhi rejoin karo."
+
+
 async def on_chat_member(update: Update, ctx):
     cm = update.chat_member
     uid = cm.new_chat_member.user.id
@@ -238,18 +243,22 @@ async def on_chat_member(update: Update, ctx):
     was, now = util.in_chat(cm.old_chat_member), util.in_chat(cm.new_chat_member)
     if now and not was:
         await db.record_join(cid, uid)
-        if await db.unblock(cid, uid):
-            await util.notify(ctx.bot, uid, "✅ Rejoin ho gaya. Agar koi aur channel leave kiya hai to unhe bhi rejoin karo.")
+        got = await db.unblock(cid, uid)
+        if got is not None:
+            await util.notify(ctx.bot, uid, rejoin_msg(got))
     elif was and not now:
         for r in await db.revoke_by_chat(cid, uid):
             await util.notify(ctx.bot, uid, f"🚫 Tumne channel leave kiya. {r['reward']} coins cut ho gaye aur tasks "
-                                            f"block hain jab tak dobara join na karo.")
+                                            f"block hain jab tak dobara join na karo. Dobara join karne par sirf "
+                                            f"{config.REJOIN_PERCENT}% coins milenge ({config.HOLD_HOURS}h hold me).")
 
 
 # ---------------- background jobs ----------------
 async def _release_one(ctx, r):
     st = await util.member_status(ctx.bot, r["chat_id"], r["user_id"])
     if st is None:
+        # verify nahi hua (bot hata / API error): is row ko peeche karo taaki baaki holds na ruken
+        await db.pool.execute("UPDATE completions SET last_checked=now() WHERE id=$1", r["id"])
         return
     if st:
         if await db.release(r["id"]):
@@ -270,7 +279,7 @@ async def _in_batches(rows, fn, size=10, pause=0.4):
 
 async def job_release(ctx):
     rows = await db.pool.fetch(
-        "SELECT * FROM completions WHERE status='hold' AND release_at<=now() ORDER BY release_at LIMIT 600")
+        "SELECT * FROM completions WHERE status='hold' AND release_at<=now() ORDER BY last_checked, release_at LIMIT 600")
     await _in_batches(rows, lambda r: _release_one(ctx, r))
 
 
@@ -309,6 +318,21 @@ async def job_cleanup(ctx):
     await db.sup_cleanup()
 
 
+async def job_wd_stuck(ctx):
+    """Restart/crash se jin withdrawals ka admin alert gaya hi nahi ya jo atak gaye: admin ko (dobara) alert."""
+    for w in await db.wd_stuck():
+        if w["status"] == "pending":
+            txt = (f"⏰ <b>Withdraw #{w['id']} abhi pending hai</b>\nUser: <code>{w['user_id']}</code>\n"
+                   f"₹{float(w['amount_inr']):.2f} → <code>{html.escape(w['upi'])}</code>")
+            kb = payouts.admin_kb(w["id"])
+        else:
+            txt = (f"🚨 <b>Withdraw #{w['id']} 'sending' me atka hai</b>\n₹{float(w['amount_inr']):.2f} → "
+                   f"<code>{html.escape(w['upi'])}</code>\nElite Pay dashboard check karo: paisa gaya ho to Mark paid, "
+                   f"nahi gaya to Refund.")
+            kb = payouts.fix_kb(w["id"])
+        await payouts.alert(ctx.bot, txt, kb, wid=w["id"])
+
+
 async def on_error(update, ctx):
     log.error("Unhandled error", exc_info=ctx.error)
 
@@ -332,3 +356,4 @@ def register(app):
     app.job_queue.run_repeating(payouts.job, interval=90, first=100)
     app.job_queue.run_repeating(job_refs, interval=60, first=70)
     app.job_queue.run_repeating(job_cleanup, interval=86400, first=600)
+    app.job_queue.run_repeating(job_wd_stuck, interval=120, first=45)

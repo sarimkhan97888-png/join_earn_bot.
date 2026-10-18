@@ -28,6 +28,7 @@ MIN_DEPOSIT_COINS = 2000    # = Rs 20
 MIN_WITHDRAW_COINS = 1500   # = Rs 15 (tax ke baad Rs 13.50; Elite payout min Rs 10)
 WITHDRAW_TAX_PERCENT = 10   # withdraw par tax (coins me kat-ta hai)
 HOLD_HOURS = 24
+REJOIN_PERCENT = 50         # channel leave ke baad rejoin par (sirf ek baar) itna % reward wapas, 24h hold me
 MAX_DEVICE_CHANGES = 3     # device badalne par re-verify kitni baar allowed
 PREMIUM_PRICE = 49          # Rs
 PREMIUM_DAYS = 30

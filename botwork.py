@@ -29,11 +29,15 @@ async def send_report(bot, sid):
            f"Poster: <code>{s['owner_id']}</code>\nWorker: <code>{s['worker_id']}</code>\n"
            f"Reward: {s['reward']} coins\nRefer link: {h(s['ref_link'])}\nReason: {h(s['reason'] or '-')}")
     kb = M([[B("✅ Pay worker", callback_data=f"bwa_pay:{sid}"), B("❌ Uphold reject", callback_data=f"bwa_no:{sid}")]])
+    sent = False
     for a in config.ADMIN_IDS:
         try:
             await bot.send_photo(a, s["photo_id"], caption=cap, parse_mode="HTML", reply_markup=kb)
+            sent = True
         except TelegramError:
             log.warning("report send failed to admin %s", a)
+    if sent:
+        await db.bw_mark_report_sent(sid)
 
 
 async def on_cb(update, ctx):
@@ -95,6 +99,7 @@ async def on_cb(update, ctx):
 
 
 async def job(ctx):
-    for r in await db.bw_auto_report(config.BW_REVIEW_HOURS):
+    await db.bw_auto_report(config.BW_REVIEW_HOURS)
+    for r in await db.bw_unsent_reports():  # naye + pichle jinka alert fail hua tha
         await send_report(ctx.bot, r["id"])
     await db.bw_close_expired(config.BW_REPORT_HOURS)
