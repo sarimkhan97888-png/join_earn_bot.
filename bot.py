@@ -33,12 +33,34 @@ async def post_init(app):
         log.warning("menu button set nahi hua")
 
 
+_last_start = {}
+
+
 async def start(update: Update, ctx):
-    """Har /start par DB se check: device verified nahi to pehle verification (app ke andar)."""
-    u = await db.ensure_user(update.effective_user)
+    """Har /start par DB se check: banned / leave kiya channel / device verify. Refer link bhi yahin pakadte hain."""
+    tu = update.effective_user
+    t = time.monotonic()
+    if t - _last_start.get(tu.id, 0) < 2:  # /start spam roko
+        return
+    _last_start[tu.id] = t
+    if len(_last_start) > 20000:
+        for k in [k for k, v in _last_start.items() if t - v > 60]:
+            _last_start.pop(k, None)
+    existed = await db.get_user(tu.id)
+    u = await db.ensure_user(tu)
     if u["banned"]:
         return await update.message.reply_text("🚫 Tumhara account banned hai.")
+    if not existed and ctx.args and re.fullmatch(r"r\d{1,15}", ctx.args[0]):
+        await db.ref_add(tu.id, int(ctx.args[0][1:]))  # sirf bilkul naya user refer ban sakta hai
     app = html.escape(config.APP_NAME)
+    left = await db.left_chats(tu.id)
+    if left:
+        rows = [[B(f"➕ Join {r['title'][:28]}", url=r["link"])] for r in left if r["link"]]
+        rows.append([B("🚀 Open App", web_app=WebAppInfo(url=f"{config.BASE_URL}/app"))])
+        names = "\n".join("• " + html.escape(r["title"]) for r in left)
+        return await update.message.reply_text(
+            f"🚫 <b>App block hai</b>\nTumne ye channel leave kar diya hai:\n{names}\n\n"
+            f"Dobara join karo, phir app me <b>Re-check</b> dabao.", parse_mode="HTML", reply_markup=M(rows))
     if not u["device_ok"]:
         await update.message.reply_text(
             f"👋 <b>{app} me welcome!</b>\n\n🔐 Shuru karne se pehle <b>Device Verification</b> zaroori hai "
@@ -64,60 +86,24 @@ async def resetdev_cmd(update: Update, ctx):
         await update.message.reply_text("User nahi mila.")
 
 
-# ---------------- admin: support reply ----------------
-async def on_support_reply_btn(update: Update, ctx):
-    q = update.callback_query
-    aid = q.from_user.id
-    if aid not in config.ADMIN_IDS:
-        return await q.answer("Not allowed", show_alert=True)
-    uid = int(q.data.split(":")[1])
-    state = ctx.application.bot_data.setdefault("sup_reply", {})
-    old = state.get(aid)
-    if old:
-        try:
-            await ctx.bot.delete_message(aid, old["prompt"])
-        except TelegramError:
-            pass
-    await q.answer()
-    prompt = await ctx.bot.send_message(
-        aid, f"✍️ User <code>{uid}</code> ko reply likho (cancel: /cancel):", parse_mode="HTML")
-    state[aid] = {"uid": uid, "prompt": prompt.message_id}
+# ---------------- support: ab sab Mini App me hota hai ----------------
+async def on_support_legacy(update: Update, ctx):
+    """Purane notification ka Reply button: ab reply Mini App me hota hai."""
+    await update.callback_query.answer("Ab support reply app ke andar hota hai: Profile → Support inbox.", show_alert=True)
 
 
-async def on_admin_text(update: Update, ctx):
-    aid = update.effective_user.id
-    st = ctx.application.bot_data.get("sup_reply", {}).get(aid)
-    if aid not in config.ADMIN_IDS or not st:
+async def ban_cmd(update: Update, ctx):
+    if update.effective_user.id not in config.ADMIN_IDS:
         return
-    text = (update.message.text or "").strip()[:1000]
-    if not text:
-        return
-    uid = st["uid"]
-    ctx.application.bot_data["sup_reply"].pop(aid, None)
-    await db.sup_add(uid, "admin", text)
-    await util.notify(ctx.bot, uid, f"🎧 <b>Support reply</b>\n\n{html.escape(text)}\n\n"
-                                    f"Poori chat: App → Profile → Customer service")
-    # reply ho gaya: is user ke saare support notifications aur prompt delete
-    for r in await db.sup_notif_pop(uid):
-        try:
-            await ctx.bot.delete_message(r["admin_id"], r["msg_id"])
-        except TelegramError:
-            pass
-    try:
-        await ctx.bot.delete_message(aid, st["prompt"])
-    except TelegramError:
-        pass
-
-
-async def cancel_cmd(update: Update, ctx):
-    aid = update.effective_user.id
-    st = ctx.application.bot_data.get("sup_reply", {}).pop(aid, None)
-    if st:
-        try:
-            await ctx.bot.delete_message(aid, st["prompt"])
-        except TelegramError:
-            pass
-        await update.message.reply_text("Cancel ho gaya. Notification abhi bhi upar hai, Reply dobara dabao.")
+    cmd = (update.message.text or "").split()[0].lstrip("/").split("@")[0].lower()
+    a = ctx.args
+    if not a or not a[0].isdigit() or int(a[0]) in config.ADMIN_IDS:
+        return await update.message.reply_text(f"Usage: /{cmd} <user_id>")
+    ban = cmd == "ban"
+    if await db.set_ban(int(a[0]), ban):
+        await update.message.reply_text(f"{'🚫 Banned' if ban else '✅ Unbanned'}: {a[0]}")
+    else:
+        await update.message.reply_text("User nahi mila.")
 
 
 # ---------------- admin: gateway test ----------------
@@ -299,7 +285,7 @@ async def _recheck_one(ctx, r):
 async def job_recheck(ctx):
     rows = await db.pool.fetch(
         """SELECT id, chat_id, user_id FROM completions WHERE status IN ('hold','ok')
-           AND created_at > now() - interval '30 days' ORDER BY last_checked LIMIT 200""")
+           ORDER BY last_checked LIMIT 200""")  # hamesha track: koi time limit nahi
     await _in_batches(rows, lambda r: _recheck_one(ctx, r))
 
 
@@ -310,6 +296,19 @@ async def job_orders(ctx):
         await asyncio.sleep(0.2)
 
 
+async def job_refs(ctx):
+    """Dost ka pehla withdraw 'paid' hua -> referrer ko coins."""
+    for r in await db.ref_ready():
+        rid = await db.ref_complete(r["referred_id"])
+        if rid:
+            await util.notify(ctx.bot, rid, f"🎉 <b>Refer complete!</b> Tumhare dost ka pehla withdraw ho gaya. "
+                                            f"<b>+{config.REFER_REWARD}</b> coins balance me add.")
+
+
+async def job_cleanup(ctx):
+    await db.sup_cleanup()
+
+
 async def on_error(update, ctx):
     log.error("Unhandled error", exc_info=ctx.error)
 
@@ -317,12 +316,11 @@ async def on_error(update, ctx):
 def register(app):
     app.add_handler(CommandHandler("start", start, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("gift", gift_cmd, filters=filters.ChatType.PRIVATE))
-    app.add_handler(CommandHandler("cancel", cancel_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("gw", gw_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler(["addbalance", "add_balance", "add"], addbal_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("resetdev", resetdev_cmd, filters=filters.ChatType.PRIVATE))
-    app.add_handler(CallbackQueryHandler(on_support_reply_btn, pattern=r"^sup_reply:"))
-    app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, on_admin_text))
+    app.add_handler(CallbackQueryHandler(on_support_legacy, pattern=r"^sup_reply:"))
+    app.add_handler(CommandHandler(["ban", "unban"], ban_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CallbackQueryHandler(on_admin_wd, pattern=r"^adm_"))
     app.add_handler(CallbackQueryHandler(botwork.on_cb, pattern=r"^(bws_|bwa_)"))
     app.add_handler(ChatMemberHandler(on_chat_member, ChatMemberHandler.CHAT_MEMBER))
@@ -332,3 +330,5 @@ def register(app):
     app.job_queue.run_repeating(botwork.job, interval=900, first=180)
     app.job_queue.run_repeating(job_orders, interval=120, first=90)
     app.job_queue.run_repeating(payouts.job, interval=90, first=100)
+    app.job_queue.run_repeating(job_refs, interval=60, first=70)
+    app.job_queue.run_repeating(job_cleanup, interval=86400, first=600)

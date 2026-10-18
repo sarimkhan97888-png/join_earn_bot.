@@ -151,6 +151,12 @@ nav svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:1.8;st
 .gate .steps{text-align:left;max-width:360px;margin:12px auto}
 .banner button.go{border:0;color:inherit;font-family:inherit;cursor:pointer}
 @media (prefers-reduced-motion:reduce){.coin3d,.coin3d:after,.sp-brand,.sp-bar i,.fc,.lring,.lring:after{animation:none}}
+.ch-h .sp b{display:block;font-size:16px}
+.cimg{display:block;max-width:100%;max-height:260px;border-radius:12px;margin-bottom:4px;background:var(--card2);min-width:90px;min-height:60px}
+#chatPrev{display:none;padding:8px 14px;background:var(--card);border-top:1px solid var(--line)}
+#chatPrev.on{display:flex;align-items:center;gap:10px}
+#chatPrev img{height:54px;border-radius:10px}
+.ch-f .btn.sm{flex:none}
 </style>
 </head>
 <body>
@@ -161,8 +167,8 @@ nav svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:1.8;st
 <div id="sheet"><div class="bd" data-act="closesheet"></div><div class="pn"><div class="gr"></div><div id="sheetBody"></div></div></div>
 <div id="modal"></div>
 <div id="loader"><div class="lcard"><div class="lring"></div><span>Please wait...</span></div></div>
-<div id="chat"><div class="ch-h"><button data-act="chatclose" aria-label="Back">‹</button><b>Customer service<span>Apni problem likho, hum reply karenge</span></b></div>
-<div id="chatBody"></div><div class="ch-f"><input id="chatIn" placeholder="Apni problem likho..." maxlength="1000" autocomplete="off"><button class="btn sm" data-act="chatsend">Send</button></div></div>
+<div id="chat"><div class="ch-h"><button data-act="chatclose" aria-label="Back">‹</button><div class="sp"><b id="chTitle">Customer service</b><span id="chSub">Apni problem likho, hum reply karenge</span></div></div>
+<div id="chatBody"></div><div id="chatPrev"></div><div class="ch-f" id="chatFoot"><button class="btn sm ghost" data-act="chatpick" aria-label="Photo">📷</button><input id="chatFile" type="file" accept="image/*" hidden><input id="chatIn" placeholder="Apni problem likho..." maxlength="1000" autocomplete="off"><button class="btn sm" data-act="chatsend">Send</button></div></div>
 
 <script>
 const tg = window.Telegram && window.Telegram.WebApp;
@@ -213,7 +219,7 @@ function tgStore(kind, op, key, val) {
     try {
       const s = tg && tg[kind];
       if (!s || !tg.isVersionAtLeast || !tg.isVersionAtLeast('9.0')) return res(null);
-      const to = setTimeout(() => res(null), 1500);
+      const to = setTimeout(() => res(null), 800);
       const cb = (e, v) => { clearTimeout(to); res(e ? null : (typeof v === 'string' ? v : null)); };
       if (op === 'get') s.getItem(key, cb); else s.setItem(key, val, cb);
     } catch (e) { res(null); }
@@ -221,15 +227,22 @@ function tgStore(kind, op, key, val) {
 }
 async function devToken() {
   if (S.dev) return S.dev;
-  const key = 'dvt1', ok64 = v => v && /^[a-f0-9]{64}$/.test(v);
-  let ls = null; try { ls = localStorage.getItem(key); } catch (e) {}
-  const ss = await tgStore('SecureStorage', 'get', key), ds = await tgStore('DeviceStorage', 'get', key);
-  let t = [ss, ds, ls].find(ok64);
-  if (!t) { const a = new Uint8Array(32); crypto.getRandomValues(a); t = [...a].map(v => v.toString(16).padStart(2, '0')).join(''); }
-  try { localStorage.setItem(key, t); } catch (e) {}
-  if (ss !== t) tgStore('SecureStorage', 'set', key, t);
-  if (ds !== t) tgStore('DeviceStorage', 'set', key, t);
-  return (S.dev = t);
+  if (S.devP) return S.devP;
+  S.devP = (async () => {
+    const key = 'dvt1', ok64 = v => v && /^[a-f0-9]{64}$/.test(v);
+    let ls = null; try { ls = localStorage.getItem(key); } catch (e) {}
+    if (ok64(ls)) { // fast path: storage ka wait nahi, background me sync
+      S.dev = ls; tgStore('SecureStorage', 'set', key, ls); tgStore('DeviceStorage', 'set', key, ls); return ls;
+    }
+    const [ss, ds] = await Promise.all([tgStore('SecureStorage', 'get', key), tgStore('DeviceStorage', 'get', key)]);
+    let t = [ss, ds].find(ok64);
+    if (!t) { const a = new Uint8Array(32); crypto.getRandomValues(a); t = [...a].map(v => v.toString(16).padStart(2, '0')).join(''); }
+    try { localStorage.setItem(key, t); } catch (e) {}
+    if (ss !== t) tgStore('SecureStorage', 'set', key, t);
+    if (ds !== t) tgStore('DeviceStorage', 'set', key, t);
+    return (S.dev = t);
+  })();
+  return S.devP;
 }
 async function getFp() { return S.fp || (S.fp = await fingerprint()); }
 
@@ -302,11 +315,13 @@ async function go(tab) {
   S.tab = tab; renderNav();
   $('#view').innerHTML = '<div class="empty"><span class="spin"></span></div>';
   window.scrollTo(0, 0);
-  if (!(await loadMe())) return;
+  const extra = tab === 'tasks' ? api('/api/tasks') : tab === 'wallet' ? api('/api/wallet') : Promise.resolve(null);
+  const [okMe, j] = await Promise.all([loadMe(), extra]); // parallel: tab jaldi khulta hai
+  if (!okMe) return;
   if (!S.me.device_ok && !S.me.admin) { rGate(); return; }
+  if (S.blocked.length && !S.me.admin) { rBlocked(); return; }
   $('#nav').style.display = '';
-  if (tab === 'tasks') { const j = await api('/api/tasks'); if (j.ok) S.tasks = j; }
-  if (tab === 'wallet') { const j = await api('/api/wallet'); if (j.ok) S.wallet = j; }
+  if (j && j.ok) { if (tab === 'tasks') S.tasks = j; else S.wallet = j; }
   renderNav(); render();
 }
 async function refresh() { await go(S.tab); }
@@ -315,7 +330,7 @@ function render() { ({ home: rHome, tasks: rTasks, wallet: rWallet, profile: rPr
 /* ---------- HOME ---------- */
 const KIND = {
   hold: ['⏳', 'Join reward (hold)'], release: ['💰', 'Reward released'], revoke: ['🚫', 'Reward cut (channel left)'],
-  admin_add: ['👑', 'Admin credit'], deposit: ['⬇️', 'Deposit'], premium: ['💎', 'Premium'], withdraw: ['⬆️', 'Withdraw'], withdraw_refund: ['↩️', 'Withdraw refund'],
+  admin_add: ['👑', 'Admin credit'], referral: ['🤝', 'Referral reward'], deposit: ['⬇️', 'Deposit'], premium: ['💎', 'Premium'], withdraw: ['⬆️', 'Withdraw'], withdraw_refund: ['↩️', 'Withdraw refund'],
   bw_reward: ['🤖', 'Bot work reward'], task_escrow: ['📣', 'Channel task created'], task_refund: ['↩️', 'Task refund'],
   bw_escrow: ['🤖', 'Bot work created'], bw_refund: ['↩️', 'Bot work refund']
 };
@@ -382,7 +397,7 @@ function depositSheet() {
   const c = S.cfg;
   openSheet(`<h3>Deposit coins</h3><p>Min ${fmt(c.min_deposit)} coins (₹${inr(c.min_deposit)}). Jitne coins, utne hi paise ka QR banega. 100 coins = ₹1</p>
   <label>Coins</label><input id="dc" type="number" inputmode="numeric" placeholder="${c.min_deposit}" data-inp="dep">
-  <div class="qs">${[10000, 20000, 50000, 100000].map(v => `<button data-act="qa" data-v="${v}">${fmt(v)}</button>`).join('')}</div>
+  <div class="qs">${[2000, 5000, 10000, 50000].map(v => `<button data-act="qa" data-v="${v}">${fmt(v)}</button>`).join('')}</div>
   <div class="cost" id="dh">Pay: ₹0</div><button class="btn" data-act="depgo">Generate QR</button>`);
 }
 function withdrawSheet() {
@@ -426,13 +441,15 @@ function rProfile() {
    <div class="item" data-act="upi" style="cursor:pointer"><div class="ico">⚙️</div><div class="sp"><b>Settings</b><span class="sub">UPI ID set / change</span></div>›</div>
    <div class="item" data-act="studio" style="cursor:pointer"><div class="ico">💎</div><div class="sp"><b>Premium</b><span class="sub">${m.admin ? 'Admin: unlimited, free tasks' : m.premium ? 'Add task, manage posts' : 'Unlock karne ke liye ₹' + S.cfg.premium_price + '/month'}</span></div>›</div>
    <div class="item" data-act="sound" style="cursor:pointer"><div class="ico">${Snd.isOn() ? '🔊' : '🔇'}</div><div class="sp"><b>Sound</b><span class="sub">${Snd.isOn() ? 'On' : 'Off'} · tap to change</span></div>›</div>
+   <div class="item" data-act="refer" style="cursor:pointer"><div class="ico">🤝</div><div class="sp"><b>Refer & Earn</b><span class="sub">Dost ka pehla withdraw = +${S.cfg.refer_reward} coins</span></div>›</div>
+   ${m.admin ? '<div class="item" data-act="inbox" style="cursor:pointer"><div class="ico">📥</div><div class="sp"><b>Support inbox</b><span class="sub">Users ke messages, yahin reply</span></div>›</div>' : ''}
    <div class="item" data-act="gift" style="cursor:pointer"><div class="ico">🎁</div><div class="sp"><b>Gift code</b><span class="sub">Code redeem karke coins pao</span></div>›</div>
    <div class="item" data-act="rules" style="cursor:pointer"><div class="ico">📜</div><div class="sp"><b>Rules</b><span class="sub">Earning & withdraw rules</span></div>›</div>
    <div class="item" data-act="support" style="cursor:pointer"><div class="ico">🎧</div><div class="sp"><b>Customer service</b><span class="sub">Apni problem likho, reply milega</span></div>›</div></div>`;
 }
 function rulesSheet() {
   const c = S.cfg;
-  openSheet(`<h3>Rules</h3><ul class="steps"><li>Channel join karo, Check dabao: +${c.join_reward} coins, ${c.hold_hours} ghante hold me.</li><li>Hold me channel leave kiya to coins cut aur tasks block. Dobara join karne par unblock.</li><li>Min withdraw ${fmt(c.min_withdraw)} coins (100 coins = ₹1). Withdraw par ${c.withdraw_tax}% tax kat-ta hai.</li><li>Ek device, ek Gmail, ek UPI = ek account. Fake accounts ban honge.</li><li>Bot Work: reward ${c.bw_min_reward}+ coins, owner approve kare to milta hai. Reject galat ho to Report karo.</li></ul><button class="btn ghost" data-act="closesheet">Close</button>`);
+  openSheet(`<h3>Rules</h3><ul class="steps"><li>Channel join karo, Check dabao: +${c.join_reward} coins, ${c.hold_hours} ghante hold me.</li><li>Hold me channel leave kiya to coins cut aur tasks block. Dobara join karne par unblock.</li><li>Min withdraw ${fmt(c.min_withdraw)} coins (100 coins = ₹1). Withdraw par ${c.withdraw_tax}% tax kat-ta hai.</li><li>Ek device, ek Gmail, ek UPI = ek account. Fake accounts ban honge.</li><li>Bot Work: reward ${c.bw_min_reward}+ coins, owner approve kare to milta hai. Reject galat ho to Report karo.</li><li>Refer: dost ka pehla withdraw paid hone par +${c.refer_reward} coins.</li><li>Channel leave kiya to poora app block, dobara join karne par chalega.</li></ul><button class="btn ghost" data-act="closesheet">Close</button>`);
 }
 async function fingerprint() {
   const c = document.createElement('canvas'), x = c.getContext('2d');
@@ -501,24 +518,84 @@ function compress(file) {
   });
 }
 
-/* ---------- SUPPORT CHAT ---------- */
+/* ---------- SUPPORT CHAT (user + admin, photo ke saath) ---------- */
+S.chat = { mode: 'user', uid: 0, fromInbox: false }; S.img = {};
+function chatPaths() {
+  return S.chat.mode === 'admin' ? { load: '/api/admin/support/chat?uid=' + S.chat.uid, send: '/api/admin/support/reply' } : { load: '/api/support', send: '/api/support/send' };
+}
+async function chatImg(el) { // photo auth header ke saath fetch -> blob
+  const id = el.dataset.mid;
+  if (S.img[id]) { el.src = S.img[id]; return; }
+  try {
+    const r = await fetch('/api/support/photo?id=' + id, { headers: { 'X-Init-Data': (tg && tg.initData) || '', 'X-Device': await devToken(), 'X-Fp': await getFp() } });
+    if (!r.ok) throw 0;
+    S.img[id] = URL.createObjectURL(await r.blob()); el.src = S.img[id];
+  } catch (e) { const d = document.createElement('div'); d.className = 'sub'; d.textContent = '📷 Photo expired'; el.replaceWith(d); }
+}
 async function chatLoad(force) {
-  const j = await api('/api/support'); if (!j.ok) return;
-  if (!force && j.msgs.length === S.chatCount) return;
-  S.chatCount = j.msgs.length;
-  const b = $('#chatBody');
-  b.innerHTML = j.msgs.length ? j.msgs.map(m => `<div class="b ${m.from === 'user' ? 'me' : 'them'}">${esc(m.text)}<small>${m.from === 'user' ? '' : 'Support · '}${when(m.at)}</small></div>`).join('')
-    : '<div class="empty"><i>🎧</i>Apni problem neeche likho.<br>Support team jaldi reply karegi.</div>';
+  if (document.hidden && !force) return;
+  if (S.chat.mode === 'inbox') return inboxLoad(force);
+  const j = await api(chatPaths().load); if (!j.ok) return;
+  const admin = S.chat.mode === 'admin';
+  if (admin) { $('#chTitle').textContent = j.name; $('#chSub').textContent = 'ID ' + j.uid; }
+  const sig = j.msgs.length + ':' + (j.msgs.length ? j.msgs[j.msgs.length - 1].id : 0);
+  if (!force && sig === S.chatSig) return; S.chatSig = sig;
+  const me = admin ? 'admin' : 'user', b = $('#chatBody');
+  b.innerHTML = j.msgs.length ? j.msgs.map(m => `<div class="b ${m.from === me ? 'me' : 'them'}">${m.photo ? `<img class="cimg" data-mid="${m.id}" alt="photo">` : ''}${m.text ? esc(m.text) : ''}<small>${m.from === me ? '' : (admin ? 'User · ' : 'Support · ')}${when(m.at)}</small></div>`).join('')
+    : `<div class="empty"><i>🎧</i>${admin ? 'Abhi koi message nahi.' : 'Apni problem neeche likho (photo bhi bhej sakte ho).<br>Support team jaldi reply karegi.'}</div>`;
+  b.querySelectorAll('img[data-mid]').forEach(chatImg);
   b.scrollTop = b.scrollHeight;
 }
-function openChat() { $('#chat').classList.add('open'); document.body.style.overflow = 'hidden'; S.chatCount = -1; chatLoad(true); S.chatPoll = setInterval(() => chatLoad(false), 5000); }
+async function inboxLoad(force) {
+  const j = await api('/api/admin/support'); if (!j.ok) return;
+  const sig = JSON.stringify(j.threads.map(t => [t.uid, t.at]));
+  if (!force && sig === S.chatSig) return; S.chatSig = sig;
+  $('#chatBody').innerHTML = j.threads.length ? j.threads.map(t => `<div class="item" data-act="adminchat" data-uid="${t.uid}" style="cursor:pointer"><div class="ico">👤</div><div class="sp"><b>${esc(t.name)}</b><span class="sub">${esc(t.last || '')}</span></div>${t.from === 'user' ? '<span class="chip r">Reply</span>' : '<span class="chip g">Done</span>'}</div>`).join('')
+    : '<div class="empty"><i>📭</i>Koi support chat nahi.</div>';
+}
+function showChat(mode, uid, fromInbox) {
+  S.chat = { mode, uid: uid || 0, fromInbox: !!fromInbox }; S.chatSig = ''; chatPrevClear();
+  $('#chat').classList.add('open'); document.body.style.overflow = 'hidden';
+  $('#chatFoot').style.display = mode === 'inbox' ? 'none' : '';
+  $('#chTitle').textContent = mode === 'inbox' ? 'Support inbox' : mode === 'admin' ? 'Chat' : 'Customer service';
+  $('#chSub').textContent = mode === 'user' ? 'Apni problem likho, hum reply karenge' : mode === 'inbox' ? 'Users ke messages' : '';
+  $('#chatBody').innerHTML = '<div class="empty"><span class="spin"></span></div>';
+  clearInterval(S.chatPoll); chatLoad(true); S.chatPoll = setInterval(() => chatLoad(false), 5000);
+}
 function closeChat() { clearInterval(S.chatPoll); $('#chat').classList.remove('open'); document.body.style.overflow = ''; }
+function chatBack() { if (S.chat.mode === 'admin' && S.chat.fromInbox) showChat('inbox'); else closeChat(); }
+function chatPrevClear() {
+  S.chatPhoto = null; const pv = $('#chatPrev'); if (pv) { pv.innerHTML = ''; pv.classList.remove('on'); }
+  const f = $('#chatFile'); if (f) f.value = '';
+}
+async function chatPicked(f) {
+  let blob; try { blob = await compress(f); } catch (e) { return popup('error', 'Image error', 'Ye image read nahi hui.'); }
+  S.chatPhoto = blob; const pv = $('#chatPrev');
+  pv.innerHTML = `<img src="${URL.createObjectURL(blob)}" alt=""><span class="sub sp">Photo attached</span><button class="btn sm ghost" data-act="chatunpick">✕</button>`; pv.classList.add('on');
+}
 async function chatSend() {
-  const el = $('#chatIn'), t = el.value.trim(); if (!t) return;
-  el.value = '';
-  const j = await api('/api/support/send', { text: t });
+  if (S.sending) return;
+  const el = $('#chatIn'), t = el.value.trim(), ph = S.chatPhoto; if (!t && !ph) return;
+  S.sending = true; el.value = '';
+  const p = chatPaths(), admin = S.chat.mode === 'admin'; let j;
+  if (ph || admin) {
+    const fd = new FormData(); fd.append('text', t); if (admin) fd.append('uid', S.chat.uid); if (ph) fd.append('photo', ph, 'p.jpg');
+    j = await api(p.send, undefined, fd);
+  } else j = await api(p.send, { text: t });
+  S.sending = false;
   if (!j.ok) { el.value = t; await popup('error', 'Oops', j.msg || 'Send nahi hua'); return; }
-  chatLoad(true);
+  chatPrevClear(); chatLoad(true);
+}
+
+/* ---------- REFER ---------- */
+async function referSheet() {
+  const j = await act('/api/refer'); if (!j.ok) return; S.ref = j;
+  const st = { done: ['g', 'Rewarded'], pending: ['y', 'Pehle withdraw ka wait'] };
+  openSheet(`<h3>🤝 Refer & Earn</h3><p>Apna link dost ko bhejo. Wo join karke jab apna <b>pehla withdraw</b> complete kar lega, tumhe <b>+${j.reward} coins</b> milenge.</p>
+  <div class="cost" style="word-break:break-all;user-select:all">${esc(j.link)}</div>
+  <div class="row"><button class="btn ghost" data-act="refcopy">📋 Copy link</button><button class="btn" data-act="refshare">📤 Share</button></div>
+  <div class="grid3"><div class="mini"><b>${fmt(j.total)}</b><span>Invited</span></div><div class="mini"><b>${fmt(j.done)}</b><span>Completed</span></div><div class="mini"><b>${fmt(j.earned)}</b><span>Coins earned</span></div></div>
+  <h3 style="margin:16px 0 4px">Tumhare refer</h3>${j.items.length ? j.items.map(i => `<div class="item"><div class="ico">👤</div><div class="sp"><b>${esc(i.name)}</b><span class="sub">${when(i.at)}</span></div><span class="chip ${(st[i.status] || ['', ''])[0]}">${(st[i.status] || ['', i.status])[1]}</span></div>`).join('') : '<div class="sub">Abhi koi nahi. Link share karo!</div>'}`);
 }
 
 /* ---------- events ---------- */
@@ -597,9 +674,20 @@ const H = {
   },
   rules: rulesSheet,
   sound() { Snd.set(!Snd.isOn()); if (Snd.isOn()) Snd.ok(); rProfile(); },
-  support: openChat,
-  chatclose: closeChat,
-  chatsend: chatSend
+  support: () => showChat('user'),
+  refer: referSheet,
+  async refcopy() {
+    const l = S.ref.link; let ok = false;
+    try { await navigator.clipboard.writeText(l); ok = true; } catch (e) { const t = document.createElement('textarea'); t.value = l; document.body.appendChild(t); t.select(); try { ok = document.execCommand('copy'); } catch (e2) {} t.remove(); }
+    popup(ok ? 'ok' : 'info', ok ? 'Copied' : 'Copy nahi hua', ok ? 'Link copy ho gaya.' : 'Link ko dabake rakho aur copy karo.');
+  },
+  refshare: () => openLink('https://t.me/share/url?url=' + encodeURIComponent(S.ref.link) + '&text=' + encodeURIComponent('Join karo aur coins kamao 💰')),
+  inbox: () => showChat('inbox'),
+  adminchat: d => showChat('admin', +d.uid, true),
+  chatclose: chatBack,
+  chatsend: chatSend,
+  chatpick: () => $('#chatFile').click(),
+  chatunpick: chatPrevClear
 };
 function onInp(k) {
   const c = S.cfg;
@@ -614,6 +702,7 @@ document.addEventListener('click', e => {
 });
 document.addEventListener('input', e => { const k = e.target.dataset && e.target.dataset.inp; if (k && k !== 'file') onInp(k); });
 document.addEventListener('change', e => {
+  if (e.target.id === 'chatFile' && e.target.files[0]) { chatPicked(e.target.files[0]); return; }
   if (e.target.dataset && e.target.dataset.inp === 'file' && e.target.files[0]) {
     const p = $('#bprev'); p.src = URL.createObjectURL(e.target.files[0]); p.style.display = 'block';
   }
@@ -624,13 +713,30 @@ document.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target &&
 /* ---------- gate: device verify ke bina app band ---------- */
 function rGate() {
   $('#nav').style.display = 'none';
-  const ch = S.me.device_state === 'changed';
-  $('#view').innerHTML = `<div class="gate"><div class="gi">🔐</div><h2>${ch ? 'Naya device mila' : 'Device verification'}</h2>
-  <p>${ch ? 'Ye account pehle kisi aur device par verify tha. Wahi Gmail daalo jo pehle verify kiya tha.' : 'Fair rehne ke liye ek device par sirf ek account chalta hai. Ek baar verify karo, phir sab unlock.'}</p>
-  <ul class="steps"><li>Apna <b>Gmail</b> daalo</li><li><b>Verify</b> dabao, device is account se bind ho jayega</li><li>App data clear / naya phone ho to yahi screen dobara aayegi</li></ul>
+  const ds = S.me.device_state;
+  if (ds === 'changed' || ds === 'other') {
+    $('#view').innerHTML = `<div class="gate"><div class="gi" style="background:linear-gradient(135deg,#ff5c6c,#ff9a5c);box-shadow:0 12px 34px rgba(255,92,108,.35)">🚫</div><h2>Account block</h2>
+    <p>${ds === 'changed' ? 'Ye Telegram account pehle kisi aur device se verify hua tha. Security ke liye ab is device par block hai.' : 'Ye device kisi aur Telegram account se linked hai. Ek device par sirf ek account chalta hai.'}</p>
+    <p>Agar ye galti se hua hai (naya phone / app data clear), to Customer service se contact karo, admin check karke reset kar dega.</p>
+    <p style="margin-top:14px"><span class="link" data-act="support">🎧 Customer service</span></p></div>`;
+    return;
+  }
+  $('#view').innerHTML = `<div class="gate"><div class="gi">🔐</div><h2>Device verification</h2>
+  <p>Fair rehne ke liye ek device par sirf ek account chalta hai. Tumhari Telegram ID (<b>${S.me.id}</b>) aur ye device aapas me bind honge. Aage har baar app kholne par check hoga.</p>
+  <ul class="steps"><li>Apna <b>Gmail</b> daalo</li><li><b>Verify</b> dabao: Telegram ID + device save ho jayenge</li><li>Doosre device ya doosre account se kholne par <b>block</b> ho jayega</li></ul>
   <div style="text-align:left"><label>Gmail</label><input id="vg" type="email" placeholder="yourname@gmail.com" autocomplete="email" autocapitalize="off"></div>
   <button class="btn" data-act="vgo">✅ Verify device</button>
   <p style="margin-top:14px"><span class="link" data-act="support">🎧 Problem aa rahi hai? Customer service</span></p></div>`;
+}
+
+/* ---------- blocked: channel leave kiya to poora app band ---------- */
+function rBlocked() {
+  $('#nav').style.display = 'none';
+  $('#view').innerHTML = `<div class="gate"><div class="gi" style="background:linear-gradient(135deg,#ff5c6c,#ff9a5c);box-shadow:0 12px 34px rgba(255,92,108,.35)">🚫</div><h2>App block hai</h2>
+  <p>Tumne neeche ke channel leave kar diye hain. Dobara join karo, phir <b>Re-check</b> dabao.</p>
+  <div class="card" style="padding:4px 16px;text-align:left">${S.blocked.map(b => `<div class="item"><div class="ico">📣</div><div class="sp"><b>${esc(b.title)}</b></div>${b.link ? `<button class="btn sm ghost" data-act="open" data-url="${esc(b.link)}">Join</button>` : ''}</div>`).join('')}</div>
+  <button class="btn" data-act="rejoin">✅ Re-check</button>
+  <p style="margin-top:14px"><span class="link" data-act="support">🎧 Customer service</span></p></div>`;
 }
 
 /* ---------- splash ---------- */
@@ -638,7 +744,10 @@ const HINTS = ['Secure connection...', 'Wallet load ho raha hai...', 'Tasks read
 let hi = 0; const hint = setInterval(() => { const e = $('#spHint'); if (e) e.textContent = HINTS[++hi % HINTS.length]; }, 750);
 function hideSplash() { clearInterval(hint); const s = $('#splash'); if (!s) return; s.classList.add('hide'); setTimeout(() => s.remove(), 700); }
 const t0 = Date.now();
-go('home').catch(() => {}).finally(() => setTimeout(hideSplash, Math.max(0, 1500 - (Date.now() - t0))));
+function deepLink() { // admin ko notification ke button se seedha us user ki chat
+  try { const sp = +new URLSearchParams(location.search).get('support'); if (sp && S.me && S.me.admin) { history.replaceState(null, '', location.pathname); showChat('admin', sp, false); } } catch (e) {}
+}
+go('home').catch(() => {}).finally(() => { setTimeout(hideSplash, Math.max(0, 900 - (Date.now() - t0))); deepLink(); });
 setTimeout(hideSplash, 8000); // network atak bhi jaye to splash na rukey
 </script>
 </body>

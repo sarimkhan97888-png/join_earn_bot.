@@ -19,11 +19,12 @@ AUTO_PAYOUT_DAILY = int(os.getenv("AUTO_PAYOUT_DAILY", "2"))          # ek user 
 
 # Economy
 COIN_PER_INR = 100          # 100 coin = Rs 1
-JOIN_REWARD = 100           # joiner ko per channel join
+JOIN_REWARD = 50            # joiner ko per channel join
 AD_COST = 110               # advertiser ko per member (10 coin = platform fee)
+REFER_REWARD = 100          # refer complete (dost ka pehla withdraw paid) par referrer ko
 MIN_TASK_MEMBERS = 10
 MAX_TASK_MEMBERS = 100000
-MIN_DEPOSIT_COINS = 10000   # = Rs 100
+MIN_DEPOSIT_COINS = 2000    # = Rs 20
 MIN_WITHDRAW_COINS = 1500   # = Rs 15 (tax ke baad Rs 13.50; Elite payout min Rs 10)
 WITHDRAW_TAX_PERCENT = 10   # withdraw par tax (coins me kat-ta hai)
 HOLD_HOURS = 24

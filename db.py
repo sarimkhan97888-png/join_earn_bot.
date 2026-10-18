@@ -105,6 +105,22 @@ CREATE INDEX IF NOT EXISTS bws_bw ON bw_subs(bw_id, status);
 CREATE INDEX IF NOT EXISTS bws_worker ON bw_subs(worker_id, id DESC);
 CREATE INDEX IF NOT EXISTS bws_status ON bw_subs(status, created_at);
 CREATE INDEX IF NOT EXISTS bw_owner ON botworks(owner_id, id DESC);
+CREATE TABLE IF NOT EXISTS referrals(
+  referred_id BIGINT PRIMARY KEY, referrer_id BIGINT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(), done_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS ref_referrer ON referrals(referrer_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS ref_pending ON referrals(status) WHERE status='pending';
+ALTER TABLE support_msgs ADD COLUMN IF NOT EXISTS has_photo BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE support_notifs ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();
+CREATE TABLE IF NOT EXISTS support_files(msg_id BIGINT PRIMARY KEY, data BYTEA NOT NULL);
+CREATE TABLE IF NOT EXISTS support_threads(
+  user_id BIGINT PRIMARY KEY, last_sender TEXT NOT NULL, last_text TEXT, last_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS sup_thr_at ON support_threads(last_at DESC);
+INSERT INTO support_threads(user_id,last_sender,last_text,last_at)
+  SELECT DISTINCT ON (user_id) user_id, sender, left(text,80), created_at FROM support_msgs
+  WHERE NOT EXISTS(SELECT 1 FROM support_threads) ORDER BY user_id, id DESC ON CONFLICT DO NOTHING;
 CREATE INDEX IF NOT EXISTS users_fp ON users(fp);
 """
 
@@ -616,6 +632,14 @@ async def rebind_device(uid, dev_hash, fp, counted=True):
         return False
 
 
+async def device_owner(dev_hash):
+    return await pool.fetchval("SELECT id FROM users WHERE device_hash=$1", dev_hash)
+
+
+async def flag_suspect(uid):
+    await pool.execute("UPDATE users SET suspect=TRUE WHERE id=$1 AND NOT suspect", uid)
+
+
 async def reset_device(uid):
     return await pool.fetchval(
         """UPDATE users SET device_ok=FALSE, device_hash=NULL, gmail=NULL, fp=NULL, device_changes=0,
@@ -659,15 +683,107 @@ async def gift_redeem(uid, code):
 
 
 # ---------- support chat ----------
-async def sup_add(uid, sender, text):
-    return await pool.fetchval(
-        "INSERT INTO support_msgs(user_id,sender,text) VALUES($1,$2,$3) RETURNING id", uid, sender, text)
+async def sup_add(uid, sender, text, photo=None):
+    """Support message (text aur/ya photo). Thread summary bhi update hoti hai (admin inbox ke liye)."""
+    async with pool.acquire() as c, c.transaction():
+        mid = await c.fetchval(
+            "INSERT INTO support_msgs(user_id,sender,text,has_photo) VALUES($1,$2,$3,$4) RETURNING id",
+            uid, sender, text, photo is not None)
+        if photo is not None:
+            await c.execute("INSERT INTO support_files(msg_id,data) VALUES($1,$2)", mid, photo)
+        await c.execute(
+            """INSERT INTO support_threads(user_id,last_sender,last_text,last_at) VALUES($1,$2,$3,now())
+               ON CONFLICT(user_id) DO UPDATE SET last_sender=EXCLUDED.last_sender,
+               last_text=EXCLUDED.last_text, last_at=now()""",
+            uid, sender, (text or "📷 Photo")[:80])
+        return mid
 
 
 async def sup_list(uid, limit=60):
     rows = await pool.fetch(
-        "SELECT sender, text, created_at FROM support_msgs WHERE user_id=$1 ORDER BY id DESC LIMIT $2", uid, limit)
+        "SELECT id, sender, text, has_photo, created_at FROM support_msgs WHERE user_id=$1 ORDER BY id DESC LIMIT $2",
+        uid, limit)
     return list(reversed(rows))
+
+
+async def sup_file(mid):
+    return await pool.fetchrow(
+        "SELECT f.data, m.user_id FROM support_files f JOIN support_msgs m ON m.id=f.msg_id WHERE f.msg_id=$1", mid)
+
+
+async def sup_recent_photos(uid):
+    return await pool.fetchval(
+        """SELECT count(*) FROM support_msgs WHERE user_id=$1 AND sender='user' AND has_photo
+           AND created_at > now() - interval '1 hour'""", uid)
+
+
+async def sup_threads(limit=40):
+    return await pool.fetch(
+        """SELECT t.user_id, t.last_sender, t.last_text, t.last_at, u.username, u.first_name
+           FROM support_threads t LEFT JOIN users u ON u.id=t.user_id
+           ORDER BY (t.last_sender='user') DESC, t.last_at DESC LIMIT $1""", limit)
+
+
+async def sup_notif_recent(uid):
+    return await pool.fetchval(
+        """SELECT EXISTS(SELECT 1 FROM support_notifs WHERE user_id=$1
+           AND created_at > now() - interval '30 minutes')""", uid)
+
+
+async def sup_cleanup():
+    """30 din purani support photos hata do (DB size control)."""
+    await pool.execute(
+        """DELETE FROM support_files WHERE msg_id IN
+           (SELECT id FROM support_msgs WHERE has_photo AND created_at < now() - interval '30 days')""")
+
+
+# ---------- referrals ----------
+async def ref_add(referred, referrer):
+    """Naya user referrer ke link se aaya. True agar record bana."""
+    if referred == referrer:
+        return False
+    r = await pool.fetchval(
+        """INSERT INTO referrals(referred_id,referrer_id)
+           SELECT $1::bigint, $2::bigint WHERE EXISTS(SELECT 1 FROM users WHERE id=$2::bigint AND NOT banned)
+           ON CONFLICT DO NOTHING RETURNING referred_id""", referred, referrer)
+    return r is not None
+
+
+async def ref_ready(limit=100):
+    """Jin referred users ka koi withdraw 'paid' ho chuka hai aur refer abhi pending hai."""
+    return await pool.fetch(
+        """SELECT r.referred_id FROM referrals r WHERE r.status='pending' AND EXISTS(
+             SELECT 1 FROM withdrawals w WHERE w.user_id=r.referred_id AND w.status='paid') LIMIT $1""", limit)
+
+
+async def ref_complete(referred):
+    """Refer complete: referrer ko REFER_REWARD. Return referrer_id (ya None agar pehle ho chuka)."""
+    async with pool.acquire() as c, c.transaction():
+        r = await c.fetchrow(
+            "UPDATE referrals SET status='done', done_at=now() WHERE referred_id=$1 AND status='pending' RETURNING referrer_id",
+            referred)
+        if not r:
+            return None
+        await c.execute("UPDATE users SET balance=balance+$1, total_earned=total_earned+$1 WHERE id=$2",
+                        config.REFER_REWARD, r["referrer_id"])
+        await led(c, r["referrer_id"], "referral", config.REFER_REWARD, referred)
+        return r["referrer_id"]
+
+
+async def ref_stats(uid):
+    return await pool.fetchrow(
+        """SELECT count(*) AS total, count(*) FILTER (WHERE status='done') AS done
+           FROM referrals WHERE referrer_id=$1""", uid)
+
+
+async def ref_list(uid, limit=20):
+    return await pool.fetch(
+        """SELECT r.status, r.created_at, u.first_name FROM referrals r LEFT JOIN users u ON u.id=r.referred_id
+           WHERE r.referrer_id=$1 ORDER BY r.created_at DESC LIMIT $2""", uid, limit)
+
+
+async def set_ban(uid, flag):
+    return await pool.fetchval("UPDATE users SET banned=$2 WHERE id=$1 RETURNING id", uid, flag)
 
 
 async def sup_recent_count(uid):

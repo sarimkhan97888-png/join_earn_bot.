@@ -14,7 +14,7 @@ from urllib.parse import parse_qsl
 
 import qrcode
 from aiohttp import web
-from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as M
+from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as M, WebAppInfo
 from telegram.error import TelegramError
 
 import botwork
@@ -97,6 +97,7 @@ def cfg(request):
             "bw_min_users": config.BW_MIN_USERS, "bw_max_users": config.BW_MAX_USERS,
             "support_url": config.SUPPORT_URL, "bot_username": request.app["bot"].username,
             "withdraw_tax": config.WITHDRAW_TAX_PERCENT, "app_name": config.APP_NAME,
+            "refer_reward": config.REFER_REWARD,
             "auto_payout": bool(config.AUTO_PAYOUT)}
 
 
@@ -104,8 +105,37 @@ def cfg(request):
 _rl = {}
 _rl_gc = [0.0]
 # Device verify ke bina sirf ye endpoints chalte hain (baaki sab server par block)
-OPEN_PATHS = {"/api/me", "/api/verify", "/api/support", "/api/support/send", "/api/wallet", "/api/order",
-              "/api/tasks"}
+OPEN_PATHS = {"/api/me", "/api/verify", "/api/support", "/api/support/send", "/api/support/photo", "/api/wallet",
+              "/api/order", "/api/tasks"}
+_cd = {}
+_giftfail = {}
+
+
+def cooldown(uid, key, secs):
+    """Spam roko: ek user ek action ko `secs` se pehle dobara nahi kar sakta."""
+    t = time.monotonic()
+    k = (uid, key)
+    if t - _cd.get(k, 0) < secs:
+        return False
+    _cd[k] = t
+    if len(_cd) > 30000:  # purane entries memory se hatao
+        for kk in [kk for kk, v in _cd.items() if t - v > 120]:
+            _cd.pop(kk, None)
+    return True
+
+
+def gift_locked(uid):
+    t = time.time()
+    L = [x for x in _giftfail.get(uid, []) if t - x < 3600]
+    _giftfail[uid] = L
+    if len(_giftfail) > 20000:
+        for k in [k for k, v in _giftfail.items() if not v or t - v[-1] > 3600]:
+            _giftfail.pop(k, None)
+    return len(L) >= 5
+
+
+def too_fast():
+    return err("Thoda ruko, bahut tez kar rahe ho.")
 
 
 def rate_ok(uid):
@@ -131,6 +161,12 @@ async def with_device(u, dev, fp):
     u["device_db"] = bool(u["device_ok"])
     u["device_state"] = "none"
     if not u["device_ok"]:
+        # Unverified user: agar ye device kisi AUR Telegram account se bandha hai to block ("other")
+        if u["id"] not in config.ADMIN_IDS and HEX64.match(dev):
+            owner = await db.device_owner(sha(dev))
+            if owner and owner != u["id"]:
+                u["device_state"] = "other"
+                await db.flag_suspect(u["id"])
         return u
     good = False
     if u["id"] in config.ADMIN_IDS:
@@ -142,6 +178,8 @@ async def with_device(u, dev, fp):
         good = await db.rebind_device(u["id"], sha(dev), fp, counted=False)
     u["device_ok"] = good
     u["device_state"] = "ok" if good else "changed"
+    if not good:  # same TG id, alag device: block + suspect flag
+        await db.flag_suspect(u["id"])
     return u
 
 
@@ -177,9 +215,9 @@ async def auth_mw(request, handler):
 @routes.get("/api/me")
 async def api_me(request):
     u = request["u"]
-    blocked = [{"chat_id": r["chat_id"], "title": r["title"], "link": r["link"]} for r in await db.left_chats(u["id"])]
-    hist = [{"kind": r["kind"], "amount": r["amount"], "at": iso(r["created_at"])}
-            for r in await db.recent_ledger(u["id"])]
+    left, led = await asyncio.gather(db.left_chats(u["id"]), db.recent_ledger(u["id"]))
+    blocked = [{"chat_id": r["chat_id"], "title": r["title"], "link": r["link"]} for r in left]
+    hist = [{"kind": r["kind"], "amount": r["amount"], "at": iso(r["created_at"])} for r in led]
     return ok(me=pub(u), blocked=blocked, history=hist, cfg=cfg(request))
 
 
@@ -204,6 +242,8 @@ async def api_check(request):
     tid = to_int((await body(request)).get("id"))
     if not u["device_ok"]:
         return err("🔐 Pehle Profile me device verify karo.")
+    if not cooldown(uid, "check", 1.5):
+        return too_fast()
     if await db.is_blocked(uid):
         return err("🚫 Tum blocked ho. Pehle left channel rejoin karo.")
     t = await db.get_task(tid)
@@ -248,6 +288,8 @@ async def api_wallet(request):
 
 async def make_order(request, kind, coins, amount):
     uid = request["u"]["id"]
+    if not cooldown(uid, "order", 5):
+        return too_fast()
     if await db.pending_orders(uid) >= 5:
         return err("Bahut saare pending orders hain. Thodi der baad try karo.")
     order_id = f"{kind[0].upper()}{uid}{int(time.time() * 1000)}"
@@ -297,6 +339,8 @@ async def api_withdraw(request):
     coins = to_int((await body(request)).get("coins"))
     if not u["device_ok"]:
         return err("🔐 Withdraw ke liye pehle device verify karo.")
+    if not cooldown(uid, "wd", 8):
+        return too_fast()
     if await db.is_blocked(uid):
         return err("🚫 Tum blocked ho. Pehle left channel rejoin karo.")
     if not u["upi"]:
@@ -335,45 +379,166 @@ async def _after_withdraw(bot, u, wid, coins, fee, net, upi, auto):
         log.exception("after_withdraw failed for #%s", wid)
 
 
-# ---------------- profile ----------------
+# ---------------- support (user <-> admin, sab Mini App ke andar) ----------------
+def is_admin(request):
+    return request["u"]["id"] in config.ADMIN_IDS
+
+
+def sniff_mime(b):
+    return "image/png" if b[:4] == b"\x89PNG" else "image/webp" if b[:4] == b"RIFF" else "image/jpeg"
+
+
+async def read_text_photo(request):
+    """JSON {text,...} ya multipart (text, photo, uid). Return (fields dict, photo bytes|None) ya (None, error)."""
+    fields, photo = {}, None
+    if (request.content_type or "").startswith("multipart/"):
+        try:
+            reader = await request.multipart()
+            async for part in reader:
+                if part.name == "photo":
+                    buf = bytearray()
+                    while True:
+                        chunk = await part.read_chunk(65536)
+                        if not chunk:
+                            break
+                        buf += chunk
+                        if len(buf) > 1_500_000:
+                            return None, "Photo 1.5MB se chhoti bhejo."
+                    photo = bytes(buf)
+                else:
+                    fields[part.name] = (await part.text())[:1100]
+        except Exception:
+            return None, "Upload fail hua. Dobara try karo."
+    else:
+        fields = await body(request)
+    if photo is not None and (not photo or not _img_ok(photo)):
+        return None, "Sirf photo (JPG/PNG/WEBP) bhej sakte ho."
+    return fields, photo
+
+
+def msg_json(rows):
+    return [{"id": r["id"], "from": r["sender"], "text": r["text"], "photo": r["has_photo"], "at": iso(r["created_at"])}
+            for r in rows]
+
+
 @routes.get("/api/support")
 async def api_support(request):
-    rows = await db.sup_list(request["u"]["id"])
-    return ok(msgs=[{"from": r["sender"], "text": r["text"], "at": iso(r["created_at"])} for r in rows])
+    return ok(msgs=msg_json(await db.sup_list(request["u"]["id"])))
+
+
+@routes.get("/api/support/photo")
+async def api_support_photo(request):
+    row = await db.sup_file(to_int(request.query.get("id")))
+    if not row or (row["user_id"] != request["u"]["id"] and not is_admin(request)):
+        return web.Response(status=404, text="gone")
+    data = bytes(row["data"])
+    return web.Response(body=data, content_type=sniff_mime(data), headers={"Cache-Control": "private, max-age=86400"})
 
 
 @routes.post("/api/support/send")
 async def api_support_send(request):
     uid = request["u"]["id"]
-    text = str((await body(request)).get("text", "")).strip()[:1000]
-    if not text:
+    if not cooldown(uid, "sup", 1.5):
+        return too_fast()
+    fields, photo = await read_text_photo(request)
+    if fields is None:
+        return err(photo)
+    text = str(fields.get("text", "")).strip()[:1000]
+    if not text and photo is None:
         return err("Message khali hai.")
     if await db.sup_recent_count(uid) >= 20:
         return err("Bahut zyada messages ho gaye. Thodi der baad likho.")
-    await db.sup_add(uid, "user", text)
-    tg = request["tg"]
-    name = f"@{tg['username']}" if tg.get("username") else (tg.get("first_name") or str(uid))
-    kb = M([[B("💬 Reply", callback_data=f"sup_reply:{uid}")]])
-    for a in config.ADMIN_IDS:
-        try:
-            m = await request.app["bot"].send_message(
-                a, f"🎧 <b>Support</b>\nFrom: {html.escape(name)} (<code>{uid}</code>)\n\n{html.escape(text)}",
-                parse_mode="HTML", reply_markup=kb)
-            await db.sup_notif_add(a, m.message_id, uid)
-        except TelegramError:
-            log.warning("support notify failed for admin %s", a)
+    if photo is not None and await db.sup_recent_photos(uid) >= 5:
+        return err("Ek ghante me 5 photo hi bhej sakte ho.")
+    await db.sup_add(uid, "user", text, photo)
+    # Admin ko sirf ek link-wala notification (message text DM me nahi). Reply Mini App ke andar hota hai.
+    if not await db.sup_notif_recent(uid):
+        tg = request["tg"]
+        name = f"@{tg['username']}" if tg.get("username") else (tg.get("first_name") or str(uid))
+        kb = M([[B("💬 Open chat", web_app=WebAppInfo(url=f"{config.BASE_URL}/app?support={uid}"))]])
+        for a in config.ADMIN_IDS:
+            try:
+                m = await request.app["bot"].send_message(
+                    a, f"🎧 <b>Naya support message</b>\nFrom: {html.escape(name)} (<code>{uid}</code>)\n"
+                       f"Neeche button se chat kholo aur wahin reply do.", parse_mode="HTML", reply_markup=kb)
+                await db.sup_notif_add(a, m.message_id, uid)
+            except TelegramError:
+                log.warning("support notify failed for admin %s", a)
     return ok()
 
 
+@routes.get("/api/admin/support")
+async def api_admin_threads(request):
+    if not is_admin(request):
+        return err("Not allowed")
+    rows = await db.sup_threads()
+    return ok(threads=[{"uid": r["user_id"], "name": ("@" + r["username"]) if r["username"] else (r["first_name"] or str(r["user_id"])),
+                        "last": r["last_text"], "from": r["last_sender"], "at": iso(r["last_at"])} for r in rows])
+
+
+@routes.get("/api/admin/support/chat")
+async def api_admin_chat(request):
+    if not is_admin(request):
+        return err("Not allowed")
+    uid = to_int(request.query.get("uid"))
+    u = await db.get_user(uid)
+    if not u:
+        return err("User nahi mila.")
+    name = ("@" + u["username"]) if u["username"] else (u["first_name"] or str(uid))
+    return ok(msgs=msg_json(await db.sup_list(uid)), name=name, uid=uid)
+
+
+@routes.post("/api/admin/support/reply")
+async def api_admin_reply(request):
+    if not is_admin(request):
+        return err("Not allowed")
+    fields, photo = await read_text_photo(request)
+    if fields is None:
+        return err(photo)
+    uid = to_int(fields.get("uid"))
+    text = str(fields.get("text", "")).strip()[:1000]
+    if not text and photo is None:
+        return err("Message khali hai.")
+    if not await db.get_user(uid):
+        return err("User nahi mila.")
+    await db.sup_add(uid, "admin", text, photo)
+    bot = request.app["bot"]
+    body_txt = html.escape(text) if text else "📷 Photo bheji gayi hai."
+    await util.notify(bot, uid, f"🎧 <b>Support reply</b>\n\n{body_txt}\n\nPoori chat: App → Profile → Customer service")
+    for r in await db.sup_notif_pop(uid):  # reply ho gaya: admin ke saare notification delete
+        try:
+            await bot.delete_message(r["admin_id"], r["msg_id"])
+        except TelegramError:
+            pass
+    return ok()
+
+
+# ---------------- refer ----------------
+@routes.get("/api/refer")
+async def api_refer(request):
+    uid = request["u"]["id"]
+    st, lst = await asyncio.gather(db.ref_stats(uid), db.ref_list(uid))
+    items = [{"name": (r["first_name"] or "User")[:20], "status": r["status"], "at": iso(r["created_at"])} for r in lst]
+    return ok(link=f"https://t.me/{request.app['bot'].username}?start=r{uid}", total=st["total"], done=st["done"],
+              earned=st["done"] * config.REFER_REWARD, reward=config.REFER_REWARD, items=items)
+
+
+# ---------------- profile ----------------
 @routes.post("/api/gift")
 async def api_gift(request):
     u = request["u"]
     code = str((await body(request)).get("code", "")).strip().upper()
     if not u["device_ok"]:
         return err("🔐 Gift code ke liye pehle device verify karo.")
+    if gift_locked(u["id"]):
+        return err("Bahut galat attempts. 1 ghante baad try karo.")
+    if not cooldown(u["id"], "gift", 3):
+        return too_fast()
     if not re.fullmatch(r"[A-Z0-9]{4,20}", code):
         return err("Sahi gift code daalo.")
     res, coins = await db.gift_redeem(u["id"], code)
+    if res == "invalid":
+        _giftfail.setdefault(u["id"], []).append(time.time())
     if res == "ok":
         return ok(msg=f"Gift code redeem hua! +{coins} coins balance me add ho gaye.")
     return err({"invalid": "Ye gift code galat hai.", "used_up": "Is gift code ki limit khatam ho gayi.",
@@ -383,6 +548,8 @@ async def api_gift(request):
 @routes.post("/api/upi")
 async def api_upi(request):
     upi = str((await body(request)).get("upi", "")).strip().lower()
+    if not cooldown(request["u"]["id"], "upi", 3):
+        return too_fast()
     if not UPI_RE.match(upi):
         return err("UPI ID sahi nahi hai (e.g. name@upi).")
     if not await db.set_upi(request["u"]["id"], upi):
@@ -399,16 +566,12 @@ async def api_verify(request):
     dev = str(d.get("dev", ""))
     if u["device_ok"]:
         return ok(msg="Already verified")
+    if not cooldown(u["id"], "verify", 3):
+        return too_fast()
     if not HEX64.match(dev) or not HEX64.match(fp):
         return err("Device check fail hua. App band karke dobara kholo.")
-    if u["device_db"]:  # pehle verified tha, ab naya device / data clear
-        if u["device_changes"] >= config.MAX_DEVICE_CHANGES:
-            return err("Device change ki limit khatam. Customer service se contact karo.")
-        if gmail != (u["gmail"] or ""):
-            return err("Wahi Gmail daalo jo pehle verify kiya tha.")
-        if not await db.rebind_device(u["id"], sha(dev), fp):
-            return err("Ye device kisi aur account se linked hai.")
-        return ok(msg="Naya device verify ho gaya!")
+    if u["device_db"] or u["device_state"] == "other":  # device ya account mismatch: self-service verify nahi, block
+        return err("🚫 Device mismatch. Account block hai, Customer service se contact karo.")
     if not GMAIL_RE.match(gmail):
         return err("Sahi Gmail daalo (@gmail.com).")
     if await db.set_device(u["id"], gmail, sha(dev), fp) != "ok":
@@ -566,6 +729,8 @@ async def api_bw_submit(request):
     bot = request.app["bot"]
     if not u["device_ok"]:
         return err("🔐 Pehle Profile me device verify karo.")
+    if not cooldown(uid, "bw", 10):
+        return too_fast()
     if await db.is_blocked(uid):
         return err("🚫 Tum blocked ho. Pehle left channel rejoin karo.")
     fields, photo = {}, None

@@ -1,6 +1,8 @@
+import hashlib
 import html
 import logging
 import os
+import time
 
 from aiohttp import web
 
@@ -25,13 +27,52 @@ def load_index():
         return f.read().replace("__APP_NAME__", html.escape(config.APP_NAME)).encode("utf-8")
 
 
+FRAME = "frame-ancestors 'self' https://web.telegram.org https://*.telegram.org"
+
+
+@web.middleware
+async def sec_mw(request, handler):
+    """Security headers har response par; API response kabhi cache nahi hoti."""
+    try:
+        resp = await handler(request)
+    except web.HTTPException as e:
+        resp = e
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("Referrer-Policy", "no-referrer")
+    if request.path.startswith("/api/"):
+        resp.headers.setdefault("Cache-Control", "no-store")
+    return resp
+
+
 async def app_page(request):
-    return web.Response(body=request.app["index"], content_type="text/html", charset="utf-8",
-                        headers={"Cache-Control": "no-cache"})
+    body = request.app["index"]
+    etag = request.app["index_etag"]
+    hdr = {"ETag": etag, "Cache-Control": "no-cache", "Content-Security-Policy": FRAME}
+    if request.headers.get("If-None-Match") == etag:  # 304: dobara download nahi, app jaldi khulta hai
+        return web.Response(status=304, headers=hdr)
+    resp = web.Response(body=body, content_type="text/html", charset="utf-8", headers=hdr)
+    resp.enable_compression()
+    return resp
+
+
+_wh = []
+
+
+def webhook_budget():
+    """Webhook par global limit (unauthenticated endpoint ko DB/gateway spam se bachao)."""
+    t = time.monotonic()
+    while _wh and t - _wh[0] > 60:
+        _wh.pop(0)
+    if len(_wh) >= 300:
+        return False
+    _wh.append(t)
+    return True
 
 
 async def gateway_hook(request):
     """Webhook sirf trigger hai. Payload par bharosa nahi: order dhoondh ke gateway ke status API se verify karte hain."""
+    if (request.content_length or 0) > 20_000 or not webhook_budget():
+        return web.Response(text="ok")  # bada / bahut zyada: ignore (gateway retry karega, hum poll bhi karte hain)
     try:
         data = await request.json()
     except Exception:
@@ -52,9 +93,10 @@ async def gateway_hook(request):
 
 
 def make_web(ptb_app):
-    app = web.Application(middlewares=[api.auth_mw], client_max_size=8 * 1024 * 1024)
+    app = web.Application(middlewares=[sec_mw, api.auth_mw], client_max_size=8 * 1024 * 1024)
     app["bot"] = ptb_app.bot
     app["index"] = load_index()
+    app["index_etag"] = '"' + hashlib.sha256(app["index"]).hexdigest()[:20] + '"'
     app.add_routes(api.routes)
     app.router.add_get("/", health)
     app.router.add_get("/health", health)
