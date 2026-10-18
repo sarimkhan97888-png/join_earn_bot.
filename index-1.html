@@ -1,0 +1,768 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>__APP_NAME__</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+:root{
+  --bg:#0a0e16;--card:#131a27;--card2:#1a2334;--line:#233049;--text:#e9eef8;--sub:#8794ac;
+  --acc:#4f8cff;--acc2:#8a5cff;--ok:#2fd39a;--warn:#ffb327;--bad:#ff5c6c;--r:18px;
+}
+[data-theme=light]{--bg:#f3f5fa;--card:#ffffff;--card2:#eef1f8;--line:#dfe5f1;--text:#101828;--sub:#667085}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:15px}
+body{min-height:100vh;padding-bottom:calc(84px + env(safe-area-inset-bottom))}
+.app{max-width:540px;margin:0 auto;padding:14px 16px}
+h2{margin:6px 0 12px;font-size:20px}h3{margin:0 0 6px;font-size:17px}
+p{margin:0 0 10px;color:var(--sub);line-height:1.45}
+.sub{color:var(--sub);font-size:13px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:16px;margin-bottom:12px}
+.row{display:flex;align-items:center;gap:10px}.sp{flex:1;min-width:0}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:14px}
+.mini{background:var(--card2);border-radius:14px;padding:10px 8px;text-align:center}
+.mini b{display:block;font-size:15px}.mini span{font-size:11px;color:var(--sub)}
+.hero{background:linear-gradient(135deg,#1c3b8f,#5b3bd1);border:0;color:#fff}
+.hero .sub{color:#d3dcff}.hero .mini{background:rgba(255,255,255,.14)}.hero .mini span{color:#dbe3ff}
+.big{font-size:34px;font-weight:800;letter-spacing:-.5px;margin:2px 0}
+.banner{display:flex;align-items:center;gap:12px;padding:14px 16px;border-radius:var(--r);margin-bottom:12px;
+  background:linear-gradient(120deg,#ffb327,#ff7a3d);color:#2a1600;cursor:pointer}
+.banner.on{background:linear-gradient(120deg,#1f7a5c,#2fd39a);color:#052a1d}
+.banner b{display:block;font-size:15px}.banner small{opacity:.85}
+.banner .go{margin-left:auto;background:rgba(0,0,0,.18);padding:8px 12px;border-radius:12px;font-weight:700;font-size:13px;white-space:nowrap}
+.warnbox{background:rgba(255,179,39,.12);border:1px solid rgba(255,179,39,.4);color:var(--text)}
+.badbox{background:rgba(255,92,108,.12);border:1px solid rgba(255,92,108,.45)}
+.btn{appearance:none;border:0;border-radius:14px;padding:13px 16px;font-size:15px;font-weight:700;color:#fff;cursor:pointer;
+  background:linear-gradient(135deg,var(--acc),var(--acc2));width:100%}
+.btn.sm{width:auto;padding:9px 14px;font-size:13px;border-radius:12px}
+.btn.ghost{background:var(--card2);color:var(--text)}
+.btn.ok{background:var(--ok);color:#042a1d}.btn.bad{background:var(--bad)}
+.btn:disabled{opacity:.5}.btn:active{transform:scale(.98)}
+.chip{display:inline-block;padding:3px 9px;border-radius:99px;font-size:11px;font-weight:700;background:var(--card2);color:var(--sub)}
+.chip.g{background:rgba(47,211,154,.16);color:var(--ok)}.chip.y{background:rgba(255,179,39,.16);color:var(--warn)}
+.chip.r{background:rgba(255,92,108,.16);color:var(--bad)}.chip.b{background:rgba(79,140,255,.16);color:var(--acc)}
+.item{display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--line)}
+.item:last-child{border-bottom:0}
+.ico{width:42px;height:42px;border-radius:13px;background:var(--card2);display:grid;place-items:center;font-size:19px;flex:none}
+.item b{display:block;font-size:14.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pos{color:var(--ok);font-weight:700}.neg{color:var(--bad);font-weight:700}
+.seg{display:flex;background:var(--card2);border-radius:14px;padding:4px;margin-bottom:12px}
+.seg button{flex:1;border:0;background:none;color:var(--sub);font-weight:700;padding:9px;border-radius:11px;font-size:14px}
+.seg button.on{background:var(--card);color:var(--text);box-shadow:0 1px 6px rgba(0,0,0,.25)}
+input,textarea{width:100%;background:var(--card2);border:1px solid var(--line);color:var(--text);border-radius:13px;padding:13px;font-size:15px;margin:4px 0 8px;outline:none}
+input:focus{border-color:var(--acc)}
+label{font-size:12px;color:var(--sub);font-weight:600}
+.qs{display:flex;gap:8px;margin:2px 0 10px;flex-wrap:wrap}
+.qs button{border:1px solid var(--line);background:var(--card2);color:var(--text);padding:7px 12px;border-radius:99px;font-size:13px}
+.empty{text-align:center;color:var(--sub);padding:26px 10px}
+.empty i{display:block;font-size:34px;font-style:normal;margin-bottom:6px}
+.avatar{width:84px;height:84px;border-radius:50%;margin:0 auto 10px;display:grid;place-items:center;font-size:34px;font-weight:800;
+  background:linear-gradient(135deg,var(--acc),var(--acc2));color:#fff;overflow:hidden}
+.avatar img{width:100%;height:100%;object-fit:cover}
+.kv{display:flex;justify-content:space-between;gap:10px;padding:11px 0;border-bottom:1px solid var(--line)}
+.kv:last-child{border-bottom:0}.kv span{color:var(--sub)}.kv b{text-align:right;word-break:break-all}
+.link{color:var(--acc);font-weight:700;cursor:pointer}
+/* nav */
+nav{position:fixed;left:0;right:0;bottom:0;z-index:20;background:var(--card);border-top:1px solid var(--line);
+  display:flex;padding:6px 6px calc(6px + env(safe-area-inset-bottom))}
+nav button{flex:1;border:0;background:none;color:var(--sub);display:flex;flex-direction:column;align-items:center;gap:3px;
+  font-size:11px;font-weight:700;padding:6px 0;position:relative}
+nav button.on{color:var(--acc)}
+nav svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.dot{position:absolute;top:2px;right:28%;width:9px;height:9px;border-radius:50%;background:var(--bad)}
+/* sheet + modal */
+#sheet{position:fixed;inset:0;z-index:40;display:none}
+#sheet.open{display:block}
+#sheet .bd{position:absolute;inset:0;background:rgba(0,0,0,.55)}
+#sheet .pn{position:absolute;left:0;right:0;bottom:0;max-height:90vh;overflow:auto;background:var(--bg);border-radius:24px 24px 0 0;
+  padding:10px 16px calc(24px + env(safe-area-inset-bottom));max-width:540px;margin:0 auto;animation:up .22s ease}
+#sheet .gr{width:44px;height:5px;border-radius:9px;background:var(--line);margin:4px auto 14px}
+@keyframes up{from{transform:translateY(40px);opacity:0}to{transform:none;opacity:1}}
+#modal{position:fixed;inset:0;z-index:60;background:rgba(0,0,0,.6);display:none;place-items:center;padding:24px}
+#modal.open{display:grid}
+.mbox{background:var(--card);border:1px solid var(--line);border-radius:22px;padding:24px 20px 18px;max-width:340px;width:100%;text-align:center;animation:pop .18s ease}
+.mbox .mic{font-size:42px;margin-bottom:6px}.mbox p{margin-bottom:16px}
+@keyframes pop{from{transform:scale(.9);opacity:0}to{transform:none;opacity:1}}
+#loader{position:fixed;inset:0;z-index:70;background:rgba(0,0,0,.35);display:none;place-items:center}
+#loader.open{display:grid}
+.spin{display:inline-block;width:22px;height:22px;border:3px solid var(--line);border-top-color:var(--acc);border-radius:50%;animation:sp .8s linear infinite;vertical-align:middle}
+@keyframes sp{to{transform:rotate(360deg)}}
+.qr{display:block;width:230px;height:230px;margin:10px auto;border-radius:16px;background:#fff;padding:10px;object-fit:contain}
+.wait{text-align:center;color:var(--sub);margin-top:12px}
+.tabs2{display:flex;gap:6px;margin-bottom:14px}
+.tabs2 button{flex:1;border:1px solid var(--line);background:var(--card);color:var(--sub);padding:9px 4px;border-radius:12px;font-weight:700;font-size:13px}
+.tabs2 button.on{background:var(--acc);border-color:var(--acc);color:#fff}
+.steps{counter-reset:s;padding:0;margin:8px 0 14px;list-style:none}
+.steps li{counter-increment:s;position:relative;padding-left:32px;margin-bottom:9px;color:var(--sub);line-height:1.45}
+.steps li b{color:var(--text)}
+.steps li:before{content:counter(s);position:absolute;left:0;top:0;width:22px;height:22px;border-radius:50%;background:var(--card2);color:var(--text);font-size:12px;font-weight:700;display:grid;place-items:center}
+.sp>b{display:block}.sp>.sub{display:block;margin-top:2px}
+.prev{max-width:100%;max-height:200px;border-radius:12px;margin:6px 0;display:block}
+.cost{background:var(--card2);border-radius:13px;padding:11px 13px;margin:2px 0 12px;font-size:14px}
+#chat{position:fixed;inset:0;z-index:50;background:var(--bg);display:none;flex-direction:column}
+#chat.open{display:flex}
+.ch-h{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line);background:var(--card)}
+.ch-h button{border:0;background:var(--card2);color:var(--text);width:36px;height:36px;border-radius:12px;font-size:22px;line-height:1}
+.ch-h b{font-size:16px}.ch-h span{display:block;font-size:12px;color:var(--sub);font-weight:400}
+#chatBody{flex:1;overflow:auto;padding:14px 14px 6px;max-width:540px;width:100%;margin:0 auto}
+.ch-f{display:flex;gap:8px;padding:10px 12px calc(10px + env(safe-area-inset-bottom));border-top:1px solid var(--line);background:var(--card)}
+.ch-f input{margin:0;flex:1}
+.b{max-width:82%;padding:10px 13px;border-radius:18px;margin:6px 0;line-height:1.4;word-break:break-word;white-space:pre-wrap;width:fit-content}
+.b small{display:block;opacity:.65;font-size:10px;margin-top:4px;white-space:normal}
+.b.me{margin-left:auto;background:linear-gradient(135deg,var(--acc),var(--acc2));color:#fff;border-bottom-right-radius:5px}
+.b.them{background:var(--card2);border-bottom-left-radius:5px}
+
+/* ---- splash / loader / gate ---- */
+#splash{position:fixed;inset:0;z-index:100;display:flex;align-items:center;justify-content:center;overflow:hidden;color:#fff;
+  background:radial-gradient(120% 80% at 50% -10%,#3a4fd6 0%,#1a1f5e 38%,#0a0e16 75%);transition:opacity .5s ease,visibility .5s}
+#splash.hide{opacity:0;visibility:hidden}
+.sp-card{position:relative;z-index:2;text-align:center;padding:0 28px;width:100%;max-width:360px}
+.sp-banner{border-radius:26px;padding:30px 20px 24px;background:linear-gradient(135deg,rgba(255,255,255,.16),rgba(255,255,255,.05));
+  border:1px solid rgba(255,255,255,.22);box-shadow:0 24px 70px rgba(0,0,0,.45);backdrop-filter:blur(8px);animation:rise .7s ease both}
+.coin3d{width:96px;height:96px;margin:0 auto 14px;border-radius:50%;display:grid;place-items:center;font-size:46px;font-weight:800;color:#7a4300;
+  background:radial-gradient(circle at 30% 26%,#fff0b8,#ffc233 52%,#d98200);box-shadow:0 14px 44px rgba(255,179,39,.5),inset 0 -8px 14px rgba(0,0,0,.2);
+  animation:wob 1.7s ease-in-out infinite;position:relative}
+.coin3d:after{content:"";position:absolute;inset:-9px;border-radius:50%;border:2px solid rgba(255,214,102,.55);animation:ringp 1.7s ease-out infinite}
+.sp-brand{font-size:34px;font-weight:800;letter-spacing:.5px;background:linear-gradient(90deg,#fff 20%,#ffe08a 45%,#fff 70%);background-size:220% 100%;
+  -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;animation:shine 2.2s linear infinite}
+.sp-tag{margin:6px 0 18px;font-size:13px;letter-spacing:2px;text-transform:uppercase;color:#cdd6ff}
+.sp-bar{height:5px;border-radius:9px;background:rgba(255,255,255,.18);overflow:hidden}
+.sp-bar i{display:block;height:100%;width:40%;border-radius:9px;background:linear-gradient(90deg,#ffb327,#ffe08a);animation:bar 1.3s ease-in-out infinite}
+.sp-hint{margin-top:12px;font-size:12.5px;color:#cdd6ff;min-height:16px}
+.fc{position:absolute;bottom:-30px;width:14px;height:14px;border-radius:50%;background:radial-gradient(circle at 30% 30%,#fff0b8,#ffb327);opacity:0;animation:floatup 5s linear infinite}
+@keyframes wob{0%,100%{transform:rotateY(-28deg) translateY(0)}50%{transform:rotateY(28deg) translateY(-8px)}}
+@keyframes ringp{0%{transform:scale(.92);opacity:.9}100%{transform:scale(1.35);opacity:0}}
+@keyframes shine{to{background-position:-220% 0}}
+@keyframes bar{0%{margin-left:-40%}100%{margin-left:100%}}
+@keyframes rise{from{transform:translateY(24px);opacity:0}to{transform:none;opacity:1}}
+@keyframes floatup{0%{transform:translateY(0) scale(.6);opacity:0}15%{opacity:.9}100%{transform:translateY(-110vh) scale(1.1);opacity:0}}
+#loader{background:rgba(5,8,15,.55);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px)}
+.lcard{display:flex;flex-direction:column;align-items:center;gap:12px;padding:22px 30px;border-radius:22px;background:var(--card);
+  border:1px solid var(--line);box-shadow:0 20px 60px rgba(0,0,0,.45);animation:pop .18s ease}
+.lcard span{font-size:13px;color:var(--sub);font-weight:600}
+.lring{width:46px;height:46px;border-radius:50%;border:4px solid rgba(79,140,255,.18);border-top-color:var(--acc);border-right-color:var(--acc2);
+  animation:sp .8s linear infinite;position:relative}
+.lring:after{content:"";position:absolute;inset:9px;border-radius:50%;background:radial-gradient(circle at 30% 30%,#fff0b8,#ffb327);animation:pulse 1.2s ease-in-out infinite}
+@keyframes pulse{0%,100%{transform:scale(.7);opacity:.7}50%{transform:scale(1);opacity:1}}
+.gate{text-align:center;padding-top:8px}
+.gate .gi{width:78px;height:78px;border-radius:24px;margin:10px auto 12px;display:grid;place-items:center;font-size:38px;
+  background:linear-gradient(135deg,var(--acc),var(--acc2));box-shadow:0 12px 34px rgba(79,140,255,.35)}
+.gate .steps{text-align:left;max-width:360px;margin:12px auto}
+.banner button.go{border:0;color:inherit;font-family:inherit;cursor:pointer}
+@media (prefers-reduced-motion:reduce){.coin3d,.coin3d:after,.sp-brand,.sp-bar i,.fc,.lring,.lring:after{animation:none}}
+.ch-h .sp b{display:block;font-size:16px}
+.cimg{display:block;max-width:100%;max-height:260px;border-radius:12px;margin-bottom:4px;background:var(--card2);min-width:90px;min-height:60px}
+#chatPrev{display:none;padding:8px 14px;background:var(--card);border-top:1px solid var(--line)}
+#chatPrev.on{display:flex;align-items:center;gap:10px}
+#chatPrev img{height:54px;border-radius:10px}
+.ch-f .btn.sm{flex:none}
+</style>
+</head>
+<body>
+<div id="splash"><i class="fc" style="left:10%;animation-delay:0s"></i><i class="fc" style="left:26%;animation-delay:1.4s"></i><i class="fc" style="left:44%;animation-delay:.6s"></i><i class="fc" style="left:63%;animation-delay:2.2s"></i><i class="fc" style="left:80%;animation-delay:.9s"></i><i class="fc" style="left:92%;animation-delay:1.8s"></i>
+<div class="sp-card"><div class="sp-banner"><div class="coin3d">₹</div><div class="sp-brand">__APP_NAME__</div><div class="sp-tag">Join · Earn · Withdraw</div><div class="sp-bar"><i></i></div><div class="sp-hint" id="spHint">Secure connection...</div></div></div></div>
+<div class="app" id="view"></div>
+<nav id="nav"></nav>
+<div id="sheet"><div class="bd" data-act="closesheet"></div><div class="pn"><div class="gr"></div><div id="sheetBody"></div></div></div>
+<div id="modal"></div>
+<div id="loader"><div class="lcard"><div class="lring"></div><span>Please wait...</span></div></div>
+<div id="chat"><div class="ch-h"><button data-act="chatclose" aria-label="Back">‹</button><div class="sp"><b id="chTitle">Customer service</b><span id="chSub">Apni problem likho, hum reply karenge</span></div></div>
+<div id="chatBody"></div><div id="chatPrev"></div><div class="ch-f" id="chatFoot"><button class="btn sm ghost" data-act="chatpick" aria-label="Photo">📷</button><input id="chatFile" type="file" accept="image/*" hidden><input id="chatIn" placeholder="Apni problem likho..." maxlength="1000" autocomplete="off"><button class="btn sm" data-act="chatsend">Send</button></div></div>
+
+<script>
+const tg = window.Telegram && window.Telegram.WebApp;
+if (tg) { tg.ready(); tg.expand(); try { tg.setHeaderColor('secondary_bg_color'); } catch (e) {} }
+document.documentElement.dataset.theme = (tg && tg.colorScheme === 'light') ? 'light' : 'dark';
+
+const S = { tab: 'home', me: null, cfg: null, blocked: [], hist: [], tasks: null, wallet: null, seg: 'ch', poll: null, studioTab: 'ch' };
+const $ = s => document.querySelector(s);
+/* ---------- sound (WebAudio, koi file nahi) ---------- */
+const Snd = (() => {
+  let ctx = null, on = true;
+  try { on = localStorage.getItem('snd') !== '0'; } catch (e) {}
+  function ac() {
+    try {
+      if (!ctx) { const C = window.AudioContext || window.webkitAudioContext; if (C) ctx = new C(); }
+      if (ctx && ctx.state === 'suspended') ctx.resume();
+    } catch (e) { ctx = null; }
+    return ctx;
+  }
+  function note(c, f, t, dur, vol, type) {
+    const o = c.createOscillator(), g = c.createGain();
+    o.type = type || 'sine'; o.frequency.value = f;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + 0.015);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(c.destination); o.start(t); o.stop(t + dur + 0.05);
+  }
+  return {
+    unlock: ac,
+    isOn: () => on,
+    set(v) { on = v; try { localStorage.setItem('snd', v ? '1' : '0'); } catch (e) {} },
+    ok() { // meetha chime: C5 - E5 - G5, halka bell overtone
+      if (!on) return; const c = ac(); if (!c) return; const t = c.currentTime;
+      [[523.25, 0], [659.25, 0.1], [783.99, 0.2]].forEach(([f, d]) => { note(c, f, t + d, 0.5, 0.13); note(c, f * 2, t + d, 0.3, 0.035); });
+    },
+    bad() { // narm do-note descent, harsh nahi
+      if (!on) return; const c = ac(); if (!c) return; const t = c.currentTime;
+      note(c, 330, t, 0.22, 0.11, 'triangle'); note(c, 247, t + 0.14, 0.3, 0.11, 'triangle');
+    },
+    tap() { if (!on) return; const c = ac(); if (!c) return; note(c, 880, c.currentTime, 0.06, 0.04); }
+  };
+})();
+document.addEventListener('pointerdown', () => Snd.unlock(), { once: true, passive: true });
+
+/* ---------- device token (random, device par bandha) + fingerprint ---------- */
+function tgStore(kind, op, key, val) {
+  return new Promise(res => {
+    try {
+      const s = tg && tg[kind];
+      if (!s || !tg.isVersionAtLeast || !tg.isVersionAtLeast('9.0')) return res(null);
+      const to = setTimeout(() => res(null), 800);
+      const cb = (e, v) => { clearTimeout(to); res(e ? null : (typeof v === 'string' ? v : null)); };
+      if (op === 'get') s.getItem(key, cb); else s.setItem(key, val, cb);
+    } catch (e) { res(null); }
+  });
+}
+async function devToken() {
+  if (S.dev) return S.dev;
+  if (S.devP) return S.devP;
+  S.devP = (async () => {
+    const key = 'dvt1', ok64 = v => v && /^[a-f0-9]{64}$/.test(v);
+    let ls = null; try { ls = localStorage.getItem(key); } catch (e) {}
+    if (ok64(ls)) { // fast path: storage ka wait nahi, background me sync
+      S.dev = ls; tgStore('SecureStorage', 'set', key, ls); tgStore('DeviceStorage', 'set', key, ls); return ls;
+    }
+    const [ss, ds] = await Promise.all([tgStore('SecureStorage', 'get', key), tgStore('DeviceStorage', 'get', key)]);
+    let t = [ss, ds].find(ok64);
+    if (!t) { const a = new Uint8Array(32); crypto.getRandomValues(a); t = [...a].map(v => v.toString(16).padStart(2, '0')).join(''); }
+    try { localStorage.setItem(key, t); } catch (e) {}
+    if (ss !== t) tgStore('SecureStorage', 'set', key, t);
+    if (ds !== t) tgStore('DeviceStorage', 'set', key, t);
+    return (S.dev = t);
+  })();
+  return S.devP;
+}
+async function getFp() { return S.fp || (S.fp = await fingerprint()); }
+
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const fmt = n => Number(n || 0).toLocaleString('en-IN');
+const inr = c => (c / (S.cfg ? S.cfg.coin_per_inr : 100)).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const when = iso => iso ? new Date(iso).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
+const dateOnly = iso => iso ? new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+
+/* ---------- network ---------- */
+async function api(path, data, form) {
+  const opt = { headers: { 'X-Init-Data': (tg && tg.initData) || '', 'X-Device': await devToken(), 'X-Fp': await getFp() } };
+  if (form) { opt.method = 'POST'; opt.body = form; }
+  else if (data !== undefined) { opt.method = 'POST'; opt.headers['Content-Type'] = 'application/json'; opt.body = JSON.stringify(data); }
+  try { const r = await fetch(path, opt); return await r.json(); }
+  catch (e) { return { ok: false, msg: 'Network error. Dobara try karo.' }; }
+}
+async function act(path, data, form) {
+  $('#loader').classList.add('open');
+  const j = await api(path, data, form);
+  $('#loader').classList.remove('open');
+  if (!j.ok) {
+    if (j.code === 'need_verify') { refresh(); return j; }
+    await popup('error', 'Oops', j.msg || 'Kuch galat ho gaya');
+  }
+  return j;
+}
+
+/* ---------- popup / sheet ---------- */
+function popup(kind, title, msg) {
+  return new Promise(res => {
+    const m = $('#modal');
+    const icon = { ok: '✅', error: '⚠️', info: 'ℹ️' }[kind] || 'ℹ️';
+    const clean = String(msg || '').replace(/^[✅❌⏳🚫🔐⚠️ℹ️\s]+/u, '');
+    m.innerHTML = `<div class="mbox"><div class="mic">${icon}</div><h3>${esc(title)}</h3><p>${esc(clean)}</p><button class="btn ${kind === 'error' ? 'ghost' : ''}" id="mok">OK</button></div>`;
+    m.classList.add('open');
+    $('#mok').onclick = () => { m.classList.remove('open'); res(); };
+    try { tg && tg.HapticFeedback.notificationOccurred(kind === 'ok' ? 'success' : kind === 'error' ? 'error' : 'warning'); } catch (e) {}
+    if (kind === 'ok') Snd.ok(); else if (kind === 'error') Snd.bad();
+  });
+}
+function openSheet(html) { $('#sheetBody').innerHTML = html; $('#sheet').classList.add('open'); document.body.style.overflow = 'hidden'; }
+function closeSheet() { clearInterval(S.poll); $('#sheet').classList.remove('open'); document.body.style.overflow = ''; }
+function openLink(u) {
+  if (!u) return;
+  if (tg && /^https?:\/\/t\.me\//.test(u)) tg.openTelegramLink(u);
+  else if (tg && /^https?:/.test(u)) tg.openLink(u);
+  else window.location.href = u;
+}
+
+/* ---------- icons ---------- */
+const IC = {
+  home: '<svg viewBox="0 0 24 24"><path d="M3 11l9-8 9 8v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>',
+  tasks: '<svg viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11M4 6l1 1 2-2M4 12l1 1 2-2M4 18l1 1 2-2"/></svg>',
+  wallet: '<svg viewBox="0 0 24 24"><path d="M3 8a2 2 0 0 1 2-2h13v3"/><rect x="3" y="8" width="18" height="12" rx="2"/><circle cx="16.5" cy="14" r="1.2"/></svg>',
+  profile: '<svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>'
+};
+function renderNav() {
+  const t = [['home', 'Home'], ['tasks', 'Tasks'], ['wallet', 'Wallet'], ['profile', 'Profile']];
+  $('#nav').innerHTML = t.map(([k, l]) => `<button class="${S.tab === k ? 'on' : ''}" data-act="go" data-tab="${k}">${IC[k]}<span>${l}</span>${k === 'tasks' && S.blocked.length ? '<i class="dot"></i>' : ''}${k === 'profile' && S.me && !S.me.device_ok ? '<i class="dot"></i>' : ''}</button>`).join('');
+}
+
+/* ---------- data ---------- */
+async function loadMe() {
+  const j = await api('/api/me');
+  if (!j.ok) { $('#view').innerHTML = `<div class="card empty"><i>⚠️</i>${esc(j.msg || 'Error')}<br><br><button class="btn" data-act="reload">Retry</button></div>`; return false; }
+  S.me = j.me; S.cfg = j.cfg; S.blocked = j.blocked; S.hist = j.history; return true;
+}
+async function go(tab) {
+  S.tab = tab; renderNav();
+  $('#view').innerHTML = '<div class="empty"><span class="spin"></span></div>';
+  window.scrollTo(0, 0);
+  const extra = tab === 'tasks' ? api('/api/tasks') : tab === 'wallet' ? api('/api/wallet') : Promise.resolve(null);
+  const [okMe, j] = await Promise.all([loadMe(), extra]); // parallel: tab jaldi khulta hai
+  if (!okMe) return;
+  if (!S.me.device_ok && !S.me.admin) { rGate(); return; }
+  if (S.blocked.length && !S.me.admin) { rBlocked(); return; }
+  $('#nav').style.display = '';
+  if (j && j.ok) { if (tab === 'tasks') S.tasks = j; else S.wallet = j; }
+  renderNav(); render();
+}
+async function refresh() { await go(S.tab); }
+function render() { ({ home: rHome, tasks: rTasks, wallet: rWallet, profile: rProfile })[S.tab](); }
+
+/* ---------- HOME ---------- */
+const KIND = {
+  hold: ['⏳', 'Join reward (hold)'], release: ['💰', 'Reward released'], revoke: ['🚫', 'Reward cut (channel left)'],
+  admin_add: ['👑', 'Admin credit'], referral: ['🤝', 'Referral reward'], deposit: ['⬇️', 'Deposit'], premium: ['💎', 'Premium'], withdraw: ['⬆️', 'Withdraw'], withdraw_refund: ['↩️', 'Withdraw refund'],
+  bw_reward: ['🤖', 'Bot work reward'], task_escrow: ['📣', 'Channel task created'], task_refund: ['↩️', 'Task refund'],
+  bw_escrow: ['🤖', 'Bot work created'], bw_refund: ['↩️', 'Bot work refund']
+};
+function deviceWarn() {
+  return S.me.device_ok ? '' : `<div class="card warnbox"><div class="row"><div class="ico">🔐</div><div class="sp"><b>Device verify karo</b><div class="sub">Tasks aur withdraw ke liye zaroori hai</div></div><button class="btn sm" data-act="verify">Verify</button></div></div>`;
+}
+function rHome() {
+  const m = S.me;
+  const banner = m.premium
+    ? `<div class="banner on"><span style="font-size:26px">${m.admin ? '👑' : '💎'}</span><div><b>${m.admin ? 'Admin · unlimited' : 'Premium active'}</b><small>${m.admin ? 'Tasks free, coins nahi katenge' : 'till ' + dateOnly(m.premium_until)}</small></div><button class="go" data-act="studio">➕ Add Task</button></div>`
+    : `<div class="banner" data-act="studio"><span style="font-size:26px">💎</span><div><b>Get Premium · ₹${S.cfg.premium_price}/month</b><small>Apna channel / bot promote karo</small></div><span class="go">Upgrade</span></div>`;
+  const hist = S.hist.length ? S.hist.map(h => {
+    const k = KIND[h.kind] || ['•', h.kind]; const a = Number(h.amount);
+    return `<div class="item"><div class="ico">${k[0]}</div><div class="sp"><b>${k[1]}</b><span class="sub">${when(h.at)}</span></div><span class="${a >= 0 ? 'pos' : 'neg'}">${a >= 0 ? '+' : ''}${fmt(a)}</span></div>`;
+  }).join('') : '<div class="empty"><i>📭</i>Abhi koi record nahi. Tasks se kamana shuru karo!</div>';
+  $('#view').innerHTML = `${banner}
+  <div class="card hero"><div class="sub">Available balance</div><div class="big">${fmt(m.balance)} <span style="font-size:15px;font-weight:600">coins</span></div><div class="sub">≈ ₹${inr(m.balance)}</div>
+  <div class="grid3"><div class="mini"><b>${fmt(m.total_earned)}</b><span>Total earned</span></div><div class="mini"><b>${fmt(m.hold)}</b><span>On hold (${S.cfg.hold_hours}h)</span></div><div class="mini"><b>${fmt(m.ad_balance)}</b><span>Ad balance</span></div></div></div>
+  ${deviceWarn()}
+  <div class="row" style="margin:16px 0 4px"><h3 class="sp">Recent activity</h3></div><div class="card" style="padding:4px 16px">${hist}</div>`;
+}
+
+/* ---------- TASKS ---------- */
+function rTasks() {
+  const T = S.tasks || { channels: [], botworks: [], mine: [] };
+  let h = '<h2>Tasks</h2>' + deviceWarn();
+  if (S.blocked.length) {
+    h += `<div class="card badbox"><b>🚫 Tasks blocked</b><p style="margin:4px 0 10px">Tumne channel leave kiya. In sabko dobara join karo:</p>${S.blocked.map(b => `<div class="item"><div class="ico">📣</div><div class="sp"><b>${esc(b.title)}</b></div><button class="btn sm ghost" data-act="open" data-url="${esc(b.link)}">Join</button></div>`).join('')}<button class="btn" style="margin-top:10px" data-act="rejoin">Re-check</button></div>`;
+  }
+  h += `<div class="seg"><button class="${S.seg === 'ch' ? 'on' : ''}" data-act="seg" data-seg="ch">Channels (${T.channels.length})</button><button class="${S.seg === 'bw' ? 'on' : ''}" data-act="seg" data-seg="bw">Bot Work (${T.botworks.length})</button></div>`;
+  if (S.seg === 'ch') {
+    h += `<p>Channel join karo → <b>Check</b> dabao → <b>+${S.cfg.join_reward} coins</b> (${S.cfg.hold_hours}h hold). Channel leave kiya to coins cut + block.</p>`;
+    h += T.channels.length ? T.channels.map(t => `<div class="card"><div class="row"><div class="ico">📣</div><div class="sp"><b style="font-size:15px">${esc(t.title)}</b><span class="sub">Join & stay</span></div><span class="chip g">+${t.reward}</span></div>
+      <div class="row" style="margin-top:12px"><button class="btn ghost" data-act="open" data-url="${esc(t.link)}">Join</button><button class="btn" data-act="check" data-id="${t.id}">✓ Check</button></div></div>`).join('')
+      : '<div class="card empty"><i>🎯</i>Abhi koi task available nahi.<br>Thodi der baad dekho.</div>';
+  } else {
+    h += `<p>Kisi bot ka kaam karo, screenshot + us bot ka apna refer link submit karo. Owner Done kare to coins seedhe balance me.</p>`;
+    h += T.botworks.length ? T.botworks.map(b => `<div class="card" data-act="bwopen" data-id="${b.id}" style="cursor:pointer"><div class="row"><div class="ico">🤖</div><div class="sp"><b style="font-size:15px">${esc(b.title)}</b><span class="sub">Tap to open</span></div><span class="chip g">+${fmt(b.reward)}</span></div></div>`).join('')
+      : '<div class="card empty"><i>🤖</i>Abhi koi bot work nahi.</div>';
+    if (T.mine.length) {
+      const st = { pending: ['y', 'Pending'], approved: ['g', 'Approved'], rejected: ['r', 'Rejected'], reported: ['b', 'Reported'], closed: ['', 'Closed'] };
+      h += `<h3 style="margin:18px 0 8px">My submissions</h3><div class="card" style="padding:4px 16px">${T.mine.map(m => `<div class="item"><div class="ico">📄</div><div class="sp"><b>${esc(m.title)}</b><span class="sub">+${fmt(m.reward)} coins</span></div>${m.status === 'rejected' ? `<button class="btn sm bad" data-act="report" data-sid="${m.id}">Report</button>` : ''}<span class="chip ${st[m.status][0]}">${st[m.status][1]}</span></div>`).join('')}</div>`;
+    }
+  }
+  $('#view').innerHTML = h;
+}
+
+/* ---------- WALLET ---------- */
+function rWallet() {
+  const m = S.me, W = S.wallet || { orders: [], withdrawals: [] };
+  const st = { paid: ['g', 'Paid'], pending: ['y', 'Pending'], rejected: ['r', 'Rejected'], processing: ['b', 'Processing'], sending: ['b', 'Processing'], failed: ['r', 'Failed'], mismatch: ['r', 'Mismatch'] };
+  const rows = [
+    ...W.withdrawals.map(w => ({ at: w.at, ico: '⬆️', t: 'Withdraw', s: `${fmt(w.coins)} coins → ₹${w.amount} (${w.upi})`, st: w.status })),
+    ...W.orders.map(o => ({ at: o.at, ico: o.kind === 'premium' ? '💎' : '⬇️', t: o.kind === 'premium' ? 'Premium' : 'Deposit', s: `₹${o.amount}${o.coins ? ' · ' + fmt(o.coins) + ' coins' : ''}`, st: o.status }))
+  ].sort((a, b) => new Date(b.at) - new Date(a.at));
+  $('#view').innerHTML = `<h2>Wallet</h2>
+  <div class="card hero"><div class="sub">Earnings (withdrawable)</div><div class="big">${fmt(m.balance)} <span style="font-size:15px;font-weight:600">coins</span></div><div class="sub">≈ ₹${inr(m.balance)} · Hold ${fmt(m.hold)}</div></div>
+  <div class="card"><div class="row"><div class="ico">📣</div><div class="sp"><b>Ad balance</b><span class="sub">Tasks promote karne ke liye</span></div><b>${fmt(m.ad_balance)}</b></div></div>
+  <div class="row" style="margin-bottom:14px"><button class="btn" data-act="deposit">⬇️ Deposit</button><button class="btn ghost" data-act="withdraw">⬆️ Withdraw</button></div>
+  ${deviceWarn()}
+  <h3 style="margin:8px 0">History</h3><div class="card" style="padding:4px 16px">${rows.length ? rows.map(r => { const s = st[r.st] || ['', r.st]; return `<div class="item"><div class="ico">${r.ico}</div><div class="sp"><b>${r.t}</b><span class="sub">${esc(r.s)} · ${when(r.at)}</span></div><span class="chip ${s[0]}">${s[1]}</span></div>`; }).join('') : '<div class="empty"><i>🧾</i>Koi transaction nahi</div>'}</div>`;
+}
+function depositSheet() {
+  const c = S.cfg;
+  openSheet(`<h3>Deposit coins</h3><p>Min ${fmt(c.min_deposit)} coins (₹${inr(c.min_deposit)}). Jitne coins, utne hi paise ka QR banega. 100 coins = ₹1</p>
+  <label>Coins</label><input id="dc" type="number" inputmode="numeric" placeholder="${c.min_deposit}" data-inp="dep">
+  <div class="qs">${[2000, 5000, 10000, 50000].map(v => `<button data-act="qa" data-v="${v}">${fmt(v)}</button>`).join('')}</div>
+  <div class="cost" id="dh">Pay: ₹0</div><button class="btn" data-act="depgo">Generate QR</button>`);
+}
+function withdrawSheet() {
+  const m = S.me, c = S.cfg;
+  if (!m.upi) { openSheet(`<h3>UPI set karo</h3><p>Withdraw ke liye pehle apna UPI ID save karo.</p><button class="btn" data-act="upi">Set UPI ID</button>`); return; }
+  openSheet(`<h3>Withdraw</h3><p>Min ${fmt(c.min_withdraw)} coins (₹${inr(c.min_withdraw)}). Balance: <b>${fmt(m.balance)}</b> coins.</p>
+  <div class="cost">UPI: <b>${esc(m.upi)}</b></div>
+  <label>Coins</label><input id="wc" type="number" inputmode="numeric" placeholder="${c.min_withdraw}" data-inp="wd">
+  <div class="qs"><button data-act="wmax">Max</button></div><div class="cost" id="wh">You get: ₹0 (after ${c.withdraw_tax}% tax)</div>
+  <button class="btn" data-act="wdgo">Withdraw</button>`);
+}
+function showQR(o, kind) {
+  openSheet(`<h3 style="text-align:center">Pay ₹${o.amount}</h3>${o.qr ? `<img class="qr" src="${esc(o.qr)}" alt="QR">` : ''}
+  <p style="text-align:center">Kisi bhi UPI app se scan karke pay karo.<br><span class="sub">Order ${esc(o.order_id)}</span></p>
+  ${o.pay_url ? `<button class="btn ghost" data-act="paylink" data-url="${esc(o.pay_url)}">${/^upi:/i.test(o.pay_url) ? 'Open UPI app' : 'Open payment page'}</button>` : ''}
+  <div class="wait"><span class="spin"></span>&nbsp; Payment ka wait...</div>`);
+  S.poll = setInterval(async () => {
+    const j = await api('/api/order?id=' + encodeURIComponent(o.order_id));
+    if (j.status === 'paid') {
+      clearInterval(S.poll); closeSheet();
+      await popup('ok', 'Payment successful', kind === 'premium' ? 'Premium activate ho gaya! Ab Add Task se apna task daalo.' : `${fmt(o.coins)} coins ad balance me add ho gaye.`);
+      await refresh();
+      if (kind === 'premium') studio();
+    } else if (j.status === 'mismatch') {
+      clearInterval(S.poll); closeSheet();
+      await popup('error', 'Payment mismatch', 'Amount match nahi hua. Support se contact karo.');
+    }
+  }, 3000);
+}
+
+/* ---------- PROFILE ---------- */
+function rProfile() {
+  const m = S.me, u = (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) || {};
+  const name = [u.first_name, u.last_name].filter(Boolean).join(' ') || 'User';
+  const av = u.photo_url ? `<img src="${esc(u.photo_url)}" alt="">` : esc(name[0].toUpperCase());
+  $('#view').innerHTML = `<div class="card" style="text-align:center"><div class="avatar">${av}</div><h3>${esc(name)}</h3><div class="sub">${u.username ? '@' + esc(u.username) : 'ID ' + m.id}</div>
+  <div style="margin-top:10px">${m.premium ? '<span class="chip g">💎 Premium</span>' : '<span class="chip">Free user</span>'} ${m.device_ok ? '<span class="chip g">Device verified</span>' : '<span class="chip y">Not verified</span>'}</div></div>
+  ${deviceWarn()}
+  <div class="card"><div class="kv"><span>UPI ID</span><b>${esc(m.upi || '—')}</b></div><div class="kv"><span>Telegram ID</span><b>${m.id}</b></div>${m.premium ? `<div class="kv"><span>Premium till</span><b>${dateOnly(m.premium_until)}</b></div>` : ''}</div>
+  <div class="card" style="padding:4px 16px">
+   <div class="item" data-act="upi" style="cursor:pointer"><div class="ico">⚙️</div><div class="sp"><b>Settings</b><span class="sub">UPI ID set / change</span></div>›</div>
+   <div class="item" data-act="studio" style="cursor:pointer"><div class="ico">💎</div><div class="sp"><b>Premium</b><span class="sub">${m.admin ? 'Admin: unlimited, free tasks' : m.premium ? 'Add task, manage posts' : 'Unlock karne ke liye ₹' + S.cfg.premium_price + '/month'}</span></div>›</div>
+   <div class="item" data-act="sound" style="cursor:pointer"><div class="ico">${Snd.isOn() ? '🔊' : '🔇'}</div><div class="sp"><b>Sound</b><span class="sub">${Snd.isOn() ? 'On' : 'Off'} · tap to change</span></div>›</div>
+   <div class="item" data-act="refer" style="cursor:pointer"><div class="ico">🤝</div><div class="sp"><b>Refer & Earn</b><span class="sub">Dost ka pehla withdraw = +${S.cfg.refer_reward} coins</span></div>›</div>
+   ${m.admin ? '<div class="item" data-act="inbox" style="cursor:pointer"><div class="ico">📥</div><div class="sp"><b>Support inbox</b><span class="sub">Users ke messages, yahin reply</span></div>›</div>' : ''}
+   <div class="item" data-act="gift" style="cursor:pointer"><div class="ico">🎁</div><div class="sp"><b>Gift code</b><span class="sub">Code redeem karke coins pao</span></div>›</div>
+   <div class="item" data-act="rules" style="cursor:pointer"><div class="ico">📜</div><div class="sp"><b>Rules</b><span class="sub">Earning & withdraw rules</span></div>›</div>
+   <div class="item" data-act="support" style="cursor:pointer"><div class="ico">🎧</div><div class="sp"><b>Customer service</b><span class="sub">Apni problem likho, reply milega</span></div>›</div></div>`;
+}
+function rulesSheet() {
+  const c = S.cfg;
+  openSheet(`<h3>Rules</h3><ul class="steps"><li>Channel join karo, Check dabao: +${c.join_reward} coins, ${c.hold_hours} ghante hold me.</li><li>Hold me channel leave kiya to coins cut aur tasks block. Dobara join karne par unblock.</li><li>Min withdraw ${fmt(c.min_withdraw)} coins (100 coins = ₹1). Withdraw par ${c.withdraw_tax}% tax kat-ta hai.</li><li>Ek device, ek UPI = ek account. Fake accounts ban honge.</li><li>Bot Work: reward ${c.bw_min_reward}+ coins, owner approve kare to milta hai. Reject galat ho to Report karo.</li><li>Refer: dost ka pehla withdraw paid hone par +${c.refer_reward} coins.</li><li>Channel leave kiya to poora app block, dobara join karne par chalega.</li></ul><button class="btn ghost" data-act="closesheet">Close</button>`);
+}
+async function fingerprint() {
+  const c = document.createElement('canvas'), x = c.getContext('2d');
+  x.textBaseline = 'top'; x.font = '14px Arial'; x.fillText('devfp-v1', 2, 2);
+  let r = '';
+  try { const gl = document.createElement('canvas').getContext('webgl'); const e = gl && gl.getExtension('WEBGL_debug_renderer_info'); if (e) r = gl.getParameter(e.UNMASKED_RENDERER_WEBGL); } catch (e) {}
+  const s = [c.toDataURL(), r, navigator.hardwareConcurrency, screen.width + 'x' + screen.height, screen.colorDepth, navigator.language, Intl.DateTimeFormat().resolvedOptions().timeZone, navigator.platform].join('|');
+  const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
+  return [...new Uint8Array(b)].map(v => v.toString(16).padStart(2, '0')).join('');
+}
+
+/* ---------- PREMIUM STUDIO ---------- */
+function studio() {
+  const m = S.me, c = S.cfg;
+  if (!m.premium) {
+    openSheet(`<div style="text-align:center;font-size:44px">💎</div><h3 style="text-align:center">Premium · ₹${c.premium_price}/month</h3>
+    <ul class="steps"><li>Apna channel / group promote karo (real users join karte hain)</li><li>Bot Work post karo: apne bot ke refer link pe log kaam karenge</li><li>Min ${c.min_task_members} members, ${c.ad_cost} coins per member</li></ul>
+    <button class="btn" data-act="buyprem">Pay ₹${c.premium_price} (QR)</button>`);
+    return;
+  }
+  const tabs = [['ch', '📣 Channel'], ['bw', '🤖 Bot Work'], ['my', '📊 My posts']];
+  openSheet(`<h3>Premium Studio</h3><div class="cost">${m.admin ? '👑 Admin mode: task free, coins nahi katenge' : `Ad balance: <b>${fmt(m.ad_balance)}</b> coins <span class="link" data-act="deposit" style="float:right">+ Deposit</span>`}</div>
+  <div class="tabs2">${tabs.map(([k, l]) => `<button class="${S.studioTab === k ? 'on' : ''}" data-act="stab" data-t="${k}">${l}</button>`).join('')}</div><div id="stBody"></div>`);
+  stBody();
+}
+async function stBody() {
+  const c = S.cfg, b = $('#stBody'); if (!b) return;
+  if (S.studioTab === 'ch') {
+    b.innerHTML = `<ul class="steps"><li>@${esc(c.bot_username)} ko apne channel/group me <b>Admin</b> banao (Invite Users permission)</li><li>Channel ka @username ya t.me link neeche daalo</li></ul>
+    <label>Channel / Group</label><input id="tch" placeholder="@mychannel" autocapitalize="off"><label>Kitne members chahiye (min ${c.min_task_members})</label><input id="tcn" type="number" inputmode="numeric" placeholder="${c.min_task_members}" data-inp="tcn">
+    <div class="cost" id="tcc">Cost: 0 coins</div><div class="row"><button class="btn ghost" data-act="tprev">Check chat</button><button class="btn" data-act="tcreate">Create task</button></div>`;
+  } else if (S.studioTab === 'bw') {
+    b.innerHTML = `<p>Apne bot ka refer link do. Log kaam karke screenshot bhejenge, tum Telegram me Done/Reject karoge.</p>
+    <label>Bot ka naam</label><input id="bt" maxlength="40" placeholder="XYZ Bot"><label>Tumhara refer link</label><input id="bl" placeholder="https://t.me/xyz_bot?start=123" autocapitalize="off">
+    <label>Reward per user (min ${c.bw_min_reward} coins)</label><input id="br" type="number" inputmode="numeric" placeholder="${c.bw_min_reward}" data-inp="bw"><label>Kitne users</label><input id="bn" type="number" inputmode="numeric" placeholder="10" data-inp="bw">
+    <div class="cost" id="bc">Total cost: 0 coins</div><button class="btn" data-act="bwcreate">Create bot work</button>`;
+  } else {
+    b.innerHTML = '<div class="empty"><span class="spin"></span></div>';
+    const [a, d] = await Promise.all([api('/api/task/my'), api('/api/bw/my')]);
+    const cs = (a.tasks || []).map(t => `<div class="item"><div class="ico">📣</div><div class="sp"><b>${esc(t.title)}</b><span class="sub">${t.joined}/${t.target} joined</span></div>${t.status === 'active' ? `<button class="btn sm ghost" data-act="tcancel" data-id="${t.id}">Cancel</button>` : `<span class="chip">${t.status}</span>`}</div>`).join('');
+    const bs = (d.items || []).map(t => `<div class="item"><div class="ico">🤖</div><div class="sp"><b>${esc(t.title)}</b><span class="sub">${t.reward} coins · done ${t.done}/${t.target} · pending ${t.pending}</span></div>${t.status === 'active' ? `<button class="btn sm ghost" data-act="bcancel" data-id="${t.id}">Cancel</button>` : `<span class="chip">${t.status}</span>`}</div>`).join('');
+    b.innerHTML = `<h3 style="margin:4px 0">Channel tasks</h3>${cs || '<div class="sub" style="margin-bottom:10px">Koi nahi</div>'}<h3 style="margin:14px 0 4px">Bot works</h3>${bs || '<div class="sub">Koi nahi</div>'}`;
+  }
+}
+
+/* ---------- BOT WORK detail / submit ---------- */
+function bwOpen(id) {
+  const b = (S.tasks.botworks || []).find(x => x.id == id); if (!b) return;
+  openSheet(`<h3>🤖 ${esc(b.title)}</h3><div class="cost">Reward: <b>+${fmt(b.reward)} coins</b> (₹${inr(b.reward)})</div>
+  <ul class="steps"><li>Neeche button se bot kholo aur start karo</li><li>Uska kaam poora karo</li><li>Screenshot + us bot ka apna refer link yahan submit karo</li></ul>
+  <button class="btn ghost" data-act="open" data-url="${esc(b.link)}" style="margin-bottom:10px">🔗 Open bot</button>
+  <label>Screenshot</label><input id="bf" type="file" accept="image/*" data-inp="file"><img id="bprev" class="prev" style="display:none">
+  <label>Us bot ka tumhara refer link</label><input id="br2" placeholder="https://t.me/bot?start=..." autocapitalize="off">
+  <button class="btn" data-act="bwsubmit" data-id="${b.id}">📤 Submit proof</button>`);
+}
+function compress(file) {
+  return new Promise((res, rej) => {
+    const img = new Image(), u = URL.createObjectURL(file);
+    img.onload = () => {
+      const k = Math.min(1, 1400 / Math.max(img.width, img.height)), c = document.createElement('canvas');
+      c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      c.toBlob(b => { URL.revokeObjectURL(u); b ? res(b) : rej(); }, 'image/jpeg', 0.82);
+    };
+    img.onerror = () => rej(); img.src = u;
+  });
+}
+
+/* ---------- SUPPORT CHAT (user + admin, photo ke saath) ---------- */
+S.chat = { mode: 'user', uid: 0, fromInbox: false }; S.img = {};
+function chatPaths() {
+  return S.chat.mode === 'admin' ? { load: '/api/admin/support/chat?uid=' + S.chat.uid, send: '/api/admin/support/reply' } : { load: '/api/support', send: '/api/support/send' };
+}
+async function chatImg(el) { // photo auth header ke saath fetch -> blob
+  const id = el.dataset.mid;
+  if (S.img[id]) { el.src = S.img[id]; return; }
+  try {
+    const r = await fetch('/api/support/photo?id=' + id, { headers: { 'X-Init-Data': (tg && tg.initData) || '', 'X-Device': await devToken(), 'X-Fp': await getFp() } });
+    if (!r.ok) throw 0;
+    S.img[id] = URL.createObjectURL(await r.blob()); el.src = S.img[id];
+  } catch (e) { const d = document.createElement('div'); d.className = 'sub'; d.textContent = '📷 Photo expired'; el.replaceWith(d); }
+}
+async function chatLoad(force) {
+  if (document.hidden && !force) return;
+  if (S.chat.mode === 'inbox') return inboxLoad(force);
+  const j = await api(chatPaths().load); if (!j.ok) return;
+  const admin = S.chat.mode === 'admin';
+  if (admin) { $('#chTitle').textContent = j.name; $('#chSub').textContent = 'ID ' + j.uid; }
+  const sig = j.msgs.length + ':' + (j.msgs.length ? j.msgs[j.msgs.length - 1].id : 0);
+  if (!force && sig === S.chatSig) return; S.chatSig = sig;
+  const me = admin ? 'admin' : 'user', b = $('#chatBody');
+  b.innerHTML = j.msgs.length ? j.msgs.map(m => `<div class="b ${m.from === me ? 'me' : 'them'}">${m.photo ? `<img class="cimg" data-mid="${m.id}" alt="photo">` : ''}${m.text ? esc(m.text) : ''}<small>${m.from === me ? '' : (admin ? 'User · ' : 'Support · ')}${when(m.at)}</small></div>`).join('')
+    : `<div class="empty"><i>🎧</i>${admin ? 'Abhi koi message nahi.' : 'Apni problem neeche likho (photo bhi bhej sakte ho).<br>Support team jaldi reply karegi.'}</div>`;
+  b.querySelectorAll('img[data-mid]').forEach(chatImg);
+  b.scrollTop = b.scrollHeight;
+}
+async function inboxLoad(force) {
+  const j = await api('/api/admin/support'); if (!j.ok) return;
+  const sig = JSON.stringify(j.threads.map(t => [t.uid, t.at]));
+  if (!force && sig === S.chatSig) return; S.chatSig = sig;
+  $('#chatBody').innerHTML = j.threads.length ? j.threads.map(t => `<div class="item" data-act="adminchat" data-uid="${t.uid}" style="cursor:pointer"><div class="ico">👤</div><div class="sp"><b>${esc(t.name)}</b><span class="sub">${esc(t.last || '')}</span></div>${t.from === 'user' ? '<span class="chip r">Reply</span>' : '<span class="chip g">Done</span>'}</div>`).join('')
+    : '<div class="empty"><i>📭</i>Koi support chat nahi.</div>';
+}
+function showChat(mode, uid, fromInbox) {
+  S.chat = { mode, uid: uid || 0, fromInbox: !!fromInbox }; S.chatSig = ''; chatPrevClear();
+  $('#chat').classList.add('open'); document.body.style.overflow = 'hidden';
+  $('#chatFoot').style.display = mode === 'inbox' ? 'none' : '';
+  $('#chTitle').textContent = mode === 'inbox' ? 'Support inbox' : mode === 'admin' ? 'Chat' : 'Customer service';
+  $('#chSub').textContent = mode === 'user' ? 'Apni problem likho, hum reply karenge' : mode === 'inbox' ? 'Users ke messages' : '';
+  $('#chatBody').innerHTML = '<div class="empty"><span class="spin"></span></div>';
+  clearInterval(S.chatPoll); chatLoad(true); S.chatPoll = setInterval(() => chatLoad(false), 5000);
+}
+function closeChat() { clearInterval(S.chatPoll); $('#chat').classList.remove('open'); document.body.style.overflow = ''; }
+function chatBack() { if (S.chat.mode === 'admin' && S.chat.fromInbox) showChat('inbox'); else closeChat(); }
+function chatPrevClear() {
+  S.chatPhoto = null; const pv = $('#chatPrev'); if (pv) { pv.innerHTML = ''; pv.classList.remove('on'); }
+  const f = $('#chatFile'); if (f) f.value = '';
+}
+async function chatPicked(f) {
+  let blob; try { blob = await compress(f); } catch (e) { return popup('error', 'Image error', 'Ye image read nahi hui.'); }
+  S.chatPhoto = blob; const pv = $('#chatPrev');
+  pv.innerHTML = `<img src="${URL.createObjectURL(blob)}" alt=""><span class="sub sp">Photo attached</span><button class="btn sm ghost" data-act="chatunpick">✕</button>`; pv.classList.add('on');
+}
+async function chatSend() {
+  if (S.sending) return;
+  const el = $('#chatIn'), t = el.value.trim(), ph = S.chatPhoto; if (!t && !ph) return;
+  S.sending = true; el.value = '';
+  const p = chatPaths(), admin = S.chat.mode === 'admin'; let j;
+  if (ph || admin) {
+    const fd = new FormData(); fd.append('text', t); if (admin) fd.append('uid', S.chat.uid); if (ph) fd.append('photo', ph, 'p.jpg');
+    j = await api(p.send, undefined, fd);
+  } else j = await api(p.send, { text: t });
+  S.sending = false;
+  if (!j.ok) { el.value = t; await popup('error', 'Oops', j.msg || 'Send nahi hua'); return; }
+  chatPrevClear(); chatLoad(true);
+}
+
+/* ---------- REFER ---------- */
+async function referSheet() {
+  const j = await act('/api/refer'); if (!j.ok) return; S.ref = j;
+  const st = { done: ['g', 'Rewarded'], pending: ['y', 'Pehle withdraw ka wait'] };
+  openSheet(`<h3>🤝 Refer & Earn</h3><p>Apna link dost ko bhejo. Wo join karke jab apna <b>pehla withdraw</b> complete kar lega, tumhe <b>+${j.reward} coins</b> milenge.</p>
+  <div class="cost" style="word-break:break-all;user-select:all">${esc(j.link)}</div>
+  <div class="row"><button class="btn ghost" data-act="refcopy">📋 Copy link</button><button class="btn" data-act="refshare">📤 Share</button></div>
+  <div class="grid3"><div class="mini"><b>${fmt(j.total)}</b><span>Invited</span></div><div class="mini"><b>${fmt(j.done)}</b><span>Completed</span></div><div class="mini"><b>${fmt(j.earned)}</b><span>Coins earned</span></div></div>
+  <h3 style="margin:16px 0 4px">Tumhare refer</h3>${j.items.length ? j.items.map(i => `<div class="item"><div class="ico">👤</div><div class="sp"><b>${esc(i.name)}</b><span class="sub">${when(i.at)}</span></div><span class="chip ${(st[i.status] || ['', ''])[0]}">${(st[i.status] || ['', i.status])[1]}</span></div>`).join('') : '<div class="sub">Abhi koi nahi. Link share karo!</div>'}`);
+}
+
+/* ---------- events ---------- */
+const H = {
+  reload: () => location.reload(),
+  go: d => go(d.tab),
+  closesheet: closeSheet,
+  open: d => openLink(d.url),
+  paylink: d => { if (/^https?:/i.test(d.url)) openLink(d.url); else window.location.href = d.url; },
+  seg: d => { S.seg = d.seg; rTasks(); },
+  async check(d) {
+    const j = await act('/api/task/check', { id: +d.id });
+    if (j.ok) { await popup('ok', 'Success', j.msg); refresh(); }
+  },
+  async rejoin() { const j = await act('/api/rejoin', {}); if (j.ok) { await popup('ok', 'Done', j.msg); refresh(); } },
+  bwopen: d => bwOpen(d.id),
+  async report(d) { const j = await act('/api/bw/report', { sid: +d.sid }); if (j.ok) { await popup('ok', 'Reported', j.msg); refresh(); } },
+  deposit: depositSheet, withdraw: withdrawSheet,
+  qa: d => { $('#dc').value = d.v; onInp('dep'); },
+  wmax: () => { $('#wc').value = Math.floor(S.me.balance / 100) * 100; onInp('wd'); },
+  async depgo() {
+    const j = await act('/api/deposit', { coins: +$('#dc').value }); if (j.ok) showQR(j, 'deposit');
+  },
+  async wdgo() {
+    const j = await act('/api/withdraw', { coins: +$('#wc').value });
+    if (j.ok) { closeSheet(); await popup('ok', 'Request sent', j.msg); refresh(); }
+  },
+  async buyprem() { const j = await act('/api/premium/buy', {}); if (j.ok) showQR(j, 'premium'); },
+  studio,
+  stab: d => { S.studioTab = d.t; studio(); },
+  async tprev() {
+    const j = await act('/api/task/preview', { chat: $('#tch').value });
+    if (j.ok) popup('ok', 'Chat verified', `${j.title} — bot admin ✔, tum admin ✔`);
+  },
+  async tcreate() {
+    const j = await act('/api/task/create', { chat: $('#tch').value, count: +$('#tcn').value });
+    if (j.ok) { await popup('ok', 'Task live', j.msg); S.studioTab = 'my'; await loadMe(); studio(); renderNav(); if (S.tab === 'home' || S.tab === 'wallet') render(); }
+  },
+  async bwcreate() {
+    const j = await act('/api/bw/create', { title: $('#bt').value, link: $('#bl').value, reward: +$('#br').value, count: +$('#bn').value });
+    if (j.ok) { await popup('ok', 'Bot work live', j.msg); S.studioTab = 'my'; await loadMe(); studio(); if (S.tab === 'home' || S.tab === 'wallet') render(); }
+  },
+  async tcancel(d) { const j = await act('/api/task/cancel', { id: +d.id }); if (j.ok) { await popup('ok', 'Cancelled', j.msg); await loadMe(); studio(); } },
+  async bcancel(d) { const j = await act('/api/bw/cancel', { id: +d.id }); if (j.ok) { await popup('ok', 'Cancelled', j.msg); await loadMe(); studio(); } },
+  async bwsubmit(d) {
+    const f = $('#bf').files[0];
+    if (!f) return popup('error', 'Screenshot chahiye', 'Pehle screenshot select karo.');
+    let blob; try { blob = await compress(f); } catch (e) { return popup('error', 'Image error', 'Ye image read nahi hui.'); }
+    const fd = new FormData(); fd.append('bid', d.id); fd.append('ref', $('#br2').value); fd.append('photo', blob, 'proof.jpg');
+    const j = await act('/api/bw/submit', undefined, fd);
+    if (j.ok) { closeSheet(); await popup('ok', 'Submitted', j.msg); refresh(); }
+  },
+  upi() {
+    openSheet(`<h3>⚙️ UPI ID</h3><p>Withdraw isi UPI par aayega. Ek UPI sirf ek account se link ho sakta hai.</p>
+    <label>UPI ID</label><input id="ui" placeholder="name@upi" value="${esc(S.me.upi || '')}" autocapitalize="off"><button class="btn" data-act="upigo">Save</button>`);
+  },
+  async upigo() {
+    const j = await act('/api/upi', { upi: $('#ui').value });
+    if (j.ok) { closeSheet(); await popup('ok', 'Saved', j.msg); refresh(); }
+  },
+  verify() {
+    openSheet(`<h3>🔐 Device verification</h3><p>Telegram ID + ye device save honge. Ek device = ek account.</p><button class="btn" data-act="vgo">Verify</button>`);
+  },
+  async vgo() {
+    const j = await act('/api/verify', { fp: await getFp(), dev: await devToken() });
+    if (j.ok) { closeSheet(); await popup('ok', 'Verified', j.msg); refresh(); }
+  },
+  gift() {
+    openSheet(`<h3>🎁 Gift code</h3><p>Gift code daalo aur coins seedhe balance me pao.</p>
+    <label>Code</label><input id="gc" placeholder="DIWALI500" autocapitalize="characters" autocomplete="off"><button class="btn" data-act="giftgo">Redeem</button>`);
+  },
+  async giftgo() {
+    const j = await act('/api/gift', { code: $('#gc').value });
+    if (j.ok) { closeSheet(); await popup('ok', 'Gift redeemed', j.msg); refresh(); }
+  },
+  rules: rulesSheet,
+  sound() { Snd.set(!Snd.isOn()); if (Snd.isOn()) Snd.ok(); rProfile(); },
+  support: () => showChat('user'),
+  refer: referSheet,
+  async refcopy() {
+    const l = S.ref.link; let ok = false;
+    try { await navigator.clipboard.writeText(l); ok = true; } catch (e) { const t = document.createElement('textarea'); t.value = l; document.body.appendChild(t); t.select(); try { ok = document.execCommand('copy'); } catch (e2) {} t.remove(); }
+    popup(ok ? 'ok' : 'info', ok ? 'Copied' : 'Copy nahi hua', ok ? 'Link copy ho gaya.' : 'Link ko dabake rakho aur copy karo.');
+  },
+  refshare: () => openLink('https://t.me/share/url?url=' + encodeURIComponent(S.ref.link) + '&text=' + encodeURIComponent('Join karo aur coins kamao 💰')),
+  inbox: () => showChat('inbox'),
+  adminchat: d => showChat('admin', +d.uid, true),
+  chatclose: chatBack,
+  chatsend: chatSend,
+  chatpick: () => $('#chatFile').click(),
+  chatunpick: chatPrevClear
+};
+function onInp(k) {
+  const c = S.cfg;
+  if (k === 'dep') { const v = +$('#dc').value || 0; $('#dh').innerHTML = `Pay: <b>₹${(v / c.coin_per_inr).toLocaleString('en-IN')}</b>`; }
+  if (k === 'wd') { const v = +$('#wc').value || 0; $('#wh').innerHTML = `You get: <b>₹${(v * (100 - c.withdraw_tax) / 100 / c.coin_per_inr).toLocaleString('en-IN', { maximumFractionDigits: 2 })}</b> <span class="sub">(${c.withdraw_tax}% tax kat ke)</span>`; }
+  if (k === 'tcn') { const v = +$('#tcn').value || 0; $('#tcc').innerHTML = S.me.admin ? 'Cost: <b>Free</b> (admin)' : `Cost: <b>${fmt(v * c.ad_cost)}</b> coins (${c.ad_cost} per member)`; }
+  if (k === 'bw') { const v = (+$('#br').value || 0) * (+$('#bn').value || 0); $('#bc').innerHTML = S.me.admin ? 'Total cost: <b>Free</b> (admin)' : `Total cost: <b>${fmt(v)}</b> coins`; }
+}
+document.addEventListener('click', e => {
+  const el = e.target.closest('[data-act]'); if (!el) return;
+  if (H[el.dataset.act]) H[el.dataset.act](el.dataset);
+});
+document.addEventListener('input', e => { const k = e.target.dataset && e.target.dataset.inp; if (k && k !== 'file') onInp(k); });
+document.addEventListener('change', e => {
+  if (e.target.id === 'chatFile' && e.target.files[0]) { chatPicked(e.target.files[0]); return; }
+  if (e.target.dataset && e.target.dataset.inp === 'file' && e.target.files[0]) {
+    const p = $('#bprev'); p.src = URL.createObjectURL(e.target.files[0]); p.style.display = 'block';
+  }
+});
+
+document.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target && e.target.id === 'chatIn') { e.preventDefault(); chatSend(); } });
+
+/* ---------- gate: device verify ke bina app band ---------- */
+function rGate() {
+  $('#nav').style.display = 'none';
+  const ds = S.me.device_state;
+  if (ds === 'changed' || ds === 'other') {
+    $('#view').innerHTML = `<div class="gate"><div class="gi" style="background:linear-gradient(135deg,#ff5c6c,#ff9a5c);box-shadow:0 12px 34px rgba(255,92,108,.35)">🚫</div><h2>Account block</h2>
+    <p>${ds === 'changed' ? 'Ye Telegram account pehle kisi aur device se verify hua tha. Security ke liye ab is device par block hai.' : 'Ye device kisi aur Telegram account se linked hai. Ek device par sirf ek account chalta hai.'}</p>
+    <p>Agar ye galti se hua hai (naya phone / app data clear), to Customer service se contact karo, admin check karke reset kar dega.</p>
+    <p style="margin-top:14px"><span class="link" data-act="support">🎧 Customer service</span></p></div>`;
+    return;
+  }
+  $('#view').innerHTML = `<div class="gate"><div class="gi">🔐</div><h2>Device verification</h2>
+  <p>Fair rehne ke liye ek device par sirf ek account chalta hai. Tumhari Telegram ID (<b>${S.me.id}</b>) aur ye device aapas me bind honge. Aage har baar app kholne par check hoga.</p>
+  <ul class="steps"><li><b>Verify</b> dabao: Telegram ID + device save ho jayenge</li><li>Doosre device ya doosre account se kholne par <b>block</b> ho jayega</li></ul>
+  <button class="btn" data-act="vgo">✅ Verify device</button>
+  <p style="margin-top:14px"><span class="link" data-act="support">🎧 Problem aa rahi hai? Customer service</span></p></div>`;
+}
+
+/* ---------- blocked: channel leave kiya to poora app band ---------- */
+function rBlocked() {
+  $('#nav').style.display = 'none';
+  $('#view').innerHTML = `<div class="gate"><div class="gi" style="background:linear-gradient(135deg,#ff5c6c,#ff9a5c);box-shadow:0 12px 34px rgba(255,92,108,.35)">🚫</div><h2>App block hai</h2>
+  <p>Tumne neeche ke channel leave kar diye hain. Dobara join karo, phir <b>Re-check</b> dabao.</p>
+  <div class="card" style="padding:4px 16px;text-align:left">${S.blocked.map(b => `<div class="item"><div class="ico">📣</div><div class="sp"><b>${esc(b.title)}</b></div>${b.link ? `<button class="btn sm ghost" data-act="open" data-url="${esc(b.link)}">Join</button>` : ''}</div>`).join('')}</div>
+  <button class="btn" data-act="rejoin">✅ Re-check</button>
+  <p style="margin-top:14px"><span class="link" data-act="support">🎧 Customer service</span></p></div>`;
+}
+
+/* ---------- splash ---------- */
+const HINTS = ['Secure connection...', 'Wallet load ho raha hai...', 'Tasks ready ho rahe hain...'];
+let hi = 0; const hint = setInterval(() => { const e = $('#spHint'); if (e) e.textContent = HINTS[++hi % HINTS.length]; }, 750);
+function hideSplash() { clearInterval(hint); const s = $('#splash'); if (!s) return; s.classList.add('hide'); setTimeout(() => s.remove(), 700); }
+const t0 = Date.now();
+function deepLink() { // admin ko notification ke button se seedha us user ki chat
+  try { const sp = +new URLSearchParams(location.search).get('support'); if (sp && S.me && S.me.admin) { history.replaceState(null, '', location.pathname); showChat('admin', sp, false); } } catch (e) {}
+}
+/* ---------- /verify page: bot ke "Verify Device" button se khulta hai ---------- */
+async function verifyPage() {
+  $('#nav').style.display = 'none';
+  const show = (ok, t, m) => {
+    $('#view').innerHTML = `<div class="gate"><div class="gi"${ok ? '' : ' style="background:linear-gradient(135deg,#ff5c6c,#ff9a5c)"'}>${ok ? '✅' : '🚫'}</div><h2>${t}</h2><p>${m}</p><button class="btn" data-act="vclose">Bot par wapas jao</button></div>`;
+  };
+  $('#view').innerHTML = '<div class="gate"><div class="gi">🔐</div><h2>Device check ho raha hai...</h2><div class="empty"><span class="spin"></span></div></div>';
+  let j;
+  try { j = await api('/api/verify', { fp: await getFp(), dev: await devToken() }); } catch (e) { j = { ok: false, msg: 'Network error. Dobara try karo.' }; }
+  if (j.ok) { Snd.ok(); show(true, 'Verification pass!', 'Telegram ID + device save ho gaye. Bot par wapas jao, wahan <b>Open App</b> dabao.'); setTimeout(() => { try { tg.close(); } catch (e) {} }, 2200); }
+  else { Snd.bad(); show(false, 'Verification fail', esc(j.msg || 'Device verify nahi hua.')); }
+}
+H.vclose = () => { try { tg.close(); } catch (e) {} };
+if (location.pathname === '/verify') {
+  verifyPage().finally(() => setTimeout(hideSplash, Math.max(0, 900 - (Date.now() - t0))));
+} else
+go('home').catch(() => {}).finally(() => { setTimeout(hideSplash, Math.max(0, 900 - (Date.now() - t0))); deepLink(); });
+setTimeout(hideSplash, 8000); // network atak bhi jaye to splash na rukey
+</script>
+</body>
+</html>
