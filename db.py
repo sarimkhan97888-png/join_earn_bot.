@@ -132,10 +132,42 @@ CREATE INDEX IF NOT EXISTS users_fp ON users(fp);
 """
 
 
+class RetryPool:
+    """Naye deploy ne table me column joda to purane connections ka cached statement "InvalidCachedStatementError" deta hai.
+    Aisa hone par ek baar dobara try (naya statement prepare hota hai). Baaki sab asli pool jaisa."""
+
+    def __init__(self, p):
+        self._p = p
+
+    def __getattr__(self, name):
+        return getattr(self._p, name)
+
+    def acquire(self, *a, **k):
+        return self._p.acquire(*a, **k)
+
+    async def _call(self, name, a, k):
+        try:
+            return await getattr(self._p, name)(*a, **k)
+        except asyncpg.exceptions.InvalidCachedStatementError:
+            return await getattr(self._p, name)(*a, **k)
+
+    async def fetch(self, *a, **k):
+        return await self._call("fetch", a, k)
+
+    async def fetchrow(self, *a, **k):
+        return await self._call("fetchrow", a, k)
+
+    async def fetchval(self, *a, **k):
+        return await self._call("fetchval", a, k)
+
+    async def execute(self, *a, **k):
+        return await self._call("execute", a, k)
+
+
 async def init():
     global pool
-    pool = await asyncpg.create_pool(config.DATABASE_URL, min_size=2, max_size=config.DB_POOL_MAX,
-                                     command_timeout=30, max_inactive_connection_lifetime=300)
+    pool = RetryPool(await asyncpg.create_pool(config.DATABASE_URL, min_size=2, max_size=config.DB_POOL_MAX,
+                                               command_timeout=30, max_inactive_connection_lifetime=300))
     async with pool.acquire() as c:
         await c.execute("SELECT pg_advisory_lock(727001)")  # 2 instance ek saath boot ho to schema DDL takrao nahi
         try:
