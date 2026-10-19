@@ -358,8 +358,12 @@ async def backup_cmd(update: Update, ctx):
     if not config.BACKUP_BOT_TOKEN:
         return await update.message.reply_text("BACKUP_BOT_TOKEN env set nahi hai.")
     await update.message.reply_text("⏳ Backup bana raha hu... file backup bot se aayegi (usko /start kiya ho).")
-    ok = await extras.send_backup()
-    await update.message.reply_text("✅ Backup bhej diya." if ok else "❌ Nahi gaya. Backup bot ko /start karo aur token check karo.")
+    try:
+        ok = await extras.send_backup()
+    except Exception as e:  # asli wajah user ko dikhao (token galat / DB error)
+        log.exception("backup cmd failed")
+        return await update.message.reply_text(f"❌ Backup error: {html.escape(type(e).__name__)}: {html.escape(str(e))[:300]}")
+    await update.message.reply_text("✅ Backup bhej diya." if ok else "❌ Nahi gaya. Backup bot ko apne account se /start karo, phir dobara /backup bhejo.")
 
 
 async def job_wd_stuck(ctx):
