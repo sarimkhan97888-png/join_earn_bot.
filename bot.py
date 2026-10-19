@@ -1,4 +1,5 @@
 import asyncio
+import datetime
 import html
 import json
 import logging
@@ -13,6 +14,7 @@ from telegram.ext import CallbackQueryHandler, ChatMemberHandler, CommandHandler
 import botwork
 import config
 import db
+import extras
 import gateway
 import payments
 import payouts
@@ -39,21 +41,21 @@ _last_start = {}
 async def start(update: Update, ctx):
     """Har /start par DB se check: banned / leave kiya channel / device verify. Refer link bhi yahin pakadte hain."""
     tu = update.effective_user
+    # /start spam: 1s ke andar ek hi user ke dobara aaye to ignore, par 'pehla' hamesha jawab pata hai
     t = time.monotonic()
-    if t - _last_start.get(tu.id, 0) < 2:  # /start spam roko
+    if t - _last_start.get(tu.id, 0) < 1:
         return
     _last_start[tu.id] = t
     if len(_last_start) > 20000:
         for k in [k for k, v in _last_start.items() if t - v > 60]:
             _last_start.pop(k, None)
-    existed = await db.get_user(tu.id)
-    u = await db.ensure_user(tu)
+    existed, left = await asyncio.gather(db.get_user(tu.id), db.left_chats(tu.id))
+    u = await db.ensure_user(tu)  # (existed pehle: refer sirf bilkul naye user ke liye)
     if u["banned"]:
         return await update.message.reply_text("🚫 Tumhara account banned hai.")
     if not existed and ctx.args and re.fullmatch(r"r\d{1,15}", ctx.args[0]):
         await db.ref_add(tu.id, int(ctx.args[0][1:]))  # sirf bilkul naya user refer ban sakta hai
     app = html.escape(config.APP_NAME)
-    left = await db.left_chats(tu.id)
     if left:
         rows = [[B(f"➕ Join {r['title'][:28]}", url=r["link"])] for r in left if r["link"]]
         rows.append([B("🚀 Open App", web_app=WebAppInfo(url=f"{config.BASE_URL}/app"))])
@@ -65,7 +67,7 @@ async def start(update: Update, ctx):
         await update.message.reply_text(
             f"👋 <b>{app} me welcome!</b>\n\n🔐 Shuru karne se pehle <b>Device Verification</b> zaroori hai "
             f"(ek device = ek account).\nNeeche button dabao, verification page khulega. Pass hone par yahin bot par wapas aa jaoge, phir app khulega.",
-            parse_mode="HTML", reply_markup=M([[B("🔐 Verify Device", web_app=WebAppInfo(url=f"{config.BASE_URL}/verify"))]]))
+            parse_mode="HTML", reply_markup=M([[B("🔐 Verify Device", web_app=WebAppInfo(url=f"{config.BASE_URL}/app?v=1"))]]))
         return
     await update.message.reply_text(
         f"👋 <b>{app}</b>\nChannels join karo, coins kamao aur UPI me withdraw karo 💰\n\n"
@@ -316,6 +318,36 @@ async def job_refs(ctx):
 
 async def job_cleanup(ctx):
     await db.sup_cleanup()
+    await db.ledger_prune()
+
+
+async def job_support_clean(ctx):
+    await db.sup_cleanup()
+
+
+async def ping_cmd(update: Update, ctx):
+    """Admin: DB kitna door/slow hai (ms). 100ms+ ho to DB region Render se door hai."""
+    if update.effective_user.id not in config.ADMIN_IDS:
+        return
+    ts = []
+    for _ in range(3):
+        t = time.monotonic()
+        await db.pool.fetchval("SELECT 1")
+        ts.append((time.monotonic() - t) * 1000)
+    n = await db.pool.fetchval("SELECT count(*) FROM users")
+    await update.message.reply_text(
+        f"🏓 DB ping: {', '.join(f'{x:.0f}ms' for x in ts)}\nUsers: {n}\n"
+        f"(30ms se kam = best, 100ms+ = DB Render ke region se door, app slow lagega)")
+
+
+async def backup_cmd(update: Update, ctx):
+    if update.effective_user.id not in config.ADMIN_IDS:
+        return
+    if not config.BACKUP_BOT_TOKEN:
+        return await update.message.reply_text("BACKUP_BOT_TOKEN env set nahi hai.")
+    await update.message.reply_text("⏳ Backup bana raha hu... file backup bot se aayegi (usko /start kiya ho).")
+    ok = await extras.send_backup()
+    await update.message.reply_text("✅ Backup bhej diya." if ok else "❌ Nahi gaya. Backup bot ko /start karo aur token check karo.")
 
 
 async def job_wd_stuck(ctx):
@@ -340,6 +372,8 @@ async def on_error(update, ctx):
 def register(app):
     app.add_handler(CommandHandler("start", start, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("gift", gift_cmd, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("ping", ping_cmd, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("backup", backup_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("gw", gw_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler(["addbalance", "add_balance", "add"], addbal_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("resetdev", resetdev_cmd, filters=filters.ChatType.PRIVATE))
@@ -356,4 +390,7 @@ def register(app):
     app.job_queue.run_repeating(payouts.job, interval=90, first=100)
     app.job_queue.run_repeating(job_refs, interval=60, first=70)
     app.job_queue.run_repeating(job_cleanup, interval=86400, first=600)
+    app.job_queue.run_repeating(job_support_clean, interval=3600, first=120)
+    app.job_queue.run_repeating(extras.job_bcast, interval=30, first=40)
+    app.job_queue.run_daily(extras.job_backup, time=datetime.time(hour=21, minute=30, tzinfo=datetime.timezone.utc))  # ~3:00 AM IST
     app.job_queue.run_repeating(job_wd_stuck, interval=120, first=45)

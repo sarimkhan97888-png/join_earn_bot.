@@ -6,6 +6,10 @@ BASE_URL = os.environ["BASE_URL"].rstrip("/")  # e.g. https://yourbot.onrender.c
 PORT = int(os.getenv("PORT", "8080"))
 APP_NAME = os.getenv("APP_NAME", "Profitix")      # loading banner / welcome me dikhta hai
 DB_POOL_MAX = int(os.getenv("DB_POOL_MAX", "15"))
+DB_POOL_MIN = int(os.getenv("DB_POOL_MIN", "4"))
+BACKUP_BOT_TOKEN = os.getenv("BACKUP_BOT_TOKEN", "")  # optional: daily data backup is bot se admin ko jata hai
+LEDGER_KEEP = 10            # har user ki transaction history me itni hi entries rakhte hain
+SUPPORT_KEEP_HOURS = 24     # support text/photo/voice itne ghante baad delete
 ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()]
 SUPPORT_URL = os.getenv("SUPPORT_URL", "https://t.me/telegram")
 

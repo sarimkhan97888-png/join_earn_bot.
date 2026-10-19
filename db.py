@@ -119,6 +119,14 @@ ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS last_alert TIMESTAMPTZ;
 ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
 ALTER TABLE bw_subs ADD COLUMN IF NOT EXISTS report_sent BOOLEAN NOT NULL DEFAULT FALSE;
 CREATE INDEX IF NOT EXISTS wd_status_idx ON withdrawals(status, id);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS notify BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS notified BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE tasks ALTER COLUMN notified SET DEFAULT FALSE;
+ALTER TABLE botworks ADD COLUMN IF NOT EXISTS notified BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE botworks ALTER COLUMN notified SET DEFAULT FALSE;
+CREATE TABLE IF NOT EXISTS bcast(
+  id BIGSERIAL PRIMARY KEY, kind TEXT NOT NULL, text TEXT NOT NULL, last_uid BIGINT NOT NULL DEFAULT 0,
+  sent INT NOT NULL DEFAULT 0, done BOOLEAN NOT NULL DEFAULT FALSE, created_at TIMESTAMPTZ NOT NULL DEFAULT now());
 ALTER TABLE support_notifs ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();
 CREATE TABLE IF NOT EXISTS support_files(msg_id BIGINT PRIMARY KEY, data BYTEA NOT NULL);
 CREATE TABLE IF NOT EXISTS support_threads(
@@ -166,8 +174,8 @@ class RetryPool:
 
 async def init():
     global pool
-    pool = RetryPool(await asyncpg.create_pool(config.DATABASE_URL, min_size=2, max_size=config.DB_POOL_MAX,
-                                               command_timeout=30, max_inactive_connection_lifetime=300))
+    pool = RetryPool(await asyncpg.create_pool(config.DATABASE_URL, min_size=config.DB_POOL_MIN, max_size=config.DB_POOL_MAX,
+                                               command_timeout=30, max_inactive_connection_lifetime=1800))
     async with pool.acquire() as c:
         await c.execute("SELECT pg_advisory_lock(727001)")  # 2 instance ek saath boot ho to schema DDL takrao nahi
         try:
@@ -177,7 +185,13 @@ async def init():
 
 
 async def led(c, uid, kind, amount, ref=""):
-    await c.execute("INSERT INTO ledger(user_id,kind,amount,ref) VALUES($1,$2,$3,$4)", uid, kind, amount, str(ref))
+    """Ledger insert + sirf last LEDGER_KEEP entries rakho (purani apne aap delete)."""
+    await c.execute(
+        """WITH ins AS (INSERT INTO ledger(user_id,kind,amount,ref) VALUES($1,$2,$3,$4) RETURNING id)
+           DELETE FROM ledger WHERE user_id=$1 AND id NOT IN
+             (SELECT id FROM (SELECT id FROM ledger WHERE user_id=$1 ORDER BY id DESC LIMIT $5::int - 1) k
+              UNION SELECT id FROM ins)""",
+        uid, kind, amount, str(ref), config.LEDGER_KEEP)
 
 
 # ---------- users ----------
@@ -688,7 +702,7 @@ async def bw_close_expired(hours):
 
 
 # ---------- mini app helpers ----------
-async def recent_ledger(uid, n=15):
+async def recent_ledger(uid, n=10):
     return await pool.fetch(
         "SELECT kind, amount, created_at FROM ledger WHERE user_id=$1 ORDER BY id DESC LIMIT $2", uid, n)
 
@@ -840,10 +854,23 @@ async def sup_notif_recent(uid):
 
 
 async def sup_cleanup():
-    """14 din purani support photo/voice hata do (DB size control)."""
+    """Support text/photo/voice SUPPORT_KEEP_HOURS ke baad delete; purani joins/ledger bhi saaf."""
+    h = config.SUPPORT_KEEP_HOURS
+    await pool.execute("DELETE FROM support_files WHERE msg_id IN (SELECT id FROM support_msgs WHERE created_at < now() - make_interval(hours => $1))", h)
+    await pool.execute("DELETE FROM support_msgs WHERE created_at < now() - make_interval(hours => $1)", h)
+    await pool.execute("DELETE FROM support_threads WHERE last_at < now() - make_interval(hours => $1)", h)
+    await pool.execute("DELETE FROM support_notifs WHERE created_at < now() - interval '2 days'")
+    # joins: jinka completion ban chuka hai unki row ki zaroorat nahi
+    await pool.execute("""DELETE FROM joins j WHERE EXISTS(
+        SELECT 1 FROM completions c WHERE c.user_id=j.user_id AND c.chat_id=j.chat_id)""")
+    await pool.execute("DELETE FROM bcast WHERE done AND created_at < now() - interval '3 days'")
+
+
+async def ledger_prune():
+    """Safety net: kisi user ke LEDGER_KEEP se zyada rows hon to purani hata do."""
     await pool.execute(
-        """DELETE FROM support_files WHERE msg_id IN
-           (SELECT id FROM support_msgs WHERE (has_photo OR has_voice) AND created_at < now() - interval '14 days')""")
+        """DELETE FROM ledger WHERE id IN (SELECT id FROM (SELECT id, row_number() OVER
+           (PARTITION BY user_id ORDER BY id DESC) rn FROM ledger) q WHERE rn > $1)""", config.LEDGER_KEEP)
 
 
 # ---------- referrals ----------
@@ -913,3 +940,45 @@ async def sup_notif_add(admin_id, msg_id, uid):
 async def sup_notif_pop(uid):
     """Is user ke saare admin notifications ki list de aur DB se hata de (delete karne ke liye)."""
     return await pool.fetch("DELETE FROM support_notifs WHERE user_id=$1 RETURNING admin_id, msg_id", uid)
+
+
+# ---------- notifications (naya task/bot work aaya) ----------
+async def bc_enqueue():
+    """Naye (notified=false) tasks / bot works ko EK broadcast me jodo. Return broadcast id ya None."""
+    async with pool.acquire() as c, c.transaction():
+        t = await c.fetch("UPDATE tasks SET notified=TRUE WHERE NOT notified RETURNING id, title, status")
+        b = await c.fetch("UPDATE botworks SET notified=TRUE WHERE NOT notified RETURNING id, title, reward, status")
+        t = [x for x in t if x["status"] == "active"]
+        b = [x for x in b if x["status"] == "active"]
+        if not t and not b:
+            return None
+        parts = []
+        if t:
+            parts.append(f"📢 <b>{len(t)} naya channel task</b>: join karo aur coins kamao!" if len(t) > 1 else
+                         f"📢 <b>Naya channel task</b>: {_esc(t[0]['title'])}\nJoin karo, {config.JOIN_REWARD} coins kamao!")
+        if b:
+            parts.append(f"🤖 <b>{len(b)} naya Bot Work</b> add hua!" if len(b) > 1 else
+                         f"🤖 <b>Naya Bot Work</b>: {_esc(b[0]['title'])}\nReward: {b[0]['reward']} coins")
+        return await c.fetchval("INSERT INTO bcast(kind,text) VALUES('task',$1) RETURNING id", "\n\n".join(parts) + "\n\n👇 App kholo")
+
+
+def _esc(x):
+    import html
+    return html.escape(x or "")
+
+
+async def bc_next():
+    return await pool.fetchrow("SELECT * FROM bcast WHERE NOT done ORDER BY id LIMIT 1")
+
+
+async def bc_users(last_uid, limit=100):
+    return await pool.fetch(
+        "SELECT id FROM users WHERE id>$1 AND notify AND NOT banned ORDER BY id LIMIT $2", last_uid, limit)
+
+
+async def bc_progress(bid, last_uid, sent, done=False):
+    await pool.execute("UPDATE bcast SET last_uid=$2, sent=sent+$3, done=$4 WHERE id=$1", bid, last_uid, sent, done)
+
+
+async def set_notify(uid, on):
+    await pool.execute("UPDATE users SET notify=$2 WHERE id=$1", uid, bool(on))

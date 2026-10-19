@@ -85,7 +85,7 @@ def pub(u):
     return {"id": u["id"], "balance": u["balance"], "hold": u["hold"], "total_earned": u["total_earned"],
             "ad_balance": u["ad_balance"], "premium": util.is_prem(u), "premium_until": iso(u["premium_until"]),
             "gmail": u["gmail"], "upi": u["upi"], "device_ok": u["device_ok"],
-            "device_state": u.get("device_state", "ok"), "admin": u["id"] in config.ADMIN_IDS, "debt": u.get("debt", 0)}
+            "device_state": u.get("device_state", "ok"), "admin": u["id"] in config.ADMIN_IDS, "debt": u.get("debt", 0), "notify": bool(u.get("notify", True))}
 
 
 def cfg(request):
@@ -225,12 +225,10 @@ async def api_me(request):
 @routes.get("/api/tasks")
 async def api_tasks(request):
     uid = request["u"]["id"]
-    ch = [{"id": t["id"], "title": t["title"], "link": t["link"], "reward": config.JOIN_REWARD}
-          for t in await db.open_tasks(uid)]
-    bw = [{"id": b["id"], "title": b["title"], "link": b["link"], "reward": b["reward"]}
-          for b in await db.bw_open(uid)]
-    mine = [{"id": r["id"], "status": r["status"], "title": r["title"], "reward": r["reward"]}
-            for r in await db.bw_mine(uid)]
+    ot, bo, bm = await asyncio.gather(db.open_tasks(uid), db.bw_open(uid), db.bw_mine(uid))
+    ch = [{"id": t["id"], "title": t["title"], "link": t["link"], "reward": config.JOIN_REWARD} for t in ot]
+    bw = [{"id": b["id"], "title": b["title"], "link": b["link"], "reward": b["reward"]} for b in bo]
+    mine = [{"id": r["id"], "status": r["status"], "title": r["title"], "reward": r["reward"]} for r in bm]
     return ok(channels=ch, botworks=bw, mine=mine)
 
 
@@ -281,10 +279,11 @@ async def api_rejoin(request):
 @routes.get("/api/wallet")
 async def api_wallet(request):
     uid = request["u"]["id"]
+    oh, wh = await asyncio.gather(db.order_history(uid), db.wd_history(uid))
     orders = [{"id": r["order_id"], "kind": r["kind"], "coins": r["coins"], "amount": r["amount_inr"],
-               "status": r["status"], "at": iso(r["created_at"])} for r in await db.order_history(uid)]
+               "status": r["status"], "at": iso(r["created_at"])} for r in oh]
     wds = [{"id": r["id"], "coins": r["coins"], "amount": float(r["amount_inr"]), "fee": r["fee_coins"], "upi": r["upi"],
-            "status": r["status"], "at": iso(r["created_at"])} for r in await db.wd_history(uid)]
+            "status": r["status"], "at": iso(r["created_at"])} for r in wh]
     return ok(orders=orders, withdrawals=wds)
 
 
@@ -687,7 +686,15 @@ async def api_task_create(request):
     tid = await db.create_task(u["id"], r["chat_id"], r["title"], r["link"], n, free=admin)
     if not tid:
         return err("Ad balance kam hai. Pehle deposit karo.")
+    asyncio.create_task(util.notify(request.app["bot"], u["id"], f"✅ Tumhara task #{tid} live ho gaya: {html.escape(r['title'] or '')} ({n} members)."))
     return ok(msg=f"Task #{tid} live ho gaya! {r['title']} ke liye {n} members.")
+
+
+@routes.post("/api/notify")
+async def api_notify(request):
+    on = bool((await body(request)).get("on"))
+    await db.set_notify(request["u"]["id"], on)
+    return ok(notify=on, msg="🔔 Notification ON" if on else "🔕 Notification OFF")
 
 
 @routes.get("/api/task/my")
@@ -727,6 +734,7 @@ async def api_bw_create(request):
     bid = await db.bw_create(u["id"], title, link, reward, n, free=u["id"] in config.ADMIN_IDS)
     if not bid:
         return err(f"Ad balance kam hai. Chahiye {reward * n} coins. Wallet se deposit karo.")
+    asyncio.create_task(util.notify(request.app["bot"], u["id"], f"✅ Tumhara Bot Work #{bid} live ho gaya: {html.escape(title)}."))
     return ok(msg=f"Bot work #{bid} live ho gaya!")
 
 

@@ -325,18 +325,23 @@ async function loadMe() {
   if (!j.ok) { $('#view').innerHTML = `<div class="card empty"><i>⚠️</i>${esc(j.msg || 'Error')}<br><br><button class="btn" data-act="reload">Retry</button></div>`; return false; }
   S.me = j.me; S.cfg = j.cfg; S.blocked = j.blocked; S.hist = j.history; return true;
 }
+let goSeq = 0;
 async function go(tab) {
+  const my = ++goSeq, L = $('#loader');
   S.tab = tab; renderNav();
-  $('#view').innerHTML = '<div class="empty"><span class="spin"></span></div>';
   window.scrollTo(0, 0);
-  const extra = tab === 'tasks' ? api('/api/tasks') : tab === 'wallet' ? api('/api/wallet') : Promise.resolve(null);
-  const [okMe, j] = await Promise.all([loadMe(), extra]); // parallel: tab jaldi khulta hai
-  if (!okMe) return;
-  if (!S.me.device_ok && !S.me.admin) { rGate(); return; }
-  if (S.blocked.length && !S.me.admin) { rBlocked(); return; }
-  $('#nav').style.display = '';
-  if (j && j.ok) { if (tab === 'tasks') S.tasks = j; else S.wallet = j; }
-  renderNav(); render();
+  L.classList.add('open'); // baaki sab loading jaisa hi popup loader
+  try {
+    const extra = tab === 'tasks' ? api('/api/tasks') : tab === 'wallet' ? api('/api/wallet') : Promise.resolve(null);
+    const [okMe, j] = await Promise.all([loadMe(), extra]); // parallel: tab jaldi khulta hai
+    if (my !== goSeq) return; // beech me dusra tab khul gaya
+    if (!okMe) return;
+    if (!S.me.device_ok && !S.me.admin) { rGate(); return; }
+    if (S.blocked.length && !S.me.admin) { rBlocked(); return; }
+    $('#nav').style.display = '';
+    if (j && j.ok) { if (tab === 'tasks') S.tasks = j; else S.wallet = j; }
+    renderNav(); render();
+  } finally { if (my === goSeq) L.classList.remove('open'); }
 }
 async function refresh() { await go(S.tab); }
 function render() { ({ home: rHome, tasks: rTasks, wallet: rWallet, profile: rProfile })[S.tab](); }
@@ -455,6 +460,7 @@ function rProfile() {
    <div class="item" data-act="upi" style="cursor:pointer"><div class="ico">⚙️</div><div class="sp"><b>Settings</b><span class="sub">UPI ID set / change</span></div>›</div>
    <div class="item" data-act="studio" style="cursor:pointer"><div class="ico">💎</div><div class="sp"><b>Premium</b><span class="sub">${m.admin ? 'Admin: unlimited, free tasks' : m.premium ? 'Add task, manage posts' : 'Unlock karne ke liye ₹' + S.cfg.premium_price + '/month'}</span></div>›</div>
    <div class="item" data-act="sound" style="cursor:pointer"><div class="ico">${Snd.isOn() ? '🔊' : '🔇'}</div><div class="sp"><b>Sound</b><span class="sub">${Snd.isOn() ? 'On' : 'Off'} · tap to change</span></div>›</div>
+   <div class="item" data-act="notify" style="cursor:pointer"><div class="ico">${m.notify ? '🔔' : '🔕'}</div><div class="sp"><b>Task notification</b><span class="sub">${m.notify ? 'On' : 'Off'} · naya task aane par DM · tap to change</span></div>›</div>
    <div class="item" data-act="refer" style="cursor:pointer"><div class="ico">🤝</div><div class="sp"><b>Refer & Earn</b><span class="sub">Dost ka pehla withdraw = +${S.cfg.refer_reward} coins</span></div>›</div>
    ${m.admin ? '<div class="item" data-act="inbox" style="cursor:pointer"><div class="ico">📥</div><div class="sp"><b>Support inbox</b><span class="sub">Users ke messages, yahin reply</span></div>›</div>' : ''}
    <div class="item" data-act="gift" style="cursor:pointer"><div class="ico">🎁</div><div class="sp"><b>Gift code</b><span class="sub">Code redeem karke coins pao</span></div>›</div>
@@ -630,7 +636,7 @@ async function chatLoad(force) {
   if (!force && sig === S.chatSig) return; S.chatSig = sig;
   const me = admin ? 'admin' : 'user', b = $('#chatBody');
   b.innerHTML = j.msgs.length ? j.msgs.map(m => `<div class="b ${m.from === me ? 'me' : 'them'}">${m.photo ? `<img class="cimg" data-mid="${m.id}" data-act="zoom" alt="photo">` : ''}${m.voice ? `<audio class="vmsg" controls preload="metadata" data-vid="${m.id}"></audio>` : ''}${m.text ? esc(m.text) : ''}<small>${m.from === me ? '' : (admin ? 'User · ' : 'Support · ')}${when(m.at)}</small></div>`).join('')
-    : `<div class="empty"><i>🎧</i>${admin ? 'Abhi koi message nahi.' : 'Apni problem neeche likho (photo bhi bhej sakte ho).<br>Support team jaldi reply karegi.'}</div>`;
+    : `<div class="empty"><i>🎧</i>${admin ? 'Abhi koi message nahi.' : 'Apni problem neeche likho (photo bhi bhej sakte ho).<br>Support team jaldi reply karegi.<br><small>⏱ Chat 24 ghante baad apne aap delete ho jati hai.</small>'}</div>`;
   b.querySelectorAll('img[data-mid]').forEach(chatImg);
   b.querySelectorAll('audio[data-vid]').forEach(chatVoice);
   b.scrollTop = b.scrollHeight;
@@ -761,6 +767,7 @@ const H = {
     if (j.ok) { closeSheet(); await popup('ok', 'Gift redeemed', j.msg); refresh(); }
   },
   rules: rulesSheet,
+  async notify() { const j = await act('/api/notify', { on: !S.me.notify }); if (j.ok) { S.me.notify = j.notify; rProfile(); } },
   sound() { Snd.set(!Snd.isOn()); if (Snd.isOn()) Snd.ok(); rProfile(); },
   support: () => showChat('user'),
   refer: referSheet,
@@ -852,7 +859,7 @@ async function verifyPage() {
   else { Snd.bad(); show(false, 'Verification fail', esc(j.msg || 'Device verify nahi hua.')); }
 }
 H.vclose = () => { try { tg.close(); } catch (e) {} };
-if (location.pathname === '/verify') {
+if (location.pathname === '/verify' || new URLSearchParams(location.search).has('v')) {
   verifyPage().finally(() => setTimeout(hideSplash, Math.max(0, 900 - (Date.now() - t0))));
 } else
 go('home').catch(() => {}).finally(() => { setTimeout(hideSplash, Math.max(0, 900 - (Date.now() - t0))); deepLink(); });

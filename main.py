@@ -17,7 +17,16 @@ for _n in ("httpx", "httpcore"):
 
 async def main():
     await db.init()
-    app = Application.builder().token(config.BOT_TOKEN).concurrent_updates(16).build()
+    try:
+        import time
+        t = time.monotonic()
+        await db.pool.fetchval('SELECT 1')
+        logging.getLogger('main').info('DB ping %.0f ms (30 se kam best, 100+ = DB door hai)', (time.monotonic() - t) * 1000)
+    except Exception:
+        pass
+    app = (Application.builder().token(config.BOT_TOKEN).concurrent_updates(32)
+           .connection_pool_size(64).pool_timeout(10).connect_timeout(10).read_timeout(15).write_timeout(15)
+           .get_updates_connection_pool_size(2).get_updates_read_timeout(30).build())
     bot.register(app)
 
     await app.initialize()
