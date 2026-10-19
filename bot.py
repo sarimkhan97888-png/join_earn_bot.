@@ -75,6 +75,18 @@ async def start(update: Update, ctx):
         parse_mode="HTML", reply_markup=app_kb())
 
 
+async def allowdev_cmd(update: Update, ctx):
+    if update.effective_user.id not in config.ADMIN_IDS:
+        return
+    a = ctx.args
+    if not a or not a[0].lstrip("-").isdigit():
+        return await update.message.reply_text("Usage: /allowdev <user_id>\nSame phone model + same wifi wale asli user ko allow karta hai. Phir /resetdev se uska device reset karke dobara verify karao.")
+    if await db.allow_dev(int(a[0])):
+        await update.message.reply_text(f"✅ User {a[0]} par fingerprint+IP rok hata di. Ab uska device reset karo: /resetdev {a[0]}")
+    else:
+        await update.message.reply_text("User nahi mila.")
+
+
 async def resetdev_cmd(update: Update, ctx):
     if update.effective_user.id not in config.ADMIN_IDS:
         return
@@ -372,6 +384,7 @@ async def on_error(update, ctx):
 def register(app):
     app.add_handler(CommandHandler("start", start, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("gift", gift_cmd, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("allowdev", allowdev_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("ping", ping_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("backup", backup_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("gw", gw_cmd, filters=filters.ChatType.PRIVATE))

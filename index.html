@@ -239,21 +239,39 @@ function tgStore(kind, op, key, val) {
     } catch (e) { res(null); }
   });
 }
+function ckGet(k) { const m = document.cookie.match(new RegExp('(?:^|; )' + k + '=([a-f0-9]{64})')); return m ? m[1] : null; }
+function ckSet(k, v) { try { document.cookie = k + '=' + v + '; max-age=63072000; path=/; SameSite=Lax; Secure'; } catch (e) {} }
+function idbOp(mode, key, val) { // IndexedDB me bhi ek copy (localStorage saaf ho to bhi bachi rahe)
+  return new Promise(res => {
+    try {
+      const rq = indexedDB.open('dvdb', 1);
+      rq.onupgradeneeded = () => rq.result.createObjectStore('k');
+      rq.onerror = () => res(null);
+      rq.onsuccess = () => {
+        try {
+          const tx = rq.result.transaction('k', mode === 'set' ? 'readwrite' : 'readonly'), st = tx.objectStore('k');
+          if (mode === 'set') { st.put(val, key); tx.oncomplete = () => res(true); tx.onerror = () => res(null); }
+          else { const g = st.get(key); g.onsuccess = () => res(g.result || null); g.onerror = () => res(null); }
+        } catch (e) { res(null); }
+      };
+    } catch (e) { res(null); }
+  });
+}
 async function devToken() {
   if (S.dev) return S.dev;
   if (S.devP) return S.devP;
   S.devP = (async () => {
     const key = 'dvt1', ok64 = v => v && /^[a-f0-9]{64}$/.test(v);
     let ls = null; try { ls = localStorage.getItem(key); } catch (e) {}
-    if (ok64(ls)) { // fast path: storage ka wait nahi, background me sync
-      S.dev = ls; tgStore('SecureStorage', 'set', key, ls); tgStore('DeviceStorage', 'set', key, ls); return ls;
-    }
-    const [ss, ds] = await Promise.all([tgStore('SecureStorage', 'get', key), tgStore('DeviceStorage', 'get', key)]);
-    let t = [ss, ds].find(ok64);
+    const sync = t => { // token ko saari jagah likho (jo saaf ho gayi wo wapas bhar jaye)
+      try { localStorage.setItem(key, t); } catch (e) {}
+      ckSet(key, t); idbOp('set', key, t); tgStore('SecureStorage', 'set', key, t); tgStore('DeviceStorage', 'set', key, t);
+    };
+    if (ok64(ls)) { S.dev = ls; sync(ls); return ls; } // fast path
+    const [ss, ds, ix] = await Promise.all([tgStore('SecureStorage', 'get', key), tgStore('DeviceStorage', 'get', key), idbOp('get', key)]);
+    let t = [ckGet(key), ix, ss, ds].find(ok64);
     if (!t) { const a = new Uint8Array(32); crypto.getRandomValues(a); t = [...a].map(v => v.toString(16).padStart(2, '0')).join(''); }
-    try { localStorage.setItem(key, t); } catch (e) {}
-    if (ss !== t) tgStore('SecureStorage', 'set', key, t);
-    if (ds !== t) tgStore('DeviceStorage', 'set', key, t);
+    sync(t);
     return (S.dev = t);
   })();
   return S.devP;

@@ -119,6 +119,8 @@ ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS last_alert TIMESTAMPTZ;
 ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
 ALTER TABLE bw_subs ADD COLUMN IF NOT EXISTS report_sent BOOLEAN NOT NULL DEFAULT FALSE;
 CREATE INDEX IF NOT EXISTS wd_status_idx ON withdrawals(status, id);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS ip TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS fp_ok BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS notify BOOLEAN NOT NULL DEFAULT TRUE;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS notified BOOLEAN NOT NULL DEFAULT TRUE;
 ALTER TABLE tasks ALTER COLUMN notified SET DEFAULT FALSE;
@@ -729,18 +731,27 @@ async def pending_orders(uid):
         uid)
 
 
-async def set_device(uid, dev_hash, fp):
-    """Telegram ID + device bind. Return 'ok' / 'taken' (device kisi aur account se linked).
-    Agar same fingerprint kisi aur verified account ka hai to suspect flag lagta hai (withdraw manual review)."""
+async def set_device(uid, dev_hash, fp, ip=""):
+    """Telegram ID + device bind. Return 'ok' / 'taken'.
+    'taken' = device token kisi aur account ka, YA (STRICT_FP) wahi fingerprint + wahi IP kisi aur verified account ka.
+    Sirf fingerprint match (IP alag) to suspect flag lagta hai (withdraw manual review)."""
     try:
         async with pool.acquire() as c, c.transaction():
-            dup = await c.fetchval("SELECT EXISTS(SELECT 1 FROM users WHERE fp=$1 AND id<>$2 AND device_ok)", fp, uid)
+            me = await c.fetchrow("SELECT fp_ok FROM users WHERE id=$1", uid)
+            dups = await c.fetch("SELECT id, ip FROM users WHERE fp=$1 AND id<>$2 AND device_ok", fp, uid)
+            if config.STRICT_FP and ip and not (me and me["fp_ok"]) and any(d["ip"] == ip for d in dups):
+                return "taken"
             await c.execute(
-                """UPDATE users SET device_hash=$1, fp=$2, device_ok=TRUE, dev_ver=2, suspect=(suspect OR $3)
-                   WHERE id=$4""", dev_hash, fp, bool(dup), uid)
+                """UPDATE users SET device_hash=$1, fp=$2, ip=$5, device_ok=TRUE, dev_ver=2, suspect=(suspect OR $3)
+                   WHERE id=$4""", dev_hash, fp, bool(dups), uid, ip or None)
         return "ok"
     except asyncpg.UniqueViolationError:
         return "taken"
+
+
+async def allow_dev(uid):
+    """Admin: is user par fingerprint+IP wali rok nahi lagegi (jaise ek ghar me same phone model)."""
+    return await pool.fetchval("UPDATE users SET fp_ok=TRUE WHERE id=$1 RETURNING id", uid)
 
 
 async def rebind_device(uid, dev_hash, fp, counted=True):
@@ -764,7 +775,7 @@ async def flag_suspect(uid):
 
 async def reset_device(uid):
     return await pool.fetchval(
-        """UPDATE users SET device_ok=FALSE, device_hash=NULL, gmail=NULL, fp=NULL, device_changes=0,
+        """UPDATE users SET device_ok=FALSE, device_hash=NULL, gmail=NULL, fp=NULL, ip=NULL, device_changes=0,
            suspect=FALSE, dev_ver=2 WHERE id=$1 RETURNING id""", uid)
 
 

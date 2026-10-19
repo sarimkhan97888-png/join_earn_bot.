@@ -211,6 +211,11 @@ async def auth_mw(request, handler):
         return err("⚠️ Server error. Thodi der baad try karo.")
 
 
+def client_ip(request):
+    xf = request.headers.get("X-Forwarded-For", "")
+    return (xf.split(",")[0].strip() if xf else (request.remote or ""))[:64]
+
+
 # ---------------- me / home ----------------
 @routes.get("/api/me")
 async def api_me(request):
@@ -595,7 +600,7 @@ async def api_verify(request):
     if not HEX64.match(dev) or not HEX64.match(fp):
         return err("Device check fail hua. App band karke dobara kholo.")
     bot = request.app["bot"]
-    if u["device_db"] or u["device_state"] == "other" or await db.set_device(u["id"], sha(dev), fp) != "ok":
+    if u["device_db"] or u["device_state"] == "other" or await db.set_device(u["id"], sha(dev), fp, client_ip(request)) != "ok":
         # device/ID mismatch ya device kisi aur account ka: block (self-service verify nahi)
         await db.flag_suspect(u["id"])
         await util.notify(bot, u["id"], "🚫 <b>Device verification fail</b>\nYe device kisi aur account se linked hai "

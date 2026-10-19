@@ -43,3 +43,5 @@ BW_MIN_USERS = 1
 BW_MAX_USERS = 10000
 BW_REVIEW_HOURS = 48        # poster is time tak review na kare to case admin ke paas chala jata hai
 BW_REPORT_HOURS = 48        # reject ke baad itne ghante tak worker report kar sakta hai
+
+STRICT_FP = os.getenv("STRICT_FP", "1") == "1"  # 1 = same fingerprint + same IP wala dusra account verify nahi hoga
