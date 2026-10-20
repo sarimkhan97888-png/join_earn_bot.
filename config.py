@@ -46,3 +46,4 @@ BW_REPORT_HOURS = 48        # reject ke baad itne ghante tak worker report kar s
 
 STRICT_FP = os.getenv("STRICT_FP", "1") == "1"  # 1 = same fingerprint + same IP wala dusra account verify nahi hoga
 MIN_TASKS_FOR_WITHDRAW = int(os.getenv("MIN_TASKS_FOR_WITHDRAW", "2"))  # withdraw se pehle itne task complete hone chahiye (channel join / bot work)
+MIN_TASKS_FOR_REFER = int(os.getenv("MIN_TASKS_FOR_REFER", "2"))  # dost itne task kare tab referrer ko reward

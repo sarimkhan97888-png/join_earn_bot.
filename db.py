@@ -904,7 +904,7 @@ async def ref_add(referred, referrer):
 
 
 async def ref_ready(limit=100):
-    """Refer pending hai aur dost ne MIN_TASKS_FOR_WITHDRAW task poore kar liye hain (channel reward 24h hold se
+    """Refer pending hai aur dost ne MIN_TASKS_FOR_REFER task poore kar liye hain (channel reward 24h hold se
     nikal chuka ho ya bot work approved) aur dost banned nahi hai."""
     return await pool.fetch(
         """SELECT r.referred_id FROM referrals r
@@ -912,7 +912,7 @@ async def ref_ready(limit=100):
            WHERE r.status='pending' AND
              ((SELECT count(*) FROM completions c WHERE c.user_id=r.referred_id AND c.status='ok')
             + (SELECT count(*) FROM bw_subs s WHERE s.worker_id=r.referred_id AND s.status='approved')) >= $2
-           LIMIT $1""", limit, max(1, config.MIN_TASKS_FOR_WITHDRAW))
+           LIMIT $1""", limit, max(1, config.MIN_TASKS_FOR_REFER))
 
 
 async def ref_complete(referred):
