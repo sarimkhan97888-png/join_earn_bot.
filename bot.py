@@ -320,11 +320,11 @@ async def job_orders(ctx):
 
 
 async def job_refs(ctx):
-    """Dost ka pehla withdraw 'paid' hua -> referrer ko coins."""
+    """Dost ke 2 task complete hue -> referrer ko coins."""
     for r in await db.ref_ready():
         rid = await db.ref_complete(r["referred_id"])
         if rid:
-            await util.notify(ctx.bot, rid, f"🎉 <b>Refer complete!</b> Tumhare dost ka pehla withdraw ho gaya. "
+            await util.notify(ctx.bot, rid, f"🎉 <b>Refer complete!</b> Tumhare dost ne apne task complete kar liye. "
                                             f"<b>+{config.REFER_REWARD}</b> coins balance me add.")
 
 

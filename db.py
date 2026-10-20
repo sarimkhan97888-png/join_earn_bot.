@@ -434,6 +434,13 @@ async def complete_order(order_id, paid_amount):
 
 
 # ---------- withdrawals ----------
+async def tasks_done(uid):
+    """Complete hue tasks: channel joins (hold/ok, left nahi) + approved bot works."""
+    return await pool.fetchval(
+        """SELECT (SELECT count(*) FROM completions WHERE user_id=$1 AND status IN ('hold','ok'))
+                + (SELECT count(*) FROM bw_subs WHERE worker_id=$1 AND status='approved')""", uid)
+
+
 async def request_withdraw(uid, coins):
     """Return (wid, upi, fee_coins, net_inr). Tax coins me kat-ta hai, user ko net amount milta hai."""
     fee = coins * config.WITHDRAW_TAX_PERCENT // 100
@@ -897,10 +904,15 @@ async def ref_add(referred, referrer):
 
 
 async def ref_ready(limit=100):
-    """Jin referred users ka koi withdraw 'paid' ho chuka hai aur refer abhi pending hai."""
+    """Refer pending hai aur dost ne MIN_TASKS_FOR_WITHDRAW task poore kar liye hain (channel reward 24h hold se
+    nikal chuka ho ya bot work approved) aur dost banned nahi hai."""
     return await pool.fetch(
-        """SELECT r.referred_id FROM referrals r WHERE r.status='pending' AND EXISTS(
-             SELECT 1 FROM withdrawals w WHERE w.user_id=r.referred_id AND w.status='paid') LIMIT $1""", limit)
+        """SELECT r.referred_id FROM referrals r
+           JOIN users u ON u.id=r.referred_id AND NOT u.banned
+           WHERE r.status='pending' AND
+             ((SELECT count(*) FROM completions c WHERE c.user_id=r.referred_id AND c.status='ok')
+            + (SELECT count(*) FROM bw_subs s WHERE s.worker_id=r.referred_id AND s.status='approved')) >= $2
+           LIMIT $1""", limit, max(1, config.MIN_TASKS_FOR_WITHDRAW))
 
 
 async def ref_complete(referred):

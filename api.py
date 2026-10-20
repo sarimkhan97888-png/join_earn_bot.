@@ -97,7 +97,7 @@ def cfg(request):
             "bw_min_users": config.BW_MIN_USERS, "bw_max_users": config.BW_MAX_USERS,
             "support_url": config.SUPPORT_URL, "bot_username": request.app["bot"].username,
             "withdraw_tax": config.WITHDRAW_TAX_PERCENT, "app_name": config.APP_NAME,
-            "refer_reward": config.REFER_REWARD,
+            "refer_reward": config.REFER_REWARD, "min_tasks": config.MIN_TASKS_FOR_WITHDRAW,
             "auto_payout": bool(config.AUTO_PAYOUT)}
 
 
@@ -354,6 +354,11 @@ async def api_withdraw(request):
     if u.get("debt", 0) > 0:
         return err(f"⚠️ Tumne pehle channel leave kiya tha, {u['debt']} coins ka hisaab baaki hai. "
                    f"Agle channel rewards se ye kat-ta rahega; poora kat-ne ke baad withdraw khulega.")
+    if uid not in config.ADMIN_IDS and config.MIN_TASKS_FOR_WITHDRAW > 0:
+        done = await db.tasks_done(uid)
+        if done < config.MIN_TASKS_FOR_WITHDRAW:
+            return err(f"⚠️ Withdraw ke liye kam se kam {config.MIN_TASKS_FOR_WITHDRAW} task complete karo "
+                       f"(channel join ya bot work). Abhi complete: {done}.")
     if coins < config.MIN_WITHDRAW_COINS or coins % config.COIN_PER_INR or coins > u["balance"]:
         return err(f"Min {config.MIN_WITHDRAW_COINS} coins, 100 ke multiple me, aur max {u['balance']}.")
     r = await db.request_withdraw(uid, coins)

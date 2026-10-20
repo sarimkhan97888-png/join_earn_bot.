@@ -45,3 +45,4 @@ BW_REVIEW_HOURS = 48        # poster is time tak review na kare to case admin ke
 BW_REPORT_HOURS = 48        # reject ke baad itne ghante tak worker report kar sakta hai
 
 STRICT_FP = os.getenv("STRICT_FP", "1") == "1"  # 1 = same fingerprint + same IP wala dusra account verify nahi hoga
+MIN_TASKS_FOR_WITHDRAW = int(os.getenv("MIN_TASKS_FOR_WITHDRAW", "2"))  # withdraw se pehle itne task complete hone chahiye (channel join / bot work)

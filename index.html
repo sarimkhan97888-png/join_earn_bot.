@@ -440,7 +440,7 @@ function depositSheet() {
 function withdrawSheet() {
   const m = S.me, c = S.cfg;
   if (!m.upi) { openSheet(`<h3>UPI set karo</h3><p>Withdraw ke liye pehle apna UPI ID save karo.</p><button class="btn" data-act="upi">Set UPI ID</button>`); return; }
-  openSheet(`<h3>Withdraw</h3><p>Min ${fmt(c.min_withdraw)} coins (₹${inr(c.min_withdraw)}). Balance: <b>${fmt(m.balance)}</b> coins.</p>
+  openSheet(`<h3>Withdraw</h3><p>Min ${fmt(c.min_withdraw)} coins (₹${inr(c.min_withdraw)}) aur kam se kam ${c.min_tasks} task complete. Balance: <b>${fmt(m.balance)}</b> coins.</p>
   <div class="cost">UPI: <b>${esc(m.upi)}</b></div>
   <label>Coins</label><input id="wc" type="number" inputmode="numeric" placeholder="${c.min_withdraw}" data-inp="wd">
   <div class="qs"><button data-act="wmax">Max</button></div><div class="cost" id="wh">You get: ₹0 (after ${c.withdraw_tax}% tax)</div>
@@ -479,7 +479,7 @@ function rProfile() {
    <div class="item" data-act="studio" style="cursor:pointer"><div class="ico">💎</div><div class="sp"><b>Premium</b><span class="sub">${m.admin ? 'Admin: unlimited, free tasks' : m.premium ? 'Add task, manage posts' : 'Unlock karne ke liye ₹' + S.cfg.premium_price + '/month'}</span></div>›</div>
    <div class="item" data-act="sound" style="cursor:pointer"><div class="ico">${Snd.isOn() ? '🔊' : '🔇'}</div><div class="sp"><b>Sound</b><span class="sub">${Snd.isOn() ? 'On' : 'Off'} · tap to change</span></div>›</div>
    <div class="item" data-act="notify" style="cursor:pointer"><div class="ico">${m.notify ? '🔔' : '🔕'}</div><div class="sp"><b>Task notification</b><span class="sub">${m.notify ? 'On' : 'Off'} · naya task aane par DM · tap to change</span></div>›</div>
-   <div class="item" data-act="refer" style="cursor:pointer"><div class="ico">🤝</div><div class="sp"><b>Refer & Earn</b><span class="sub">Dost ka pehla withdraw = +${S.cfg.refer_reward} coins</span></div>›</div>
+   <div class="item" data-act="refer" style="cursor:pointer"><div class="ico">🤝</div><div class="sp"><b>Refer & Earn</b><span class="sub">Dost ke ${S.cfg.min_tasks} task complete = +${S.cfg.refer_reward} coins</span></div>›</div>
    ${m.admin ? '<div class="item" data-act="inbox" style="cursor:pointer"><div class="ico">📥</div><div class="sp"><b>Support inbox</b><span class="sub">Users ke messages, yahin reply</span></div>›</div>' : ''}
    <div class="item" data-act="gift" style="cursor:pointer"><div class="ico">🎁</div><div class="sp"><b>Gift code</b><span class="sub">Code redeem karke coins pao</span></div>›</div>
    <div class="item" data-act="rules" style="cursor:pointer"><div class="ico">📜</div><div class="sp"><b>Rules</b><span class="sub">Earning & withdraw rules</span></div>›</div>
@@ -487,7 +487,7 @@ function rProfile() {
 }
 function rulesSheet() {
   const c = S.cfg;
-  openSheet(`<h3>Rules</h3><ul class="steps"><li>Channel join karo, Check dabao: +${c.join_reward} coins, ${c.hold_hours} ghante hold me.</li><li>Hold me channel leave kiya to coins cut aur tasks block. Dobara join karne par unblock.</li><li>Min withdraw ${fmt(c.min_withdraw)} coins (100 coins = ₹1). Withdraw par ${c.withdraw_tax}% tax kat-ta hai.</li><li>Ek device, ek UPI = ek account. Fake accounts ban honge.</li><li>Bot Work: reward ${c.bw_min_reward}+ coins, owner approve kare to milta hai. Reject galat ho to Report karo.</li><li>Refer: dost ka pehla withdraw paid hone par +${c.refer_reward} coins.</li><li>Channel leave kiya to poora app block, dobara join karne par chalega. Rejoin par sirf 50% coins milte hain (ek baar).</li></ul><button class="btn ghost" data-act="closesheet">Close</button>`);
+  openSheet(`<h3>Rules</h3><ul class="steps"><li>Channel join karo, Check dabao: +${c.join_reward} coins, ${c.hold_hours} ghante hold me.</li><li>Hold me channel leave kiya to coins cut aur tasks block. Dobara join karne par unblock.</li><li>Withdraw ke liye kam se kam ${c.min_tasks} task complete hone chahiye (channel join ya bot work).</li><li>Min withdraw ${fmt(c.min_withdraw)} coins (100 coins = ₹1). Withdraw par ${c.withdraw_tax}% tax kat-ta hai.</li><li>Ek device, ek UPI = ek account. Fake accounts ban honge.</li><li>Bot Work: reward ${c.bw_min_reward}+ coins, owner approve kare to milta hai. Reject galat ho to Report karo.</li><li>Refer: dost ke ${c.min_tasks} task complete hone par (24h hold ke baad) +${c.refer_reward} coins.</li><li>Channel leave kiya to poora app block, dobara join karne par chalega. Rejoin par sirf 50% coins milte hain (ek baar).</li></ul><button class="btn ghost" data-act="closesheet">Close</button>`);
 }
 async function fingerprint() {
   const c = document.createElement('canvas'), x = c.getContext('2d');
@@ -704,7 +704,7 @@ async function chatSend() {
 async function referSheet() {
   const j = await act('/api/refer'); if (!j.ok) return; S.ref = j;
   const st = { done: ['g', 'Rewarded'], pending: ['y', 'Pehle withdraw ka wait'] };
-  openSheet(`<h3>🤝 Refer & Earn</h3><p>Apna link dost ko bhejo. Wo join karke jab apna <b>pehla withdraw</b> complete kar lega, tumhe <b>+${j.reward} coins</b> milenge.</p>
+  openSheet(`<h3>🤝 Refer & Earn</h3><p>Apna link dost ko bhejo. Wo kam se kam <b>${S.cfg.min_tasks} task</b> complete kar lega (24h hold ke baad), tumhe <b>+${j.reward} coins</b> milenge.</p>
   <div class="cost" style="word-break:break-all;user-select:all">${esc(j.link)}</div>
   <div class="row"><button class="btn ghost" data-act="refcopy">📋 Copy link</button><button class="btn" data-act="refshare">📤 Share</button></div>
   <div class="grid3"><div class="mini"><b>${fmt(j.total)}</b><span>Invited</span></div><div class="mini"><b>${fmt(j.done)}</b><span>Completed</span></div><div class="mini"><b>${fmt(j.earned)}</b><span>Coins earned</span></div></div>
