@@ -160,6 +160,10 @@ async def with_device(u, dev, fp):
     u = dict(u)
     u["device_db"] = bool(u["device_ok"])
     u["device_state"] = "none"
+    if u.get("dev_bypass"):  # admin ne is user ko device check se chhoot di hai
+        u["device_ok"] = True
+        u["device_state"] = "ok"
+        return u
     if not u["device_ok"]:
         # Unverified user: agar ye device kisi AUR Telegram account se bandha hai to block ("other")
         if u["id"] not in config.ADMIN_IDS and HEX64.match(dev):

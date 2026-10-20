@@ -75,6 +75,23 @@ async def start(update: Update, ctx):
         parse_mode="HTML", reply_markup=app_kb())
 
 
+async def bypass_cmd(update: Update, ctx):
+    """/bypass <id> : device verification ke bina chalne do. /unbypass <id> : wapas normal."""
+    if update.effective_user.id not in config.ADMIN_IDS:
+        return
+    cmd = (update.message.text or "").split()[0].lstrip("/").split("@")[0].lower()
+    a = ctx.args
+    if not a or not a[0].isdigit():
+        return await update.message.reply_text(f"Usage: /{cmd} <user_id>\n/bypass = device verification ki zaroorat nahi, kisi bhi phone se chalega.\n/unbypass = wapas normal verify.")
+    on = cmd == "bypass"
+    if await db.set_bypass(int(a[0]), on):
+        await update.message.reply_text(f"✅ {a[0]}: device verification {'BYPASS (kisi bhi phone se chalega)' if on else 'wapas normal'}.")
+        if on:
+            await util.notify(ctx.bot, int(a[0]), "✅ Tumhara account verify ho gaya hai. App kholo 👇", reply_markup=app_kb())
+    else:
+        await update.message.reply_text("User nahi mila (pehle usne bot /start kiya ho).")
+
+
 async def allowdev_cmd(update: Update, ctx):
     if update.effective_user.id not in config.ADMIN_IDS:
         return
@@ -388,6 +405,7 @@ async def on_error(update, ctx):
 def register(app):
     app.add_handler(CommandHandler("start", start, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("gift", gift_cmd, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler(["bypass", "unbypass"], bypass_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("allowdev", allowdev_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("ping", ping_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("backup", backup_cmd, filters=filters.ChatType.PRIVATE))

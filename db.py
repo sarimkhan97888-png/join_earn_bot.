@@ -120,6 +120,7 @@ ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL
 ALTER TABLE bw_subs ADD COLUMN IF NOT EXISTS report_sent BOOLEAN NOT NULL DEFAULT FALSE;
 CREATE INDEX IF NOT EXISTS wd_status_idx ON withdrawals(status, id);
 ALTER TABLE users ADD COLUMN IF NOT EXISTS ip TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS dev_bypass BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS fp_ok BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS notify BOOLEAN NOT NULL DEFAULT TRUE;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS notified BOOLEAN NOT NULL DEFAULT TRUE;
@@ -756,6 +757,14 @@ async def set_device(uid, dev_hash, fp, ip=""):
         return "taken"
 
 
+async def set_bypass(uid, on):
+    """Admin: user ko device check se chhoot (koi bhi phone/device chalega). on=False se wapas normal verify."""
+    if on:
+        return await pool.fetchval("UPDATE users SET dev_bypass=TRUE, device_ok=TRUE, suspect=FALSE WHERE id=$1 RETURNING id", uid)
+    return await pool.fetchval(
+        "UPDATE users SET dev_bypass=FALSE, device_ok=(device_hash IS NOT NULL) WHERE id=$1 RETURNING id", uid)
+
+
 async def allow_dev(uid):
     """Admin: is user par fingerprint+IP wali rok nahi lagegi (jaise ek ghar me same phone model)."""
     return await pool.fetchval("UPDATE users SET fp_ok=TRUE WHERE id=$1 RETURNING id", uid)
@@ -782,7 +791,7 @@ async def flag_suspect(uid):
 
 async def reset_device(uid):
     return await pool.fetchval(
-        """UPDATE users SET device_ok=FALSE, device_hash=NULL, gmail=NULL, fp=NULL, ip=NULL, device_changes=0,
+        """UPDATE users SET device_ok=FALSE, device_hash=NULL, gmail=NULL, fp=NULL, ip=NULL, dev_bypass=FALSE, device_changes=0,
            suspect=FALSE, dev_ver=2 WHERE id=$1 RETURNING id""", uid)
 
 
