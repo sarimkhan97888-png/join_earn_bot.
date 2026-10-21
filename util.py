@@ -7,6 +7,7 @@ from telegram.error import RetryAfter, TelegramError
 import config
 
 log = logging.getLogger("util")
+main_bot = None  # main bot object (backup bot ke callbacks me bhi user ko main bot se hi DM jaata hai)
 
 
 def inr(coins):

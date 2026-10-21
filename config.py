@@ -8,6 +8,7 @@ APP_NAME = os.getenv("APP_NAME", "Profitix")      # loading banner / welcome me 
 DB_POOL_MAX = int(os.getenv("DB_POOL_MAX", "15"))
 DB_POOL_MIN = int(os.getenv("DB_POOL_MIN", "4"))
 BACKUP_BOT_TOKEN = os.getenv("BACKUP_BOT_TOKEN", "")  # optional: daily data backup is bot se admin ko jata hai
+ADMIN_FEED = int(os.getenv("ADMIN_FEED", "1"))  # 1 = main bot par har event ki khabar admins ko
 LEDGER_KEEP = 10            # har user ki transaction history me itni hi entries rakhte hain
 SUPPORT_KEEP_HOURS = 24     # support text/photo/voice itne ghante baad delete
 ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()]
@@ -48,3 +49,5 @@ STRICT_FP = os.getenv("STRICT_FP", "1") == "1"  # 1 = same fingerprint + same IP
 MIN_TASKS_FOR_WITHDRAW = int(os.getenv("MIN_TASKS_FOR_WITHDRAW", "2"))  # withdraw se pehle itne task complete hone chahiye (channel join / bot work)
 MIN_TASKS_FOR_REFER = int(os.getenv("MIN_TASKS_FOR_REFER", "2"))  # dost itne task kare tab referrer ko reward
 ORDER_EXPIRY_MIN = int(os.getenv("ORDER_EXPIRY_MIN", "30"))  # itne minute baad unpaid deposit/premium order history me Failed dikhta hai
+WITHDRAW_EXPIRE_HOURS = int(os.getenv("WITHDRAW_EXPIRE_HOURS", "24"))  # pending withdraw itne ghante me approve na ho to expire + refund
+BW_MAX_ATTEMPTS = int(os.getenv("BW_MAX_ATTEMPTS", "2"))  # bot work me ek worker ke kitne try (reject ke baad retry), uske baad lock

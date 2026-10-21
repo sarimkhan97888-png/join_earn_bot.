@@ -4,6 +4,7 @@ import time
 
 import config
 import db
+import extras
 import gateway
 import util
 
@@ -29,6 +30,7 @@ async def settle(bot, o, min_gap=0):
         return "pending"
     if state == "failed":
         await db.order_set_status(o["order_id"], "failed")
+        extras.feed(f"❌ {o['kind']} payment failed (user <code>{o['user_id']}</code>)")
         return "failed"
     if state != "paid":
         return "pending"
@@ -40,6 +42,7 @@ async def settle(bot, o, min_gap=0):
         else:
             msg = f"✅ <b>Premium activated!</b> {config.PREMIUM_DAYS} din ke liye."
         await util.notify(bot, done["user_id"], msg)
+        extras.feed(f"💰 <b>{'Deposit' if done['kind'] == 'deposit' else 'Premium'} paid</b> ₹{float(done['amount_inr'] if 'amount_inr' in done else amt):.2f} (user <code>{done['user_id']}</code>)")
         return "paid"
     row = await db.order_row(o["order_id"])
     return row["status"] if row else "pending"

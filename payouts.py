@@ -12,6 +12,7 @@ import time
 from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as M
 
 import config
+import extras
 import db
 import gateway
 import util
@@ -36,8 +37,16 @@ def eligible(u, net_inr, recent_count):
 
 
 async def alert(bot, text, kb=None, wid=None):
-    for a in config.ADMIN_IDS:
-        await util.notify(bot, a, text, reply_markup=kb)
+    """Buttons wale (approve/reject/mark paid) alerts BACKUP bot se (purana copy delete karke). Baaki info alerts main bot se."""
+    if kb and wid:
+        await extras.bk_delete(wid)
+        try:
+            await db.wd_set_msgs(wid, await extras.bk_send(text, kb))
+        except Exception:
+            log.exception("bk alert failed %s", wid)
+    else:
+        for a in config.ADMIN_IDS:
+            await util.notify(bot, a, text, reply_markup=kb)
     if wid:
         try:
             await db.wd_touch_alert(wid)  # job dobara turant alert na bheje
@@ -83,6 +92,8 @@ async def send(bot, wid):
             await alert(bot, f"🚨 <b>Payout amount mismatch</b> #{wid}\nBheja ₹{float(w['amount_inr']):.2f}, "
                              f"Elite ne receive diya ₹{r['receive']:.2f}.\nAuto payout band kar diya (restart tak). "
                              f"Wallet currency check karo.")
+        await extras.bk_delete(wid)
+        extras.feed(f"⏳ Withdraw #{wid} payout bheja ₹{float(w['amount_inr']):.2f} (user <code>{w['user_id']}</code>)")
         return "processing"
     if r["definite"]:
         await db.wd_move(wid, "sending", "pending")
@@ -127,13 +138,17 @@ async def settle(bot, w, min_gap=0):
         if done:
             await util.notify(bot, w["user_id"],
                               f"✅ Withdraw #{w['id']} paid: ₹{float(w['amount_inr']):.2f} → {w['upi']}")
+            await extras.bk_delete(w["id"])
+            extras.feed(f"✅ Withdraw #{w['id']} <b>paid</b> ₹{float(w['amount_inr']):.2f} (user <code>{w['user_id']}</code>)")
         return "paid"
     if state == "failed":
         done = await db.wd_move_refund(w["id"], "processing", "failed")
         if done:
             await util.notify(bot, w["user_id"],
                               f"❌ Withdraw #{w['id']} fail hua. {done['coins']} coins wapas balance me add ho gaye.")
+            await extras.bk_delete(w["id"])
             await alert(bot, f"ℹ️ Payout #{w['id']} fail hua, user ko refund ho gaya.")
+            extras.feed(f"❌ Withdraw #{w['id']} payout <b>failed</b>, refund (user <code>{w['user_id']}</code>)")
         return "failed"
     return "processing"
 

@@ -20,6 +20,7 @@ from telegram.error import TelegramError
 import botwork
 import config
 import db
+import extras
 import gateway
 import payments
 import payouts
@@ -237,8 +238,11 @@ async def api_tasks(request):
     ot, bo, bm = await asyncio.gather(db.open_tasks(uid), db.bw_open(uid), db.bw_mine(uid))
     ch = [{"id": t["id"], "title": t["title"], "link": t["link"], "reward": config.JOIN_REWARD} for t in ot]
     bw = [{"id": b["id"], "title": b["title"], "link": b["link"], "reward": b["reward"],
-           "instructions": b["instructions"], "needs_dev": b["needs_dev"]} for b in bo]
-    mine = [{"id": r["id"], "status": r["status"], "title": r["title"], "reward": r["reward"]} for r in bm]
+           "instructions": b["instructions"], "needs_dev": b["needs_dev"],
+           "retry": b["my_attempts"] > 0, "my_reason": b["my_reason"]} for b in bo]
+    mine = [{"id": r["id"], "status": r["status"], "title": r["title"], "reward": r["reward"],
+             "reason": r["reject_reason"], "locked": r["status"] == "rejected" and r["attempt"] >= config.BW_MAX_ATTEMPTS}
+            for r in bm]
     return ok(channels=ch, botworks=bw, mine=mine)
 
 
@@ -266,6 +270,7 @@ async def api_check(request):
         return err("❌ Join record nahi mila. Channel leave karke dobara join karo, phir Check dabao.")
     res = await db.claim(tid, uid)
     if res == "ok":
+        extras.feed(f"✅ Task #{tid} join verified — {extras.uname(request['u'])}")
         return ok(msg=f"Join verified! +{config.JOIN_REWARD} coins ({config.HOLD_HOURS}h hold me)")
     return err({"dup": "Ye task tum pehle kar chuke ho.", "own": "Apne channel se coin nahi mil sakta.",
                 "closed": "Task full ho gaya."}[res])
@@ -314,6 +319,7 @@ async def make_order(request, kind, coins, amount):
                   list(res.get("raw", {}).keys()) if isinstance(res.get("raw"), dict) else None)
         return err("Payment gateway se payment ID nahi mili. Support se contact karo.")
     await db.new_order(order_id, uid, kind, coins, amount, res["ref"])
+    extras.feed(f"🧾 {'Premium' if kind == 'premium' else 'Deposit'} order bana ₹{amount} — {extras.uname(request['u'])}")
     qr = res.get("qr_url")
     if not qr and res.get("upi_url"):
         bio = io.BytesIO()
@@ -387,6 +393,8 @@ async def api_withdraw(request):
 
 async def _after_withdraw(bot, u, wid, coins, fee, net, upi, auto):
     try:
+        extras.feed(f"💸 <b>Withdraw request</b> #{wid}: ₹{net:.2f} → <code>{html.escape(upi)}</code>, {coins + fee} coins kate "
+                    f"— {extras.uname(u)}" + (" (auto payout)" if auto else ""))
         if auto:
             await payouts.send(bot, wid)  # fail/unsure par payouts.send khud admin ko alert karta hai
             return
@@ -585,6 +593,7 @@ async def api_gift(request):
     if res == "invalid":
         _giftfail.setdefault(u["id"], []).append(time.time())
     if res == "ok":
+        extras.feed(f"🎁 Gift code redeem: {coins} coins — {extras.uname(request['u'])}")
         return ok(msg=f"Gift code redeem hua! +{coins} coins balance me add ho gaye.")
     return err({"invalid": "Ye gift code galat hai.", "used_up": "Is gift code ki limit khatam ho gayi.",
                 "dup": "Tum ye code pehle use kar chuke ho."}[res])
@@ -706,6 +715,7 @@ async def api_task_create(request):
     tid = await db.create_task(u["id"], r["chat_id"], r["title"], r["link"], n, free=admin)
     if not tid:
         return err("Ad balance kam hai. Pehle deposit karo.")
+    extras.feed(f"📢 <b>Naya channel task</b> #{tid}: {html.escape(r['title'] or '')} — {n} members, by {extras.uname(u)}")
     asyncio.create_task(util.notify(request.app["bot"], u["id"], f"✅ Tumhara task #{tid} live ho gaya: {html.escape(r['title'] or '')} ({n} members)."))
     return ok(msg=f"Task #{tid} live ho gaya! {r['title']} ke liye {n} members.")
 
@@ -757,6 +767,7 @@ async def api_bw_create(request):
                              instructions=instr, needs_dev=needs_dev)
     if not bid:
         return err(f"Ad balance kam hai. Chahiye {reward * n} coins. Wallet se deposit karo.")
+    extras.feed(f"🤖 <b>Naya bot work</b> #{bid}: {html.escape(title)} — {n} users x {reward} coins, by {extras.uname(u)}")
     asyncio.create_task(util.notify(request.app["bot"], u["id"], f"✅ Tumhara Bot Work #{bid} live ho gaya: {html.escape(title)}."))
     return ok(msg=f"Bot work #{bid} live ho gaya!")
 
@@ -828,8 +839,10 @@ async def api_bw_submit(request):
                                      hashlib.sha256(photo2).hexdigest() if photo2 else None)
     if res != "ok":
         return err({"dup": "Tum ye task pehle submit kar chuke ho, ya ye screenshot pehle use ho chuka hai.",
-                    "own": "Apna hi task nahi kar sakte.", "full": "Is task ke saare slots full ho gaye.",
+                    "own": "Apna hi task nahi kar sakte.",
+                    "locked": "Is task me tumhare 2 try ho chuke hain, ab ye task tumhare liye lock hai.", "full": "Is task ke saare slots full ho gaye.",
                     "closed": "Ye task ab available nahi."}[res])
+    extras.feed(f"📸 Bot work submission #{sid} (task #{to_int(fields.get('bid'))}) — {extras.uname(request['u'])}")
     me = request["tg"] if "tg" in request else {}
     name = f"@{me['username']}" if me.get("username") else (me.get("first_name") or str(uid))
     esc = lambda s: str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")  # noqa: E731
@@ -857,5 +870,6 @@ async def api_bw_report(request):
     r = await db.bw_report(sid, request["u"]["id"], "Worker ne reject ke baad report kiya")
     if not r:
         return err("Ye report nahi ho sakta (already reported ya time khatam).")
+    extras.feed(f"🚩 Bot work report #{sid} — {extras.uname(request['u'])}")
     await botwork.send_report(request.app["bot"], sid)
     return ok(msg="Report bhej di gayi. Admin check karke decision lega.")

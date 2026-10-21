@@ -2,16 +2,78 @@
 Baaki saari UI Mini App me hai (api.py)."""
 import html
 import logging
+import time
 
 from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as M
 from telegram.error import TelegramError
 
 import config
 import db
+import extras
 import util
 
 log = logging.getLogger("botwork")
 h = html.escape
+
+
+REASONS = {
+    "1": "Galat screenshot diya",
+    "2": "Screenshot fake / edited lag raha hai",
+    "3": "Kaam poora nahi hua",
+    "4": "Refer link galat hai",
+    "5": "Device verification fail / result galat",
+}
+
+
+def reason_kb(sid):
+    rows = [[B(f"❌ {t}", callback_data=f"bws_r{k}:{sid}")] for k, t in REASONS.items()]
+    rows.append([B("✍️ Apna reason likho", callback_data=f"bws_rx:{sid}")])
+    rows.append([B("⬅️ Wapas", callback_data=f"bws_bk:{sid}")])
+    return M(rows)
+
+
+def main_kb(sid):
+    return M([[B("✅ Done", callback_data=f"bws_ok:{sid}"), B("❌ Reject", callback_data=f"bws_no:{sid}")]])
+
+
+async def reject_with_reason(bot, sid, owner, reason):
+    """Reject + reason save + worker ko reason ke saath DM. Return sub row ya None (already processed)."""
+    s = await db.bw_review(sid, owner, False, reason)
+    if not s:
+        return None
+    extras.feed(f"❌ Bot work submission #{sid} rejected: {h(reason)[:80]} (worker <code>{s['worker_id']}</code>)")
+    retry = s["attempt"] < config.BW_MAX_ATTEMPTS
+    txt = (f"❌ Bot work #{sid} reject hua: <b>{h(s['title'])}</b>\n📝 <b>Reason:</b> {h(reason)}\n\n")
+    if retry:
+        txt += (f"🔁 Tumhare paas <b>ek aur mauka</b> hai. Tasks me ye bot work dobara kholo aur sahi screenshot do "
+                f"({config.BW_REPORT_HOURS}h ke andar). Dobara reject hua to ye task tumhare liye <b>lock</b> ho jayega.\n"
+                f"Agar lagta hai poster ne galat reject kiya to Report karo (Report karne par retry nahi milega).")
+    else:
+        txt += (f"🔒 Ye task ab tumhare liye <b>lock</b> hai (2 try ho gaye).\n"
+                f"Agar tumne kaam sahi kiya tha to {config.BW_REPORT_HOURS}h ke andar Report karo.")
+    await util.notify(bot, s["worker_id"], txt, reply_markup=M([[B("🚩 Report", callback_data=f"bws_rep:{sid}")]]))
+    return s
+
+
+async def on_text(update, ctx):
+    """Poster ne 'Apna reason likho' dabaya tha: uska agla text reason ban jata hai."""
+    pend = ctx.user_data.get("bw_reason")
+    if not pend or time.time() - pend["ts"] > 600:
+        ctx.user_data.pop("bw_reason", None)
+        return
+    reason = (update.message.text or "").strip()
+    if len(reason) < 3:
+        return await update.message.reply_text("Reason thoda detail me likho (kam se kam 3 akshar).")
+    ctx.user_data.pop("bw_reason", None)
+    s = await reject_with_reason(ctx.bot, pend["sid"], update.effective_user.id, reason[:200])
+    if not s:
+        return await update.message.reply_text("Already processed ya ye task tumhara nahi hai.")
+    await update.message.reply_text("✅ Reject ho gaya, worker ko reason bhej diya.")
+    try:
+        await ctx.bot.edit_message_caption(pend["chat"], pend["mid"], caption=pend["cap"] + f"\n\n❌ <b>Rejected</b>: {h(reason[:200])}",
+                                           parse_mode="HTML", reply_markup=None)
+    except TelegramError:
+        pass
 
 
 async def mark(q, suffix):
@@ -27,7 +89,7 @@ async def send_report(bot, sid):
         return
     cap = (f"🚩 <b>Bot Work Report</b> #{sid}\nTask: {h(s['title'])} (#{s['bw_id']})\n"
            f"Poster: <code>{s['owner_id']}</code>\nWorker: <code>{s['worker_id']}</code>\n"
-           f"Reward: {s['reward']} coins\nRefer link: {h(s['ref_link'])}\nReason: {h(s['reason'] or '-')}")
+           f"Reward: {s['reward']} coins\nRefer link: {h(s['ref_link'])}\nWorker ka report: {h(s['reason'] or '-')}\nPoster ka reject reason: {h(s['reject_reason'] or '-')}")
     kb = M([[B("✅ Pay worker", callback_data=f"bwa_pay:{sid}"), B("❌ Uphold reject", callback_data=f"bwa_no:{sid}")]])
     sent = False
     for a in config.ADMIN_IDS:
@@ -52,22 +114,47 @@ async def on_cb(update, ctx):
     async def popup(text):
         await q.answer(text, show_alert=True)
 
-    if act in ("bws_ok", "bws_no"):
-        approve = act == "bws_ok"
-        s = await db.bw_review(sid, uid, approve)
+    if act == "bws_ok":
+        s = await db.bw_review(sid, uid, True)
         if not s:
             return await popup("Already processed ya tum is task ke owner nahi ho.")
-        await popup("✅ Done! Worker ko coins mil gaye." if approve else "❌ Reject kar diya.")
-        await mark(q, "\n\n✅ <b>Approved</b>" if approve else "\n\n❌ <b>Rejected</b>")
-        if approve:
-            await util.notify(ctx.bot, s["worker_id"],
-                              f"✅ Bot work approved! <b>+{s['reward']}</b> coins balance me add ho gaye.")
-        else:
-            await util.notify(
-                ctx.bot, s["worker_id"],
-                f"❌ Bot work #{sid} reject hua. Agar tumne kaam sahi kiya hai to report kar sakte ho "
-                f"({config.BW_REPORT_HOURS}h ke andar).",
-                reply_markup=M([[B("🚩 Report", callback_data=f"bws_rep:{sid}")]]))
+        extras.feed(f"✅ Bot work submission #{sid} approved by owner (worker <code>{s['worker_id']}</code>, +{s['reward']})")
+        await popup("✅ Done! Worker ko coins mil gaye.")
+        await mark(q, "\n\n✅ <b>Approved</b>")
+        await util.notify(ctx.bot, s["worker_id"],
+                          f"✅ Bot work approved! <b>+{s['reward']}</b> coins balance me add ho gaye.")
+        return
+
+    if act in ("bws_no", "bws_bk", "bws_rx") or act in {f"bws_r{k}" for k in REASONS}:
+        s = await db.bw_sub(sid)
+        if not s or s["owner_id"] != uid or s["status"] != "pending":
+            return await popup("Already processed ya tum is task ke owner nahi ho.")
+        if act == "bws_no":  # reject se pehle reason poochho
+            await q.answer("Reason chuno: worker ko ye dikhega")
+            try:
+                await q.edit_message_reply_markup(reason_kb(sid))
+            except TelegramError:
+                pass
+            return
+        if act == "bws_bk":
+            await q.answer()
+            try:
+                await q.edit_message_reply_markup(main_kb(sid))
+            except TelegramError:
+                pass
+            return
+        if act == "bws_rx":
+            ctx.user_data["bw_reason"] = {"sid": sid, "ts": time.time(), "chat": q.message.chat_id,
+                                          "mid": q.message.message_id, "cap": q.message.caption_html or ""}
+            await q.answer()
+            await ctx.bot.send_message(uid, "✍️ Reject ka reason ab likh ke bhejo (worker ko yahi dikhega, max 200 akshar).")
+            return
+        reason = REASONS[act[5:]]
+        s2 = await reject_with_reason(ctx.bot, sid, uid, reason)
+        if not s2:
+            return await popup("Already processed ya tum is task ke owner nahi ho.")
+        await popup("❌ Reject kar diya, worker ko reason bhej diya.")
+        await mark(q, f"\n\n❌ <b>Rejected</b>: {h(reason)}")
         return
 
     if act == "bws_rep":

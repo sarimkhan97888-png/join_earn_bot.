@@ -1,17 +1,20 @@
 """Task-added notifications (paced broadcast) + daily data backup (alag bot token se)."""
 import asyncio
 import csv
+import html
+import json
 import io
 import logging
 import time
 import zipfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from telegram import Bot
 from telegram.error import Forbidden, RetryAfter, TelegramError
 
 import config
 import db
+import util
 
 log = logging.getLogger("extras")
 _bk = {"bot": None}
@@ -113,3 +116,99 @@ async def job_backup(ctx):
         await send_backup()
     except Exception:
         log.exception("backup failed")
+
+
+# ---------- withdraw alerts: backup bot (buttons) ----------
+async def bk_send(text, kb):
+    """Withdraw alert + buttons admins ko BACKUP bot se. Backup bot nahi/ admin ne /start nahi kiya to main bot se.
+    Return json text {"b": {admin: msg_id}, "m": {...}} (baad me delete karne ke liye)."""
+    out = {"b": {}, "m": {}}
+    bk = None
+    try:
+        bk = await _bot()
+    except Exception:
+        log.exception("backup bot init failed")
+    for aid in config.ADMIN_IDS:
+        sent = False
+        if bk:
+            try:
+                m = await bk.send_message(aid, text, parse_mode="HTML", reply_markup=kb)
+                out["b"][str(aid)] = m.message_id
+                sent = True
+            except TelegramError as e:
+                log.warning("backup bot alert fail admin=%s: %s (backup bot /start kiya?)", aid, e)
+        if not sent and util.main_bot:
+            try:
+                m = await util.main_bot.send_message(aid, text, parse_mode="HTML", reply_markup=kb)
+                out["m"][str(aid)] = m.message_id
+            except TelegramError:
+                pass
+    return json.dumps(out)
+
+
+async def bk_delete(wid):
+    """Is withdraw ke saare admin alert messages delete (approve/reject/expire/paid/failed par)."""
+    try:
+        raw = await db.wd_pop_msgs(wid)
+        if not raw:
+            return
+        d = json.loads(raw)
+        for key, bot in (("b", _bk["bot"]), ("m", util.main_bot)):
+            for aid, mid in (d.get(key) or {}).items():
+                if not bot:
+                    continue
+                try:
+                    await bot.delete_message(int(aid), int(mid))
+                except TelegramError:
+                    pass
+    except Exception:
+        log.exception("bk_delete failed #%s", wid)
+
+
+# ---------- admin live feed (main bot) ----------
+_feed_q = None
+_feed_task = None
+
+
+async def _feed_worker():
+    while True:
+        lines = [await _feed_q.get()]
+        while not _feed_q.empty() and len(lines) < 12:
+            lines.append(_feed_q.get_nowait())
+        bot = util.main_bot
+        if not bot:
+            continue
+        txt = "\n".join(lines)
+        for aid in config.ADMIN_IDS:
+            await util.notify(bot, aid, txt, disable_notification=True)
+        await asyncio.sleep(0.4)
+
+
+def feed(text):
+    """Admins ko main bot par ek line ki khabar (queue: flood limit se bachne ke liye batch + silent). Kabhi raise nahi karta."""
+    global _feed_q, _feed_task
+    if not config.ADMIN_FEED or not config.ADMIN_IDS:
+        return
+    try:
+        if _feed_q is None:
+            _feed_q = asyncio.Queue(maxsize=500)
+        if _feed_task is None or _feed_task.done():
+            _feed_task = asyncio.get_running_loop().create_task(_feed_worker())
+        _feed_q.put_nowait(f"{datetime.now(timezone(timedelta(hours=5, minutes=30))):%H:%M} {text}")
+    except Exception:
+        pass  # queue full / loop nahi: feed ke liye kuch rokna nahi
+
+
+def uname(u):
+    """User ko feed me dikhane ka chhota text: name/@username + id."""
+    n = (u.get("first_name") if hasattr(u, "get") else None) or ""
+    un = u.get("username") if hasattr(u, "get") else None
+    nm = html.escape(f"@{un}" if un else n[:24] or "-")
+    return f"{nm} (<code>{u['id']}</code>)"
+
+
+def _new_user(row):
+    feed(f"🆕 <b>New user</b> {uname(row)}")
+
+
+db.new_user_hook = _new_user

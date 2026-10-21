@@ -28,6 +28,7 @@ def app_kb():
 
 
 async def post_init(app):
+    util.main_bot = app.bot
     try:
         await app.bot.set_chat_menu_button(
             menu_button=MenuButtonWebApp(text="Open App", web_app=WebAppInfo(url=f"{config.BASE_URL}/app")))
@@ -217,46 +218,63 @@ async def on_admin_wd(update: Update, ctx):
             pass
 
     tax = config.WITHDRAW_TAX_PERCENT
+    main = util.main_bot or ctx.bot  # users ko DM hamesha main bot se (callback backup bot par bhi aa sakta hai)
+
+    async def stale():  # pehle se process ho chuka: ye puraana message bhi hata do
+        await ans("Already processed")
+        try:
+            await q.message.delete()
+        except TelegramError:
+            pass
+
+    keep = False
     if act == "adm_no":
         w = await db.wd_move_refund(wid, "pending", "rejected")
         if not w:
-            return await ans("Already processed")
+            return await stale()
         await ans("Rejected & refunded")
-        await util.notify(ctx.bot, w["user_id"], f"❌ Withdraw #{wid} reject hua, coins wapas mil gaye.")
+        extras.feed(f"❌ Withdraw #{wid} <b>rejected</b>, {w['coins']} coins refund (user <code>{w['user_id']}</code>)")
+        await util.notify(main, w["user_id"], f"❌ Withdraw #{wid} reject hua, coins wapas mil gaye.")
     elif act == "adm_ok":
         if payouts.enabled():
-            res = await payouts.send(ctx.bot, wid)
+            res = await payouts.send(main, wid)
             if res == "skip":
-                return await ans("Already processed")
+                return await stale()
             if res == "processing":
                 await ans("✅ Payout bhej diya (2-5 min me user ko milega)")
                 w = await db.wd_get(wid)
-                await util.notify(ctx.bot, w["user_id"], f"⏳ Withdraw #{wid} approve hua, paisa 2-5 minute me aayega.")
+                await util.notify(main, w["user_id"], f"⏳ Withdraw #{wid} approve hua, paisa 2-5 minute me aayega.")
             else:
-                await ans("⚠️ Payout nahi gaya, upar ka alert dekho")
+                keep = True  # payouts.send ne naya alert bhej diya
+                await ans("⚠️ Payout nahi gaya, naya alert dekho")
         else:
             w = await db.wd_move(wid, "pending", "paid")
             if not w:
-                return await ans("Already processed")
+                return await stale()
             await ans("✅ Approved — UPI par manually pay kar do")
-            await util.notify(ctx.bot, w["user_id"],
+            extras.feed(f"✅ Withdraw #{wid} <b>approved (manual paid)</b> ₹{float(w['amount_inr']):.2f} → <code>{html.escape(w['upi'])}</code> (user <code>{w['user_id']}</code>)")
+            await util.notify(main, w["user_id"],
                               f"✅ Withdraw #{wid} paid: ₹{float(w['amount_inr']):.2f} → {w['upi']} (tax {tax}% alag se kata)")
     elif act == "adm_paid":
         w = await db.wd_move(wid, "sending", "paid")
         if not w:
-            return await ans("Already processed")
+            return await stale()
         await ans("✅ Paid mark ho gaya")
-        await util.notify(ctx.bot, w["user_id"], f"✅ Withdraw #{wid} paid: ₹{float(w['amount_inr']):.2f} → {w['upi']}")
+        extras.feed(f"✅ Withdraw #{wid} <b>paid</b> (manual mark) ₹{float(w['amount_inr']):.2f}")
+        await util.notify(main, w["user_id"], f"✅ Withdraw #{wid} paid: ₹{float(w['amount_inr']):.2f} → {w['upi']}")
     elif act == "adm_refund":
         w = await db.wd_move_refund(wid, "sending", "failed")
         if not w:
-            return await ans("Already processed")
+            return await stale()
         await ans("↩️ User ko refund ho gaya")
-        await util.notify(ctx.bot, w["user_id"], f"❌ Withdraw #{wid} fail hua, coins wapas mil gaye.")
-    try:
-        await q.edit_message_reply_markup(None)
-    except TelegramError:
-        pass
+        extras.feed(f"↩️ Withdraw #{wid} <b>failed</b>, user ko refund")
+        await util.notify(main, w["user_id"], f"❌ Withdraw #{wid} fail hua, coins wapas mil gaye.")
+    if not keep:
+        await extras.bk_delete(wid)  # admins ke saare alert copies delete
+        try:
+            await q.message.delete()
+        except TelegramError:
+            pass
 
 
 # ---------------- chat member events ----------------
@@ -279,6 +297,7 @@ async def on_chat_member(update: Update, ctx):
             await util.notify(ctx.bot, uid, rejoin_msg(got))
     elif was and not now:
         for r in await db.revoke_by_chat(cid, uid):
+            extras.feed(f"🚪 Channel leave — coins cut {r['reward']} (user <code>{uid}</code>)")
             await util.notify(ctx.bot, uid, f"🚫 Tumne channel leave kiya. {r['reward']} coins cut ho gaye aur tasks "
                                             f"block hain jab tak dobara join na karo. Dobara join karne par sirf "
                                             f"{config.REJOIN_PERCENT}% coins milenge ({config.HOLD_HOURS}h hold me).")
@@ -346,6 +365,16 @@ async def job_refs(ctx):
                                             f"<b>+{config.REFER_REWARD}</b> coins balance me add.")
 
 
+async def job_wd_expire(ctx):
+    """Pending withdraw WITHDRAW_EXPIRE_HOURS me admin ne na approve kiya na reject: expire + coins wapas."""
+    for w in await db.wd_expire_pending(config.WITHDRAW_EXPIRE_HOURS):
+        await util.notify(ctx.bot, w["user_id"],
+                          f"⌛ Withdraw #{w['id']} {config.WITHDRAW_EXPIRE_HOURS} ghante me process nahi hua, isliye expire ho gaya.\n"
+                          f"<b>{w['coins']}</b> coins (tax samet) tumhare balance me wapas aa gaye. Chaho to dobara withdraw karo.")
+        await extras.bk_delete(w["id"])
+        extras.feed(f"⌛ Withdraw #{w['id']} <b>expired</b> (24h), {w['coins']} coins refund (user <code>{w['user_id']}</code>)")
+
+
 async def job_cleanup(ctx):
     await db.sup_cleanup()
     await db.ledger_prune()
@@ -403,6 +432,17 @@ async def on_error(update, ctx):
     log.error("Unhandled error", exc_info=ctx.error)
 
 
+async def backup_start(update: Update, ctx):
+    """Backup bot par /start: admin ke liye alerts/backup chalu."""
+    if update.effective_user.id in config.ADMIN_IDS:
+        await update.message.reply_text("✅ Backup bot chalu. Withdraw requests (Approve/Reject) aur daily backup yahin aayenge.")
+
+
+def register_backup(app):
+    app.add_handler(CommandHandler("start", backup_start, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CallbackQueryHandler(on_admin_wd, pattern=r"^adm_"))
+
+
 def register(app):
     app.add_handler(CommandHandler("start", start, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("gift", gift_cmd, filters=filters.ChatType.PRIVATE))
@@ -417,6 +457,7 @@ def register(app):
     app.add_handler(CommandHandler(["ban", "unban"], ban_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CallbackQueryHandler(on_admin_wd, pattern=r"^adm_"))
     app.add_handler(CallbackQueryHandler(botwork.on_cb, pattern=r"^(bws_|bwa_)"))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, botwork.on_text))
     app.add_handler(ChatMemberHandler(on_chat_member, ChatMemberHandler.CHAT_MEMBER))
     app.add_error_handler(on_error)
     app.job_queue.run_repeating(job_release, interval=120, first=60)
@@ -430,3 +471,4 @@ def register(app):
     app.job_queue.run_repeating(extras.job_bcast, interval=30, first=40)
     app.job_queue.run_daily(extras.job_backup, time=datetime.time(hour=21, minute=30, tzinfo=datetime.timezone.utc))  # ~3:00 AM IST
     app.job_queue.run_repeating(job_wd_stuck, interval=120, first=45)
+    app.job_queue.run_repeating(job_wd_expire, interval=600, first=90)

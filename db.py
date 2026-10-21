@@ -116,9 +116,14 @@ ALTER TABLE support_msgs ADD COLUMN IF NOT EXISTS has_voice BOOLEAN NOT NULL DEF
 ALTER TABLE completions ADD COLUMN IF NOT EXISTS rejoin_paid BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS debt BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS last_alert TIMESTAMPTZ;
+ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS bk_msgs TEXT;
 ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
 ALTER TABLE bw_subs ADD COLUMN IF NOT EXISTS report_sent BOOLEAN NOT NULL DEFAULT FALSE;
 CREATE INDEX IF NOT EXISTS wd_status_idx ON withdrawals(status, id);
+ALTER TABLE bw_subs ADD COLUMN IF NOT EXISTS reject_reason TEXT;
+ALTER TABLE bw_subs ADD COLUMN IF NOT EXISTS attempt INT NOT NULL DEFAULT 1;
+ALTER TABLE bw_subs DROP CONSTRAINT IF EXISTS bw_subs_bw_id_worker_id_key;
+CREATE UNIQUE INDEX IF NOT EXISTS bws_bw_worker_attempt ON bw_subs(bw_id, worker_id, attempt);
 ALTER TABLE botworks ADD COLUMN IF NOT EXISTS instructions TEXT NOT NULL DEFAULT '';
 ALTER TABLE botworks ADD COLUMN IF NOT EXISTS needs_dev BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE bw_subs ADD COLUMN IF NOT EXISTS photo2_id TEXT;
@@ -203,15 +208,24 @@ async def led(c, uid, kind, amount, ref=""):
 
 
 # ---------- users ----------
+new_user_hook = None  # extras.feed se set hota hai
+
+
 async def ensure_user(tu):
     # Har API call par write nahi: sirf naya user ya naam badla ho tabhi UPSERT (1 lakh users par bloat se bachata hai)
     u = await pool.fetchrow("SELECT * FROM users WHERE id=$1", tu.id)
     if u and u["username"] == tu.username and u["first_name"] == tu.first_name:
         return u
-    return await pool.fetchrow(
+    row = await pool.fetchrow(
         """INSERT INTO users(id,username,first_name) VALUES($1,$2,$3)
            ON CONFLICT(id) DO UPDATE SET username=EXCLUDED.username, first_name=EXCLUDED.first_name
            RETURNING *""", tu.id, tu.username, tu.first_name)
+    if not u and new_user_hook:
+        try:
+            new_user_hook(row)
+        except Exception:
+            pass
+    return row
 
 
 async def get_user(uid):
@@ -495,6 +509,31 @@ async def wd_move_refund(wid, frm, to):
         return w
 
 
+async def wd_expire_pending(hours):
+    """Admin ne 'hours' ghante me approve/reject nahi kiya: withdraw 'expired' + coins wapas. Return [withdraw rows]."""
+    ids = await pool.fetch(
+        "SELECT id FROM withdrawals WHERE status='pending' AND created_at < now() - make_interval(hours => $1) ORDER BY id LIMIT 50", hours)
+    out = []
+    for r in ids:
+        w = await wd_move_refund(r["id"], "pending", "expired")
+        if w:
+            out.append(w)
+    return out
+
+
+async def wd_set_msgs(wid, txt):
+    await pool.execute("UPDATE withdrawals SET bk_msgs=$2 WHERE id=$1", wid, txt)
+
+
+async def wd_pop_msgs(wid):
+    """Admin alert ke message ids nikalo aur column khali karo (sirf ek caller ko milta hai). Return json text ya None."""
+    raw = await pool.fetchval("SELECT bk_msgs FROM withdrawals WHERE id=$1", wid)
+    if not raw:
+        return None
+    got = await pool.fetchval("UPDATE withdrawals SET bk_msgs=NULL WHERE id=$1 AND bk_msgs=$2 RETURNING id", wid, raw)
+    return raw if got else None
+
+
 async def wd_touch_alert(wid):
     await pool.execute("UPDATE withdrawals SET last_alert=now() WHERE id=$1", wid)
 
@@ -580,7 +619,7 @@ async def bw_get(bid):
 
 
 async def _bw_used(c, bid):
-    return await c.fetchval("SELECT count(*) FROM bw_subs WHERE bw_id=$1 AND status<>'closed'", bid)
+    return await c.fetchval("SELECT count(*) FROM bw_subs WHERE bw_id=$1 AND status NOT IN ('closed','retried')", bid)
 
 
 async def bw_cancel(bid, owner):
@@ -600,23 +639,34 @@ async def bw_cancel(bid, owner):
 async def bw_my(uid):
     return await pool.fetch(
         """SELECT b.*,
-             (SELECT count(*) FROM bw_subs s WHERE s.bw_id=b.id AND s.status<>'closed') AS used,
+             (SELECT count(*) FROM bw_subs s WHERE s.bw_id=b.id AND s.status NOT IN ('closed','retried')) AS used,
              (SELECT count(*) FROM bw_subs s WHERE s.bw_id=b.id AND s.status='approved') AS done,
              (SELECT count(*) FROM bw_subs s WHERE s.bw_id=b.id AND s.status='pending') AS pending
            FROM botworks b WHERE b.owner_id=$1 ORDER BY b.id DESC LIMIT 10""", uid)
 
 
 async def bw_open(uid):
+    """Worker ko dikhne wale tasks. Jis task me pehli submission reject hui aur try baaki hai wo bhi dikhta hai (retry)."""
     return await pool.fetch(
-        """SELECT b.* FROM botworks b
+        """SELECT b.*,
+             (SELECT count(*) FROM bw_subs s WHERE s.bw_id=b.id AND s.worker_id=$1) AS my_attempts,
+             (SELECT s.reject_reason FROM bw_subs s WHERE s.bw_id=b.id AND s.worker_id=$1
+                ORDER BY s.attempt DESC LIMIT 1) AS my_reason
+           FROM botworks b
            WHERE b.status='active' AND b.owner_id<>$1
-             AND b.target > (SELECT count(*) FROM bw_subs s WHERE s.bw_id=b.id AND s.status<>'closed')
-             AND NOT EXISTS(SELECT 1 FROM bw_subs s WHERE s.bw_id=b.id AND s.worker_id=$1)
-           ORDER BY b.reward DESC, b.id LIMIT 8""", uid)
+             AND NOT EXISTS(SELECT 1 FROM bw_subs s WHERE s.bw_id=b.id AND s.worker_id=$1
+                            AND s.status NOT IN ('rejected','retried'))
+             AND (SELECT count(*) FROM bw_subs s WHERE s.bw_id=b.id AND s.worker_id=$1) < $2
+             AND (b.target > (SELECT count(*) FROM bw_subs s WHERE s.bw_id=b.id AND s.status NOT IN ('closed','retried'))
+                  OR EXISTS(SELECT 1 FROM bw_subs s WHERE s.bw_id=b.id AND s.worker_id=$1 AND s.status='rejected'))
+           ORDER BY (SELECT count(*) FROM bw_subs s WHERE s.bw_id=b.id AND s.worker_id=$1) DESC, b.reward DESC, b.id LIMIT 8""",
+        uid, config.BW_MAX_ATTEMPTS)
 
 
 async def bw_submit(bid, worker, photo_id, photo_uid, ref_link, photo2_uid=None):
-    """Return (result, sid, botwork_row). result: ok / closed / own / full / dup"""
+    """Return (result, sid, botwork_row). result: ok / closed / own / full / dup / locked.
+    Reject ke baad ek retry allowed (BW_MAX_ATTEMPTS tak): purani rejected row 'retried' ho jati hai aur
+    uska slot nayi submission ko transfer ho jata hai. Uske baad bhi reject ho to 'locked'."""
     try:
         async with pool.acquire() as c, c.transaction():
             b = await c.fetchrow("SELECT * FROM botworks WHERE id=$1 FOR UPDATE", bid)
@@ -624,11 +674,21 @@ async def bw_submit(bid, worker, photo_id, photo_uid, ref_link, photo2_uid=None)
                 return "closed", None, None
             if b["owner_id"] == worker:
                 return "own", None, None
-            if await _bw_used(c, bid) >= b["target"]:
+            prev = await c.fetch("SELECT id, status, attempt FROM bw_subs WHERE bw_id=$1 AND worker_id=$2 ORDER BY attempt", bid, worker)
+            attempt = 1
+            if prev:
+                if any(r["status"] not in ("rejected", "retried") for r in prev):
+                    return "dup", None, None
+                if len(prev) >= config.BW_MAX_ATTEMPTS:
+                    return "locked", None, None
+                attempt = len(prev) + 1
+                await c.execute("UPDATE bw_subs SET status='retried' WHERE id=$1 AND status='rejected'", prev[-1]["id"])
+            elif await _bw_used(c, bid) >= b["target"]:
                 return "full", None, None
             sid = await c.fetchval(
-                """INSERT INTO bw_subs(bw_id,worker_id,photo_id,photo_uid,ref_link,photo2_uid)
-                   VALUES($1,$2,$3,$4,$5,$6) RETURNING id""", bid, worker, photo_id, photo_uid, ref_link, photo2_uid)
+                """INSERT INTO bw_subs(bw_id,worker_id,photo_id,photo_uid,ref_link,photo2_uid,attempt)
+                   VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id""",
+                bid, worker, photo_id, photo_uid, ref_link, photo2_uid, attempt)
             return "ok", sid, b
     except asyncpg.UniqueViolationError:
         return "dup", None, None
@@ -642,8 +702,8 @@ async def bw_sub(sid):
 
 async def bw_mine(uid):
     return await pool.fetch(
-        """SELECT s.id, s.status, b.title, b.reward FROM bw_subs s JOIN botworks b ON b.id=s.bw_id
-           WHERE s.worker_id=$1 ORDER BY s.id DESC LIMIT 10""", uid)
+        """SELECT s.id, s.status, s.attempt, s.reject_reason, b.title, b.reward FROM bw_subs s JOIN botworks b ON b.id=s.bw_id
+           WHERE s.worker_id=$1 AND s.status<>'retried' ORDER BY s.id DESC LIMIT 10""", uid)
 
 
 async def _bw_lock(c, sid):
@@ -667,8 +727,8 @@ async def _bw_close(c, s):
         await led(c, s["owner_id"], "bw_refund", s["reward"], s["id"])
 
 
-async def bw_review(sid, owner, approve):
-    """Poster ka Done / Reject. Sirf pending submission par chalega."""
+async def bw_review(sid, owner, approve, reason=None):
+    """Poster ka Done / Reject (reject par reason zaroori, worker ko dikhta hai). Sirf pending submission par chalega."""
     async with pool.acquire() as c, c.transaction():
         s = await _bw_lock(c, sid)
         if not s or s["owner_id"] != owner or s["status"] != "pending":
@@ -676,7 +736,8 @@ async def bw_review(sid, owner, approve):
         if approve:
             await _bw_pay(c, s)
         else:
-            await c.execute("UPDATE bw_subs SET status='rejected', decided_at=now() WHERE id=$1", sid)
+            await c.execute("UPDATE bw_subs SET status='rejected', decided_at=now(), reject_reason=$2 WHERE id=$1",
+                            sid, (reason or "")[:200] or None)
         return s
 
 
