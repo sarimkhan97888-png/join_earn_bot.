@@ -240,7 +240,7 @@ async def on_admin_wd(update: Update, ctx):
                 return await ans("Already processed")
             await ans("✅ Approved — UPI par manually pay kar do")
             await util.notify(ctx.bot, w["user_id"],
-                              f"✅ Withdraw #{wid} paid: ₹{float(w['amount_inr']):.2f} → {w['upi']} ({tax}% tax kat ke)")
+                              f"✅ Withdraw #{wid} paid: ₹{float(w['amount_inr']):.2f} → {w['upi']} (tax {tax}% alag se kata)")
     elif act == "adm_paid":
         w = await db.wd_move(wid, "sending", "paid")
         if not w:
@@ -334,6 +334,7 @@ async def job_orders(ctx):
     for o in await db.pending_gateway_orders():
         await payments.settle(ctx.bot, o, min_gap=60)
         await asyncio.sleep(0.2)
+    await db.orders_expire_old()
 
 
 async def job_refs(ctx):

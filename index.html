@@ -52,6 +52,13 @@ p{margin:0 0 10px;color:var(--sub);line-height:1.45}
 .seg button.on{background:var(--card);color:var(--text);box-shadow:0 1px 6px rgba(0,0,0,.25)}
 input,textarea{width:100%;background:var(--card2);border:1px solid var(--line);color:var(--text);border-radius:13px;padding:13px;font-size:15px;margin:4px 0 8px;outline:none}
 input:focus{border-color:var(--acc)}
+.swrow{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:10px 0;padding:12px 14px;border-radius:13px;background:var(--card2);cursor:pointer}
+.swrow b{color:var(--text);font-size:14px}.swrow .sub{display:block;margin-top:2px}
+.swrow input{-webkit-appearance:none;appearance:none;width:46px;height:26px;min-width:46px;margin:0;padding:0;border-radius:99px;background:var(--line);border:0;position:relative;transition:.2s;cursor:pointer}
+.swrow input:after{content:'';position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:#fff;transition:.2s}
+.swrow input:checked{background:var(--ok)}.swrow input:checked:after{left:23px}
+.ins{white-space:pre-wrap;word-break:break-word;background:var(--card2);border-left:3px solid var(--acc);border-radius:10px;padding:10px 12px;margin:0 0 12px;color:var(--text);font-size:14px;line-height:1.45}
+.ins small{display:block;color:var(--sub);font-weight:700;margin-bottom:4px}
 label{font-size:12px;color:var(--sub);font-weight:600}
 .qs{display:flex;gap:8px;margin:2px 0 10px;flex-wrap:wrap}
 .qs button{border:1px solid var(--line);background:var(--card2);color:var(--text);padding:7px 12px;border-radius:99px;font-size:13px}
@@ -420,7 +427,7 @@ function rWallet() {
   const m = S.me, W = S.wallet || { orders: [], withdrawals: [] };
   const st = { paid: ['g', 'Paid'], pending: ['y', 'Pending'], rejected: ['r', 'Rejected'], processing: ['b', 'Processing'], sending: ['b', 'Processing'], failed: ['r', 'Failed'], mismatch: ['r', 'Mismatch'] };
   const rows = [
-    ...W.withdrawals.map(w => ({ at: w.at, ico: '⬆️', t: 'Withdraw', s: `${fmt(w.coins)} coins → ₹${w.amount} (${w.upi})`, st: w.status })),
+    ...W.withdrawals.map(w => ({ at: w.at, ico: '⬆️', t: 'Withdraw', s: `₹${w.amount} → ${w.upi} · ${fmt(w.coins)} coins kate (tax ${fmt(w.fee)})`, st: w.status })),
     ...W.orders.map(o => ({ at: o.at, ico: o.kind === 'premium' ? '💎' : '⬇️', t: o.kind === 'premium' ? 'Premium' : 'Deposit', s: `₹${o.amount}${o.coins ? ' · ' + fmt(o.coins) + ' coins' : ''}`, st: o.status }))
   ].sort((a, b) => new Date(b.at) - new Date(a.at));
   $('#view').innerHTML = `<h2>Wallet</h2>
@@ -443,7 +450,7 @@ function withdrawSheet() {
   openSheet(`<h3>Withdraw</h3><p>Min ${fmt(c.min_withdraw)} coins (₹${inr(c.min_withdraw)}) aur kam se kam ${c.min_tasks} task complete. Balance: <b>${fmt(m.balance)}</b> coins.</p>
   <div class="cost">UPI: <b>${esc(m.upi)}</b></div>
   <label>Coins</label><input id="wc" type="number" inputmode="numeric" placeholder="${c.min_withdraw}" data-inp="wd">
-  <div class="qs"><button data-act="wmax">Max</button></div><div class="cost" id="wh">You get: ₹0 (after ${c.withdraw_tax}% tax)</div>
+  <div class="qs"><button data-act="wmax">Max</button></div><div class="cost" id="wh">Tum paoge: ₹0<br><span class="sub">Tax ${c.withdraw_tax}% upar se alag katega</span></div>
   <button class="btn" data-act="wdgo">Withdraw</button>`);
 }
 function showQR(o, kind) {
@@ -451,7 +458,13 @@ function showQR(o, kind) {
   <p style="text-align:center">Kisi bhi UPI app se scan karke pay karo.<br><span class="sub">Order ${esc(o.order_id)}</span></p>
   ${o.pay_url ? `<button class="btn ghost" data-act="paylink" data-url="${esc(o.pay_url)}">${/^upi:/i.test(o.pay_url) ? 'Open UPI app' : 'Open payment page'}</button>` : ''}
   <div class="wait"><span class="spin"></span>&nbsp; Payment ka wait...</div>`);
+  const t0 = Date.now();
   S.poll = setInterval(async () => {
+    if (Date.now() - t0 > S.cfg.order_expiry_min * 60000) {
+      clearInterval(S.poll); closeSheet();
+      await popup('error', 'Payment time khatam', 'Payment nahi mila, order Failed ho gaya. Paisa kat gaya ho to kuch der me apne aap add ho jayega, nahi to Support se contact karo.');
+      refresh(); return;
+    }
     const j = await api('/api/order?id=' + encodeURIComponent(o.order_id));
     if (j.status === 'paid') {
       clearInterval(S.poll); closeSheet();
@@ -487,7 +500,7 @@ function rProfile() {
 }
 function rulesSheet() {
   const c = S.cfg;
-  openSheet(`<h3>Rules</h3><ul class="steps"><li>Channel join karo, Check dabao: +${c.join_reward} coins, ${c.hold_hours} ghante hold me.</li><li>Hold me channel leave kiya to coins cut aur tasks block. Dobara join karne par unblock.</li><li>Withdraw ke liye kam se kam ${c.min_tasks} task complete hone chahiye (channel join ya bot work).</li><li>Min withdraw ${fmt(c.min_withdraw)} coins (100 coins = ₹1). Withdraw par ${c.withdraw_tax}% tax kat-ta hai.</li><li>Ek device, ek UPI = ek account. Fake accounts ban honge.</li><li>Bot Work: reward ${c.bw_min_reward}+ coins, owner approve kare to milta hai. Reject galat ho to Report karo.</li><li>Refer: dost ke ${c.min_ref_tasks} task complete hone par (24h hold ke baad) +${c.refer_reward} coins.</li><li>Channel leave kiya to poora app block, dobara join karne par chalega. Rejoin par sirf 50% coins milte hain (ek baar).</li></ul><button class="btn ghost" data-act="closesheet">Close</button>`);
+  openSheet(`<h3>Rules</h3><ul class="steps"><li>Channel join karo, Check dabao: +${c.join_reward} coins, ${c.hold_hours} ghante hold me.</li><li>Hold me channel leave kiya to coins cut aur tasks block. Dobara join karne par unblock.</li><li>Withdraw ke liye kam se kam ${c.min_tasks} task complete hone chahiye (channel join ya bot work).</li><li>Min withdraw ${fmt(c.min_withdraw)} coins (100 coins = ₹1). Tax ${c.withdraw_tax}% withdraw ki rakam ke upar se katta hai (jaise 1000 coins chahiye to 1100 coins katenge, tumhe poore ₹10 milenge).</li><li>Ek device, ek UPI = ek account. Fake accounts ban honge.</li><li>Bot Work: reward ${c.bw_min_reward}+ coins, owner approve kare to milta hai. Reject galat ho to Report karo.</li><li>Refer: dost ke ${c.min_ref_tasks} task complete hone par (24h hold ke baad) +${c.refer_reward} coins.</li><li>Channel leave kiya to poora app block, dobara join karne par chalega. Rejoin par sirf 50% coins milte hain (ek baar).</li></ul><button class="btn ghost" data-act="closesheet">Close</button>`);
 }
 async function fingerprint() {
   const c = document.createElement('canvas'), x = c.getContext('2d');
@@ -522,6 +535,8 @@ async function stBody() {
   } else if (S.studioTab === 'bw') {
     b.innerHTML = `<p>Apne bot ka refer link do. Log kaam karke screenshot bhejenge, tum Telegram me Done/Reject karoge.</p>
     <label>Bot ka naam</label><input id="bt" maxlength="40" placeholder="XYZ Bot"><label>Tumhara refer link</label><input id="bl" placeholder="https://t.me/xyz_bot?start=123" autocapitalize="off">
+    <label>Instructions (worker ko kya karna hai, optional)</label><textarea id="bi" rows="3" maxlength="400" placeholder="Jaise: 1) Bot start karo 2) Mobile number daalo 3) Verification complete karo"></textarea>
+    <label class="swrow" for="bdev"><span><b>Is bot me device verification hai</b><span class="sub">ON karoge to worker ko 2 photo dene honge: kaam ka screenshot + device verification ka result (success/failed)</span></span><input type="checkbox" id="bdev"></label>
     <label>Reward per user (min ${c.bw_min_reward} coins)</label><input id="br" type="number" inputmode="numeric" placeholder="${c.bw_min_reward}" data-inp="bw"><label>Kitne users</label><input id="bn" type="number" inputmode="numeric" placeholder="10" data-inp="bw">
     <div class="cost" id="bc">Total cost: 0 coins</div><button class="btn" data-act="bwcreate">Create bot work</button>`;
   } else {
@@ -536,12 +551,15 @@ async function stBody() {
 /* ---------- BOT WORK detail / submit ---------- */
 function bwOpen(id) {
   const b = (S.tasks.botworks || []).find(x => x.id == id); if (!b) return;
+  const dv = !!b.needs_dev;
   openSheet(`<h3>🤖 ${esc(b.title)}</h3><div class="cost">Reward: <b>+${fmt(b.reward)} coins</b> (₹${inr(b.reward)})</div>
-  <ul class="steps"><li>Neeche button se bot kholo aur start karo</li><li>Uska kaam poora karo</li><li>Screenshot + us bot ka apna refer link yahan submit karo</li></ul>
+  ${b.instructions ? `<div class="ins"><small>📋 POSTER KE INSTRUCTIONS (pehle padho)</small>${esc(b.instructions)}</div>` : ''}
+  <ul class="steps"><li>Neeche button se bot kholo aur start karo</li><li>${b.instructions ? 'Upar ke instructions ke hisaab se' : ''} kaam poora karo</li>${dv ? '<li>Is bot me <b>device verification</b> hai: verification karo aur result (success ya failed) ka screenshot lo</li>' : ''}<li>${dv ? '2 screenshot' : 'Screenshot'} + us bot ka apna refer link yahan submit karo</li></ul>
   <button class="btn ghost" data-act="open" data-url="${esc(b.link)}" style="margin-bottom:10px">🔗 Open bot</button>
-  <label>Screenshot</label><input id="bf" type="file" accept="image/*" data-inp="file"><img id="bprev" class="prev" style="display:none">
+  <label>${dv ? '1) Kaam ka screenshot' : 'Screenshot'}</label><input id="bf" type="file" accept="image/*" data-inp="file"><img id="bprev" class="prev" style="display:none">
+  ${dv ? '<label>2) Device verification ka screenshot (success ya failed jo aaya)</label><input id="bf2" type="file" accept="image/*" data-inp="file2"><img id="bprev2" class="prev" style="display:none">' : ''}
   <label>Us bot ka tumhara refer link</label><input id="br2" placeholder="https://t.me/bot?start=..." autocapitalize="off">
-  <button class="btn" data-act="bwsubmit" data-id="${b.id}">📤 Submit proof</button>`);
+  <button class="btn" data-act="bwsubmit" data-id="${b.id}" data-dv="${dv ? 1 : 0}">📤 Submit proof</button>`);
 }
 function compress(file) {
   return new Promise((res, rej) => {
@@ -703,7 +721,7 @@ async function chatSend() {
 /* ---------- REFER ---------- */
 async function referSheet() {
   const j = await act('/api/refer'); if (!j.ok) return; S.ref = j;
-  const st = { done: ['g', 'Rewarded'], pending: ['y', 'Pehle withdraw ka wait'] };
+  const st = { done: ['g', 'Rewarded'], pending: ['y', `${S.cfg.min_ref_tasks} task ka wait`] };
   openSheet(`<h3>🤝 Refer & Earn</h3><p>Apna link dost ko bhejo. Wo kam se kam <b>${S.cfg.min_ref_tasks} task</b> complete kar lega (24h hold ke baad), tumhe <b>+${j.reward} coins</b> milenge.</p>
   <div class="cost" style="word-break:break-all;user-select:all">${esc(j.link)}</div>
   <div class="row"><button class="btn ghost" data-act="refcopy">📋 Copy link</button><button class="btn" data-act="refshare">📤 Share</button></div>
@@ -728,7 +746,7 @@ const H = {
   async report(d) { const j = await act('/api/bw/report', { sid: +d.sid }); if (j.ok) { await popup('ok', 'Reported', j.msg); refresh(); } },
   deposit: depositSheet, withdraw: withdrawSheet,
   qa: d => { $('#dc').value = d.v; onInp('dep'); },
-  wmax: () => { $('#wc').value = Math.floor(S.me.balance / 100) * 100; onInp('wd'); },
+  wmax: () => { $('#wc').value = Math.floor(S.me.balance * 100 / (100 + S.cfg.withdraw_tax) / 100) * 100; onInp('wd'); },
   async depgo() {
     const j = await act('/api/deposit', { coins: +$('#dc').value }); if (j.ok) showQR(j, 'deposit');
   },
@@ -748,16 +766,18 @@ const H = {
     if (j.ok) { await popup('ok', 'Task live', j.msg); S.studioTab = 'my'; await loadMe(); studio(); renderNav(); if (S.tab === 'home' || S.tab === 'wallet') render(); }
   },
   async bwcreate() {
-    const j = await act('/api/bw/create', { title: $('#bt').value, link: $('#bl').value, reward: +$('#br').value, count: +$('#bn').value });
+    const j = await act('/api/bw/create', { title: $('#bt').value, link: $('#bl').value, reward: +$('#br').value, count: +$('#bn').value, instructions: $('#bi').value, needs_dev: $('#bdev').checked });
     if (j.ok) { await popup('ok', 'Bot work live', j.msg); S.studioTab = 'my'; await loadMe(); studio(); if (S.tab === 'home' || S.tab === 'wallet') render(); }
   },
   async tcancel(d) { const j = await act('/api/task/cancel', { id: +d.id }); if (j.ok) { await popup('ok', 'Cancelled', j.msg); await loadMe(); studio(); } },
   async bcancel(d) { const j = await act('/api/bw/cancel', { id: +d.id }); if (j.ok) { await popup('ok', 'Cancelled', j.msg); await loadMe(); studio(); } },
   async bwsubmit(d) {
-    const f = $('#bf').files[0];
+    const f = $('#bf').files[0], f2 = d.dv === '1' && $('#bf2') ? $('#bf2').files[0] : null;
     if (!f) return popup('error', 'Screenshot chahiye', 'Pehle screenshot select karo.');
-    let blob; try { blob = await compress(f); } catch (e) { return popup('error', 'Image error', 'Ye image read nahi hui.'); }
+    if (d.dv === '1' && !f2) return popup('error', '2 photo chahiye', 'Device verification ka screenshot (success ya failed) bhi select karo.');
+    let blob, blob2; try { blob = await compress(f); if (f2) blob2 = await compress(f2); } catch (e) { return popup('error', 'Image error', 'Ye image read nahi hui.'); }
     const fd = new FormData(); fd.append('bid', d.id); fd.append('ref', $('#br2').value); fd.append('photo', blob, 'proof.jpg');
+    if (blob2) fd.append('photo2', blob2, 'device.jpg');
     const j = await act('/api/bw/submit', undefined, fd);
     if (j.ok) { closeSheet(); await popup('ok', 'Submitted', j.msg); refresh(); }
   },
@@ -810,7 +830,7 @@ const H = {
 function onInp(k) {
   const c = S.cfg;
   if (k === 'dep') { const v = +$('#dc').value || 0; $('#dh').innerHTML = `Pay: <b>₹${(v / c.coin_per_inr).toLocaleString('en-IN')}</b>`; }
-  if (k === 'wd') { const v = +$('#wc').value || 0; $('#wh').innerHTML = `You get: <b>₹${(v * (100 - c.withdraw_tax) / 100 / c.coin_per_inr).toLocaleString('en-IN', { maximumFractionDigits: 2 })}</b> <span class="sub">(${c.withdraw_tax}% tax kat ke)</span>`; }
+  if (k === 'wd') { const v = +$('#wc').value || 0, fee = Math.floor(v * c.withdraw_tax / 100); $('#wh').innerHTML = `Tum paoge: <b>₹${(v / c.coin_per_inr).toLocaleString('en-IN', { maximumFractionDigits: 2 })}</b><br><span class="sub">Tax ${c.withdraw_tax}% = ${fmt(fee)} coins (upar se) · Balance se kul <b>${fmt(v + fee)}</b> coins katenge</span>`; }
   if (k === 'tcn') { const v = +$('#tcn').value || 0; $('#tcc').innerHTML = S.me.admin ? 'Cost: <b>Free</b> (admin)' : `Cost: <b>${fmt(v * c.ad_cost)}</b> coins (${c.ad_cost} per member)`; }
   if (k === 'bw') { const v = (+$('#br').value || 0) * (+$('#bn').value || 0); $('#bc').innerHTML = S.me.admin ? 'Total cost: <b>Free</b> (admin)' : `Total cost: <b>${fmt(v)}</b> coins`; }
 }
@@ -818,11 +838,11 @@ document.addEventListener('click', e => {
   const el = e.target.closest('[data-act]'); if (!el) return;
   if (H[el.dataset.act]) H[el.dataset.act](el.dataset);
 });
-document.addEventListener('input', e => { const k = e.target.dataset && e.target.dataset.inp; if (k && k !== 'file') onInp(k); });
+document.addEventListener('input', e => { const k = e.target.dataset && e.target.dataset.inp; if (k && k !== 'file' && k !== 'file2') onInp(k); });
 document.addEventListener('change', e => {
   if (e.target.id === 'chatFile' && e.target.files[0]) { chatPicked(e.target.files[0]); return; }
-  if (e.target.dataset && e.target.dataset.inp === 'file' && e.target.files[0]) {
-    const p = $('#bprev'); p.src = URL.createObjectURL(e.target.files[0]); p.style.display = 'block';
+  if (e.target.dataset && (e.target.dataset.inp === 'file' || e.target.dataset.inp === 'file2') && e.target.files[0]) {
+    const p = $(e.target.dataset.inp === 'file2' ? '#bprev2' : '#bprev'); p.src = URL.createObjectURL(e.target.files[0]); p.style.display = 'block';
   }
 });
 

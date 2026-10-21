@@ -119,6 +119,11 @@ ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS last_alert TIMESTAMPTZ;
 ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
 ALTER TABLE bw_subs ADD COLUMN IF NOT EXISTS report_sent BOOLEAN NOT NULL DEFAULT FALSE;
 CREATE INDEX IF NOT EXISTS wd_status_idx ON withdrawals(status, id);
+ALTER TABLE botworks ADD COLUMN IF NOT EXISTS instructions TEXT NOT NULL DEFAULT '';
+ALTER TABLE botworks ADD COLUMN IF NOT EXISTS needs_dev BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE bw_subs ADD COLUMN IF NOT EXISTS photo2_id TEXT;
+ALTER TABLE bw_subs ADD COLUMN IF NOT EXISTS photo2_uid TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS bws_photo2_uid ON bw_subs(photo2_uid) WHERE photo2_uid IS NOT NULL;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS ip TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS dev_bypass BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS fp_ok BOOLEAN NOT NULL DEFAULT FALSE;
@@ -414,6 +419,11 @@ async def pending_gateway_orders():
            AND created_at > now() - interval '24 hours' ORDER BY created_at DESC LIMIT 100""")
 
 
+async def orders_expire_old():
+    """24 ghante se purane unpaid orders ab verify nahi hote: DB me bhi Failed kar do."""
+    await pool.execute("UPDATE orders SET status='failed' WHERE status='pending' AND created_at < now() - interval '24 hours'")
+
+
 async def complete_order(order_id, paid_amount):
     async with pool.acquire() as c, c.transaction():
         o = await c.fetchrow("SELECT * FROM orders WHERE order_id=$1 FOR UPDATE", order_id)
@@ -442,20 +452,27 @@ async def tasks_done(uid):
                 + (SELECT count(*) FROM bw_subs WHERE worker_id=$1 AND status='approved')""", uid)
 
 
+def wd_fee(coins):
+    """Tax withdraw ki rakam ke UPAR lagta hai: 1000 coins ka paisa chahiye to 100 tax, kul 1100 katenge."""
+    return coins * config.WITHDRAW_TAX_PERCENT // 100
+
+
 async def request_withdraw(uid, coins):
-    """Return (wid, upi, fee_coins, net_inr). Tax coins me kat-ta hai, user ko net amount milta hai."""
-    fee = coins * config.WITHDRAW_TAX_PERCENT // 100
-    net_inr = Decimal(coins - fee) / Decimal(config.COIN_PER_INR)
+    """coins = jitne ka paisa user ko milega. Tax upar se: balance se coins + tax kat-ta hai.
+    Return (wid, upi, fee_coins, net_inr). withdrawals.coins = kul kata hua (coins+fee) taaki refund poora ho."""
+    fee = wd_fee(coins)
+    total = coins + fee
+    net_inr = Decimal(coins) / Decimal(config.COIN_PER_INR)
     async with pool.acquire() as c, c.transaction():
         u = await c.fetchrow(
             """UPDATE users SET balance=balance-$1 WHERE id=$2 AND balance>=$1
-               AND device_ok AND NOT banned AND debt=0 AND upi IS NOT NULL RETURNING upi""", coins, uid)
+               AND device_ok AND NOT banned AND debt=0 AND upi IS NOT NULL RETURNING upi""", total, uid)
         if not u:
             return None
         wid = await c.fetchval(
             "INSERT INTO withdrawals(user_id,coins,amount_inr,fee_coins,upi) VALUES($1,$2,$3,$4,$5) RETURNING id",
-            uid, coins, net_inr, fee, u["upi"])
-        await led(c, uid, "withdraw", -coins, wid)
+            uid, total, net_inr, fee, u["upi"])
+        await led(c, uid, "withdraw", -total, wid)
         if fee:
             await led(c, 0, "tax", fee, wid)
         return wid, u["upi"], fee, net_inr
@@ -542,7 +559,7 @@ async def wd_refund(w):
 # ---------- bot work ----------
 # Escrow: poster ke ad_balance se reward*target pehle hi kat jata hai.
 # Slot "used" = us task ki har submission jo 'closed' nahi hai.
-async def bw_create(owner, title, link, reward, n, free=False):
+async def bw_create(owner, title, link, reward, n, free=False, instructions="", needs_dev=False):
     cost = reward * n
     async with pool.acquire() as c, c.transaction():
         if not free:
@@ -551,8 +568,8 @@ async def bw_create(owner, title, link, reward, n, free=False):
             if not ok:
                 return None
         bid = await c.fetchval(
-            "INSERT INTO botworks(owner_id,title,link,reward,target,free) VALUES($1,$2,$3,$4,$5,$6) RETURNING id",
-            owner, title, link, reward, n, free)
+            "INSERT INTO botworks(owner_id,title,link,reward,target,free,instructions,needs_dev) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id",
+            owner, title, link, reward, n, free, instructions, bool(needs_dev))
         if not free:
             await led(c, owner, "bw_escrow", -cost, bid)
         return bid
@@ -598,7 +615,7 @@ async def bw_open(uid):
            ORDER BY b.reward DESC, b.id LIMIT 8""", uid)
 
 
-async def bw_submit(bid, worker, photo_id, photo_uid, ref_link):
+async def bw_submit(bid, worker, photo_id, photo_uid, ref_link, photo2_uid=None):
     """Return (result, sid, botwork_row). result: ok / closed / own / full / dup"""
     try:
         async with pool.acquire() as c, c.transaction():
@@ -610,8 +627,8 @@ async def bw_submit(bid, worker, photo_id, photo_uid, ref_link):
             if await _bw_used(c, bid) >= b["target"]:
                 return "full", None, None
             sid = await c.fetchval(
-                """INSERT INTO bw_subs(bw_id,worker_id,photo_id,photo_uid,ref_link)
-                   VALUES($1,$2,$3,$4,$5) RETURNING id""", bid, worker, photo_id, photo_uid, ref_link)
+                """INSERT INTO bw_subs(bw_id,worker_id,photo_id,photo_uid,ref_link,photo2_uid)
+                   VALUES($1,$2,$3,$4,$5,$6) RETURNING id""", bid, worker, photo_id, photo_uid, ref_link, photo2_uid)
             return "ok", sid, b
     except asyncpg.UniqueViolationError:
         return "dup", None, None
@@ -725,8 +742,10 @@ async def wd_history(uid):
 
 async def order_history(uid):
     return await pool.fetch(
-        """SELECT order_id, kind, coins, amount_inr, status, created_at FROM orders
-           WHERE user_id=$1 ORDER BY created_at DESC LIMIT 10""", uid)
+        """SELECT order_id, kind, coins, amount_inr, created_at,
+                  CASE WHEN status='pending' AND created_at < now() - make_interval(mins => $2) THEN 'failed'
+                       ELSE status END AS status
+           FROM orders WHERE user_id=$1 ORDER BY created_at DESC LIMIT 10""", uid, config.ORDER_EXPIRY_MIN)
 
 
 async def order_get(order_id, uid):
@@ -795,8 +814,8 @@ async def reset_device(uid):
            suspect=FALSE, dev_ver=2 WHERE id=$1 RETURNING id""", uid)
 
 
-async def bw_set_photo(sid, file_id):
-    await pool.execute("UPDATE bw_subs SET photo_id=$2 WHERE id=$1", sid, file_id)
+async def bw_set_photo(sid, file_id, file2_id=None):
+    await pool.execute("UPDATE bw_subs SET photo_id=$2, photo2_id=COALESCE($3, photo2_id) WHERE id=$1", sid, file_id, file2_id)
 
 
 async def bw_drop(sid):

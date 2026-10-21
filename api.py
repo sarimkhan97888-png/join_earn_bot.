@@ -97,7 +97,7 @@ def cfg(request):
             "bw_min_users": config.BW_MIN_USERS, "bw_max_users": config.BW_MAX_USERS,
             "support_url": config.SUPPORT_URL, "bot_username": request.app["bot"].username,
             "withdraw_tax": config.WITHDRAW_TAX_PERCENT, "app_name": config.APP_NAME,
-            "refer_reward": config.REFER_REWARD, "min_tasks": config.MIN_TASKS_FOR_WITHDRAW, "min_ref_tasks": config.MIN_TASKS_FOR_REFER,
+            "refer_reward": config.REFER_REWARD, "min_tasks": config.MIN_TASKS_FOR_WITHDRAW, "min_ref_tasks": config.MIN_TASKS_FOR_REFER, "order_expiry_min": config.ORDER_EXPIRY_MIN,
             "auto_payout": bool(config.AUTO_PAYOUT)}
 
 
@@ -236,7 +236,8 @@ async def api_tasks(request):
     uid = request["u"]["id"]
     ot, bo, bm = await asyncio.gather(db.open_tasks(uid), db.bw_open(uid), db.bw_mine(uid))
     ch = [{"id": t["id"], "title": t["title"], "link": t["link"], "reward": config.JOIN_REWARD} for t in ot]
-    bw = [{"id": b["id"], "title": b["title"], "link": b["link"], "reward": b["reward"]} for b in bo]
+    bw = [{"id": b["id"], "title": b["title"], "link": b["link"], "reward": b["reward"],
+           "instructions": b["instructions"], "needs_dev": b["needs_dev"]} for b in bo]
     mine = [{"id": r["id"], "status": r["status"], "title": r["title"], "reward": r["reward"]} for r in bm]
     return ok(channels=ch, botworks=bw, mine=mine)
 
@@ -363,8 +364,13 @@ async def api_withdraw(request):
         if done < config.MIN_TASKS_FOR_WITHDRAW:
             return err(f"⚠️ Withdraw ke liye kam se kam {config.MIN_TASKS_FOR_WITHDRAW} task complete karo "
                        f"(channel join ya bot work). Abhi complete: {done}.")
-    if coins < config.MIN_WITHDRAW_COINS or coins % config.COIN_PER_INR or coins > u["balance"]:
-        return err(f"Min {config.MIN_WITHDRAW_COINS} coins, 100 ke multiple me, aur max {u['balance']}.")
+    if coins < config.MIN_WITHDRAW_COINS or coins % config.COIN_PER_INR:
+        return err(f"Min {config.MIN_WITHDRAW_COINS} coins aur 100 ke multiple me daalo.")
+    need = coins + db.wd_fee(coins)
+    if need > u["balance"]:
+        mx = u["balance"] * 100 // (100 + config.WITHDRAW_TAX_PERCENT) // 100 * 100
+        return err(f"{coins} coins + {db.wd_fee(coins)} tax = {need} coins chahiye, balance {u['balance']}. "
+                   f"Max withdraw: {mx} coins.")
     r = await db.request_withdraw(uid, coins)
     if not r:
         return err("❌ Withdraw nahi ho paya. Balance aur verification check karo.")
@@ -375,7 +381,7 @@ async def api_withdraw(request):
     t.add_done_callback(_bg.discard)
     if auto:
         return ok(msg=f"Withdraw #{wid} process ho raha hai: ₹{net:.2f} → {upi}. 2-5 minute me aa jayega.")
-    return ok(msg=f"Withdraw request #{wid} bhej di gayi. {coins} coins − {fee} tax = ₹{net:.2f} → {upi}. "
+    return ok(msg=f"Withdraw request #{wid} bhej di gayi. ₹{net:.2f} → {upi} (balance se {coins} + {fee} tax = {coins + fee} coins kate). "
                   f"Admin approve karega to paisa aa jayega.")
 
 
@@ -389,8 +395,8 @@ async def _after_withdraw(bot, u, wid, coins, fee, net, upi, auto):
             why += "\n⚠️ <b>Suspect:</b> iska device fingerprint kisi aur account se match karta hai. Pehle check karo."
         if config.AUTO_PAYOUT and not u["suspect"]:
             why += "\nℹ️ Auto limit se bahar / abhi auto pause hai, isliye manual approval."
-        await payouts.alert(bot, f"💸 Withdraw #{wid}\nUser: <code>{u['id']}</code>\n{coins} coins − {fee} tax = "
-                                 f"<b>₹{net:.2f}</b> payable\nUPI: <code>{html.escape(upi)}</code>{why}",
+        await payouts.alert(bot, f"💸 Withdraw #{wid}\nUser: <code>{u['id']}</code>\n₹{net:.2f} payable "
+                                 f"(user se {coins + fee} coins kate = {coins} + {fee} tax)\nUPI: <code>{html.escape(upi)}</code>{why}",
                             payouts.admin_kb(wid), wid=wid)
     except Exception:
         log.exception("after_withdraw failed for #%s", wid)
@@ -745,7 +751,10 @@ async def api_bw_create(request):
         return err(f"Reward min {config.BW_MIN_REWARD} coins hona chahiye.")
     if not (config.BW_MIN_USERS <= n <= config.BW_MAX_USERS):
         return err(f"Users {config.BW_MIN_USERS} se {config.BW_MAX_USERS} ke beech rakho.")
-    bid = await db.bw_create(u["id"], title, link, reward, n, free=u["id"] in config.ADMIN_IDS)
+    instr = str(d.get("instructions", "")).strip()[:400]
+    needs_dev = bool(d.get("needs_dev"))
+    bid = await db.bw_create(u["id"], title, link, reward, n, free=u["id"] in config.ADMIN_IDS,
+                             instructions=instr, needs_dev=needs_dev)
     if not bid:
         return err(f"Ad balance kam hai. Chahiye {reward * n} coins. Wallet se deposit karo.")
     asyncio.create_task(util.notify(request.app["bot"], u["id"], f"✅ Tumhara Bot Work #{bid} live ho gaya: {html.escape(title)}."))
@@ -783,11 +792,11 @@ async def api_bw_submit(request):
         return too_fast()
     if await db.is_blocked(uid):
         return err("🚫 Tum blocked ho. Pehle left channel rejoin karo.")
-    fields, photo = {}, None
+    fields, photos = {}, {}
     try:
         reader = await request.multipart()
         async for part in reader:
-            if part.name == "photo":
+            if part.name in ("photo", "photo2"):
                 buf = bytearray()
                 while True:
                     chunk = await part.read_chunk(65536)
@@ -796,18 +805,27 @@ async def api_bw_submit(request):
                     buf += chunk
                     if len(buf) > 5_000_000:
                         return err("Screenshot 5MB se chhota bhejo.")
-                photo = bytes(buf)
+                photos[part.name] = bytes(buf)
             else:
                 fields[part.name] = ((await part.read_chunk(4096)) or b"").decode("utf-8", "ignore")[:400]
     except Exception:
         return err("Upload fail hua. Dobara try karo.")
+    photo, photo2 = photos.get("photo"), photos.get("photo2")
     if not photo or not _img_ok(photo):
         return err("Screenshot (photo) upload karo.")
+    bw0 = await db.bw_get(to_int(fields.get("bid")))
+    if bw0 and bw0["needs_dev"] and (not photo2 or not _img_ok(photo2)):
+        return err("Is bot me device verification hai: 2 photo chahiye. Dusri photo me device verification ka result (success ya failed) dikhao.")
+    if not (bw0 and bw0["needs_dev"]):
+        photo2 = None
+    if photo2 and hashlib.sha256(photo2).hexdigest() == hashlib.sha256(photo).hexdigest():
+        return err("Dono photo alag-alag hone chahiye.")
     ref = fields.get("ref", "").strip()
     if not URL_RE.match(ref):
         return err("Us bot ka sahi refer link daalo (https://...).")
     res, sid, b = await db.bw_submit(to_int(fields.get("bid")), uid, "pending",
-                                     hashlib.sha256(photo).hexdigest(), ref)
+                                     hashlib.sha256(photo).hexdigest(), ref,
+                                     hashlib.sha256(photo2).hexdigest() if photo2 else None)
     if res != "ok":
         return err({"dup": "Tum ye task pehle submit kar chuke ho, ya ye screenshot pehle use ho chuka hai.",
                     "own": "Apna hi task nahi kar sakte.", "full": "Is task ke saare slots full ho gaye.",
@@ -817,11 +835,16 @@ async def api_bw_submit(request):
     esc = lambda s: str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")  # noqa: E731
     cap = (f"🤖 <b>Bot Work submission</b> #{sid}\nTask: {esc(b['title'])}\n"
            f"Worker: {esc(name)} (<code>{uid}</code>)\nRefer link: {esc(ref)}\nReward: {b['reward']} coins\n\n"
-           "Screenshot dekho. Sahi ho to <b>Done</b>, nahi to Reject.")
+           "Screenshot dekho. Sahi ho to <b>Done</b>, nahi to Reject." + ("\n🔐 Is bot me device verification hai: upar wali alag photo me uska result dekho." if photo2 else ""))
     kb = M([[B("✅ Done", callback_data=f"bws_ok:{sid}"), B("❌ Reject", callback_data=f"bws_no:{sid}")]])
     try:
+        f2 = None
+        if photo2:  # pehle device-verification wali photo, phir buttons wali main photo
+            m2 = await bot.send_photo(b["owner_id"], photo2, parse_mode="HTML",
+                                      caption=f"🔐 <b>Device verification screenshot</b> (submission #{sid}). Result success hai ya failed, dekho.")
+            f2 = m2.photo[-1].file_id
         m = await bot.send_photo(b["owner_id"], photo, caption=cap, parse_mode="HTML", reply_markup=kb)
-        await db.bw_set_photo(sid, m.photo[-1].file_id)
+        await db.bw_set_photo(sid, m.photo[-1].file_id, f2)
     except TelegramError:
         await db.bw_drop(sid)
         return err("Owner tak bhej nahi paya (unhone bot start nahi kiya hoga). Baad me try karo.")

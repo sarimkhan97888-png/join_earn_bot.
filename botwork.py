@@ -32,6 +32,8 @@ async def send_report(bot, sid):
     sent = False
     for a in config.ADMIN_IDS:
         try:
+            if s["photo2_id"]:
+                await bot.send_photo(a, s["photo2_id"], caption=f"🔐 Device verification screenshot (submission #{sid})")
             await bot.send_photo(a, s["photo_id"], caption=cap, parse_mode="HTML", reply_markup=kb)
             sent = True
         except TelegramError:
