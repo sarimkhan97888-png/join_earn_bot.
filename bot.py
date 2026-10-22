@@ -38,6 +38,29 @@ async def post_init(app):
 
 _last_start = {}
 
+WELCOME = (
+    "💰 <b>𝐂𝐎𝐌𝐏𝐋𝐄𝐓𝐄 𝐓𝐀𝐒𝐊𝐒 &amp; 𝐄𝐀𝐑𝐍 𝐂𝐎𝐈𝐍𝐒</b> 🪙\n\n"
+    "🔥 Complete Tasks &amp; Earn Coins\n"
+    "💸 Instant UPI Withdrawal\n"
+    "🎯 Create Tasks Using Coins\n"
+    "📺 Watch Ads &amp; Earn Rewards\n"
+    "👥 Get Subscribers &amp; Referrals\n\n"
+    "🚀 <b>𝐒𝐭𝐚𝐫𝐭 𝐄𝐚𝐫𝐧𝐢𝐧𝐠 𝐓𝐨𝐝𝐚𝐲!</b> 💎")
+
+
+async def intro_anim(update):
+    """Naye user ke liye ek message jo letter-by-letter 'PROFITIX' banta hai, phir delete. Fail ho to chupchap skip."""
+    frames = ["💎", "💎 𝐏𝐑", "💎 𝐏𝐑𝐎𝐅𝐈", "💎 𝐏𝐑𝐎𝐅𝐈𝐓𝐈𝐗", "💰 𝐏𝐑𝐎𝐅𝐈𝐓𝐈𝐗 ✨"]
+    try:
+        m = await update.message.reply_text(frames[0])
+        for f in frames[1:]:
+            await asyncio.sleep(0.6)
+            await m.edit_text(f)
+        await asyncio.sleep(0.8)
+        await m.delete()
+    except Exception:
+        pass
+
 
 async def start(update: Update, ctx):
     """Har /start par DB se check: banned / leave kiya channel / device verify. Refer link bhi yahin pakadte hain."""
@@ -64,16 +87,15 @@ async def start(update: Update, ctx):
         return await update.message.reply_text(
             f"🚫 <b>App block hai</b>\nTumne ye channel leave kar diya hai:\n{names}\n\n"
             f"Dobara join karo, phir app me <b>Re-check</b> dabao.", parse_mode="HTML", reply_markup=M(rows))
+    if not existed:
+        await intro_anim(update)  # sirf bilkul naye user ko ek chhota "PROFITIX" animation
     if not u["device_ok"]:
         await update.message.reply_text(
-            f"👋 <b>{app} me welcome!</b>\n\n🔐 Shuru karne se pehle <b>Device Verification</b> zaroori hai "
-            f"(ek device = ek account).\nNeeche button dabao, verification page khulega. Pass hone par yahin bot par wapas aa jaoge, phir app khulega.",
+            WELCOME + "\n\n🔐 <b>Pehle Device Verification karo</b> (1 device = 1 account).\n"
+                      "Neeche button dabao, verify hone ke baad yahin wapas aa jao.",
             parse_mode="HTML", reply_markup=M([[B("🔐 Verify Device", web_app=WebAppInfo(url=f"{config.BASE_URL}/app?v=1"))]]))
         return
-    await update.message.reply_text(
-        f"👋 <b>{app}</b>\nChannels join karo, coins kamao aur UPI me withdraw karo 💰\n\n"
-        f"Naya phone / data clear karoge to app dobara device verify maangega.\nNeeche button se app kholo 👇",
-        parse_mode="HTML", reply_markup=app_kb())
+    await update.message.reply_text(WELCOME + "\n\n👇 Neeche button se app kholo", parse_mode="HTML", reply_markup=app_kb())
 
 
 async def bypass_cmd(update: Update, ctx):
