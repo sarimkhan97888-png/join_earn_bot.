@@ -630,7 +630,7 @@ async def api_verify(request):
         await util.notify(bot, u["id"], "🚫 <b>Device verification fail</b>\nYe device kisi aur account se linked hai "
                           "ya tumhara account pehle kisi aur device se verify tha. Account block hai, Customer service se contact karo.")
         return err("🚫 Device verification fail. Account block hai, Customer service se contact karo.")
-    await util.notify(bot, u["id"], "✅ <b>Device verify ho gaya!</b>\nTelegram ID + device save ho gaye. Ab app kholo 👇",
+    await util.notify(bot, u["id"], "✅ <b>Device verify ho gaya!</b>\n\n" + util.WELCOME + "\n\n👇 Ab app kholo",
                       reply_markup=M([[B("🚀 Open App", web_app=WebAppInfo(url=f"{config.BASE_URL}/app"))]]))
     return ok(msg="Device verified! Bot par wapas jao aur Open App dabao.")
 

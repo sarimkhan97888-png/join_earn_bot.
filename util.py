@@ -7,6 +7,14 @@ from telegram.error import RetryAfter, TelegramError
 import config
 
 log = logging.getLogger("util")
+WELCOME = (
+    "💰 <b>𝐂𝐎𝐌𝐏𝐋𝐄𝐓𝐄 𝐓𝐀𝐒𝐊𝐒 &amp; 𝐄𝐀𝐑𝐍 𝐂𝐎𝐈𝐍𝐒</b> 🪙\n\n"
+    "🔥 Complete Tasks &amp; Earn Coins\n"
+    "💸 Instant UPI Withdrawal\n"
+    "🎯 Create Tasks Using Coins\n"
+    "📺 Watch Ads &amp; Earn Rewards\n"
+    "👥 Get Subscribers &amp; Referrals\n\n"
+    "🚀 <b>𝐒𝐭𝐚𝐫𝐭 𝐄𝐚𝐫𝐧𝐢𝐧𝐠 𝐓𝐨𝐝𝐚𝐲!</b> 💎")
 main_bot = None  # main bot object (backup bot ke callbacks me bhi user ko main bot se hi DM jaata hai)
 
 
