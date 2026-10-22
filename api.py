@@ -97,7 +97,7 @@ def cfg(request):
             "premium_days": config.PREMIUM_DAYS, "bw_min_reward": config.BW_MIN_REWARD,
             "bw_min_users": config.BW_MIN_USERS, "bw_max_users": config.BW_MAX_USERS,
             "support_url": config.SUPPORT_URL, "bot_username": request.app["bot"].username,
-            "withdraw_tax": config.WITHDRAW_TAX_PERCENT, "app_name": config.APP_NAME,
+            "withdraw_tax": config.WITHDRAW_TAX_PERCENT, "payout_link": config.PAYOUT_CHANNEL_LINK, "app_name": config.APP_NAME,
             "refer_reward": config.REFER_REWARD, "min_tasks": config.MIN_TASKS_FOR_WITHDRAW, "min_ref_tasks": config.MIN_TASKS_FOR_REFER, "order_expiry_min": config.ORDER_EXPIRY_MIN,
             "auto_payout": bool(config.AUTO_PAYOUT)}
 

@@ -76,6 +76,9 @@ nav{position:fixed;left:0;right:0;bottom:0;z-index:20;background:var(--card);bor
 nav button{flex:1;border:0;background:none;color:var(--sub);display:flex;flex-direction:column;align-items:center;gap:3px;
   font-size:11px;font-weight:700;padding:6px 0;position:relative}
 nav button.on{color:var(--acc)}
+.payfab{position:fixed;right:14px;bottom:calc(76px + env(safe-area-inset-bottom));z-index:19;border:0;border-radius:99px;padding:11px 16px;font-weight:800;font-size:13px;color:#fff;
+  background:linear-gradient(135deg,var(--ok),var(--acc));box-shadow:0 6px 18px rgba(0,0,0,.35);display:flex;align-items:center;gap:6px;cursor:pointer}
+.payfab[hidden]{display:none}
 nav svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 .dot{position:absolute;top:2px;right:28%;width:9px;height:9px;border-radius:50%;background:var(--bad)}
 /* sheet + modal */
@@ -183,6 +186,7 @@ nav svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:1.8;st
 <div class="sp-card"><div class="sp-banner"><div class="coin3d">₹</div><div class="sp-brand">__APP_NAME__</div><div class="sp-tag">Join · Earn · Withdraw</div><div class="sp-bar"><i></i></div><div class="sp-hint" id="spHint">Secure connection...</div></div></div></div>
 <div class="app" id="view"></div>
 <nav id="nav"></nav>
+<button id="payfab" class="payfab" data-act="openpay" hidden>📢 <span>Payout Proofs</span></button>
 <div id="sheet"><div class="bd" data-act="closesheet"></div><div class="pn"><div class="gr"></div><div id="sheetBody"></div></div></div>
 <div id="modal"></div>
 <div id="zoom"><button class="zx" data-act="zclose" aria-label="Close">✕</button><img alt=""><div class="zh">Pinch / double-tap se zoom</div></div>
@@ -369,7 +373,10 @@ async function go(tab) {
   } finally { if (my === goSeq) L.classList.remove('open'); }
 }
 async function refresh() { await go(S.tab); }
-function render() { ({ home: rHome, tasks: rTasks, wallet: rWallet, profile: rProfile })[S.tab](); }
+function render() {
+  ({ home: rHome, tasks: rTasks, wallet: rWallet, profile: rProfile })[S.tab]();
+  const f = $('#payfab'); if (f) f.hidden = !(S.tab === 'wallet' && S.cfg && S.cfg.payout_link);
+}
 
 /* ---------- HOME ---------- */
 const KIND = {
@@ -412,11 +419,11 @@ function rTasks() {
       : '<div class="card empty"><i>🎯</i>Abhi koi task available nahi.<br>Thodi der baad dekho.</div>';
   } else {
     h += `<p>Kisi bot ka kaam karo, screenshot + us bot ka apna refer link submit karo. Owner Done kare to coins seedhe balance me.</p>`;
-    h += T.botworks.length ? T.botworks.map(b => `<div class="card" data-act="bwopen" data-id="${b.id}" style="cursor:pointer"><div class="row"><div class="ico">🤖</div><div class="sp"><b style="font-size:15px">${esc(b.title)}</b><span class="sub">Tap to open</span></div><span class="chip g">+${fmt(b.reward)}</span></div></div>`).join('')
+    h += T.botworks.length ? T.botworks.map(b => `<div class="card" data-act="bwopen" data-id="${b.id}" style="cursor:pointer"><div class="row"><div class="ico">🤖</div><div class="sp"><b style="font-size:15px">${esc(b.title)}</b><span class="sub">${b.retry ? '🔁 Reject hua tha: ek aur mauka (aakhri)' : 'Tap to open'}</span></div><span class="chip g">+${fmt(b.reward)}</span></div></div>`).join('')
       : '<div class="card empty"><i>🤖</i>Abhi koi bot work nahi.</div>';
     if (T.mine.length) {
       const st = { pending: ['y', 'Pending'], approved: ['g', 'Approved'], rejected: ['r', 'Rejected'], reported: ['b', 'Reported'], closed: ['', 'Closed'] };
-      h += `<h3 style="margin:18px 0 8px">My submissions</h3><div class="card" style="padding:4px 16px">${T.mine.map(m => `<div class="item"><div class="ico">📄</div><div class="sp"><b>${esc(m.title)}</b><span class="sub">+${fmt(m.reward)} coins</span></div>${m.status === 'rejected' ? `<button class="btn sm bad" data-act="report" data-sid="${m.id}">Report</button>` : ''}<span class="chip ${st[m.status][0]}">${st[m.status][1]}</span></div>`).join('')}</div>`;
+      h += `<h3 style="margin:18px 0 8px">My submissions</h3><div class="card" style="padding:4px 16px">${T.mine.map(m => `<div class="item"><div class="ico">📄</div><div class="sp"><b>${esc(m.title)}</b><span class="sub">+${fmt(m.reward)} coins${m.status === 'rejected' ? '<br>📝 ' + esc(m.reason || 'Reject hua') + (m.locked ? ' · 🔒 Task lock' : ' · 🔁 Retry ke liye Tasks me kholo') : ''}</span></div>${m.status === 'rejected' ? `<button class="btn sm bad" data-act="report" data-sid="${m.id}">Report</button>` : ''}<span class="chip ${st[m.status][0]}">${st[m.status][1]}</span></div>`).join('')}</div>`;
     }
   }
   $('#view').innerHTML = h;
@@ -425,7 +432,7 @@ function rTasks() {
 /* ---------- WALLET ---------- */
 function rWallet() {
   const m = S.me, W = S.wallet || { orders: [], withdrawals: [] };
-  const st = { paid: ['g', 'Paid'], pending: ['y', 'Pending'], rejected: ['r', 'Rejected'], processing: ['b', 'Processing'], sending: ['b', 'Processing'], failed: ['r', 'Failed'], mismatch: ['r', 'Mismatch'] };
+  const st = { paid: ['g', 'Paid'], pending: ['y', 'Pending'], rejected: ['r', 'Rejected'], processing: ['b', 'Processing'], sending: ['b', 'Processing'], failed: ['r', 'Failed'], expired: ['r', 'Expired'], mismatch: ['r', 'Mismatch'] };
   const rows = [
     ...W.withdrawals.map(w => ({ at: w.at, ico: '⬆️', t: 'Withdraw', s: `₹${w.amount} → ${w.upi} · ${fmt(w.coins)} coins kate (tax ${fmt(w.fee)})`, st: w.status })),
     ...W.orders.map(o => ({ at: o.at, ico: o.kind === 'premium' ? '💎' : '⬇️', t: o.kind === 'premium' ? 'Premium' : 'Deposit', s: `₹${o.amount}${o.coins ? ' · ' + fmt(o.coins) + ' coins' : ''}`, st: o.status }))
@@ -553,6 +560,7 @@ function bwOpen(id) {
   const b = (S.tasks.botworks || []).find(x => x.id == id); if (!b) return;
   const dv = !!b.needs_dev;
   openSheet(`<h3>🤖 ${esc(b.title)}</h3><div class="cost">Reward: <b>+${fmt(b.reward)} coins</b> (₹${inr(b.reward)})</div>
+  ${b.retry ? `<div class="ins" style="border-left-color:var(--warn)"><small>🔁 AAKHRI MAUKA</small>Pichli submission reject hui thi${b.my_reason ? ': <b>' + esc(b.my_reason) + '</b>' : ''}. Is baar sahi screenshot do. Dobara reject hua to ye task tumhare liye <b>lock</b> ho jayega.</div>` : ''}
   ${b.instructions ? `<div class="ins"><small>📋 POSTER KE INSTRUCTIONS (pehle padho)</small>${esc(b.instructions)}</div>` : ''}
   <ul class="steps"><li>Neeche button se bot kholo aur start karo</li><li>${b.instructions ? 'Upar ke instructions ke hisaab se' : ''} kaam poora karo</li>${dv ? '<li>Is bot me <b>device verification</b> hai: verification karo aur result (success ya failed) ka screenshot lo</li>' : ''}<li>${dv ? '2 screenshot' : 'Screenshot'} + us bot ka apna refer link yahan submit karo</li></ul>
   <button class="btn ghost" data-act="open" data-url="${esc(b.link)}" style="margin-bottom:10px">🔗 Open bot</button>
@@ -744,6 +752,7 @@ const H = {
   async rejoin() { const j = await act('/api/rejoin', {}); if (j.ok) { await popup('ok', 'Done', j.msg); refresh(); } },
   bwopen: d => bwOpen(d.id),
   async report(d) { const j = await act('/api/bw/report', { sid: +d.sid }); if (j.ok) { await popup('ok', 'Reported', j.msg); refresh(); } },
+  openpay: () => openLink(S.cfg && S.cfg.payout_link),
   deposit: depositSheet, withdraw: withdrawSheet,
   qa: d => { $('#dc').value = d.v; onInp('dep'); },
   wmax: () => { $('#wc').value = Math.floor(S.me.balance * 100 / (100 + S.cfg.withdraw_tax) / 100) * 100; onInp('wd'); },

@@ -252,6 +252,7 @@ async def on_admin_wd(update: Update, ctx):
             if not w:
                 return await stale()
             await ans("✅ Approved — UPI par manually pay kar do")
+            await extras.post_payout(w)
             extras.feed(f"✅ Withdraw #{wid} <b>approved (manual paid)</b> ₹{float(w['amount_inr']):.2f} → <code>{html.escape(w['upi'])}</code> (user <code>{w['user_id']}</code>)")
             await util.notify(main, w["user_id"],
                               f"✅ Withdraw #{wid} paid: ₹{float(w['amount_inr']):.2f} → {w['upi']} (tax {tax}% alag se kata)")
@@ -260,6 +261,7 @@ async def on_admin_wd(update: Update, ctx):
         if not w:
             return await stale()
         await ans("✅ Paid mark ho gaya")
+        await extras.post_payout(w)
         extras.feed(f"✅ Withdraw #{wid} <b>paid</b> (manual mark) ₹{float(w['amount_inr']):.2f}")
         await util.notify(main, w["user_id"], f"✅ Withdraw #{wid} paid: ₹{float(w['amount_inr']):.2f} → {w['upi']}")
     elif act == "adm_refund":

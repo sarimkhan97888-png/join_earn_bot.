@@ -139,6 +139,7 @@ async def settle(bot, w, min_gap=0):
             await util.notify(bot, w["user_id"],
                               f"✅ Withdraw #{w['id']} paid: ₹{float(w['amount_inr']):.2f} → {w['upi']}")
             await extras.bk_delete(w["id"])
+            await extras.post_payout(done)
             extras.feed(f"✅ Withdraw #{w['id']} <b>paid</b> ₹{float(w['amount_inr']):.2f} (user <code>{w['user_id']}</code>)")
         return "paid"
     if state == "failed":

@@ -165,6 +165,27 @@ async def bk_delete(wid):
         log.exception("bk_delete failed #%s", wid)
 
 
+# ---------- public payout proof channel ----------
+def _mask_upi(upi):
+    name, _, bank = (upi or "").partition("@")
+    return (name[:2] + "***" + ("@" + bank if bank else "")) if name else "***"
+
+
+async def post_payout(w):
+    """Withdraw sach me paid hone par public proof channel me post (UPI masked). Kabhi raise nahi karta."""
+    if not config.PAYOUT_CHANNEL_ID or not util.main_bot:
+        return
+    try:
+        cid = int(config.PAYOUT_CHANNEL_ID) if config.PAYOUT_CHANNEL_ID.lstrip("-").isdigit() else config.PAYOUT_CHANNEL_ID
+        when = datetime.now(timezone(timedelta(hours=5, minutes=30)))
+        await util.main_bot.send_message(
+            cid, f"✅ <b>Payout successful</b>\n💸 Amount: <b>₹{float(w['amount_inr']):.2f}</b>\n"
+                 f"🏦 UPI: <code>{html.escape(_mask_upi(w['upi']))}</code>\n🆔 Withdraw #{w['id']}\n"
+                 f"🕒 {when:%d %b %Y, %H:%M} IST", parse_mode="HTML", disable_web_page_preview=True)
+    except Exception as e:
+        log.warning("payout channel post failed #%s: %s", w.get("id"), e)
+
+
 # ---------- admin live feed (main bot) ----------
 _feed_q = None
 _feed_task = None
