@@ -8,8 +8,8 @@ APP_NAME = os.getenv("APP_NAME", "Profitix")      # loading banner / welcome me 
 DB_POOL_MAX = int(os.getenv("DB_POOL_MAX", "15"))
 DB_POOL_MIN = int(os.getenv("DB_POOL_MIN", "4"))
 BACKUP_BOT_TOKEN = os.getenv("BACKUP_BOT_TOKEN", "")  # optional: daily data backup is bot se admin ko jata hai
-PAYOUT_CHANNEL_ID = os.getenv("PAYOUT_CHANNEL_ID", "").strip()      # public payout proof channel (-100... ya @username); khali = band
-PAYOUT_CHANNEL_LINK = os.getenv("PAYOUT_CHANNEL_LINK", "").strip()  # https://t.me/... app me floating button
+PAYOUT_CHANNEL_ID = os.getenv("PAYOUT_CHANNEL_ID", "@PROFITIXPAYOUT").strip()      # public payout proof channel (-100... ya @username); khali = band
+PAYOUT_CHANNEL_LINK = os.getenv("PAYOUT_CHANNEL_LINK", "https://t.me/PROFITIXPAYOUT").strip()  # https://t.me/... app me floating button
 ADMIN_FEED = int(os.getenv("ADMIN_FEED", "1"))  # 1 = main bot par har event ki khabar admins ko
 LEDGER_KEEP = 10            # har user ki transaction history me itni hi entries rakhte hain
 SUPPORT_KEEP_HOURS = 24     # support text/photo/voice itne ghante baad delete
