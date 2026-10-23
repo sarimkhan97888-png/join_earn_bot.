@@ -37,8 +37,14 @@ WITHDRAW_TAX_PERCENT = 10   # withdraw par tax (coins me kat-ta hai)
 HOLD_HOURS = 24
 REJOIN_PERCENT = 50         # channel leave ke baad rejoin par (sirf ek baar) itna % reward wapas, 24h hold me
 MAX_DEVICE_CHANGES = 3     # device badalne par re-verify kitni baar allowed
-PREMIUM_PRICE = 49          # Rs
-PREMIUM_DAYS = 30
+# Premium levels. None = unlimited. fee None = normal WITHDRAW_TAX_PERCENT. wd_hours = pending withdraw itne ghante me admin ne
+# na kiya to expire+refund (kam = tez). tasks = roz kitne task (channel+group+bot work milake) bana sakte hain. ref = refer reward.
+PLANS = {
+    1: dict(price=19, days=7, tasks=2, wd=2, fee=None, wd_hours=24, ref=100, top=False),
+    2: dict(price=39, days=15, tasks=5, wd=5, fee=None, wd_hours=12, ref=100, top=False),
+    3: dict(price=69, days=30, tasks=None, wd=None, fee=0, wd_hours=5, ref=200, top=True),
+}
+TOP_LEVEL = 3               # is level ke users ke task list me sabse upar dikhte hain
 
 # Bot Work (referral / bot task)
 BW_MIN_REWARD = 220         # poster kam se kam itna coin per user de sakta hai
@@ -51,5 +57,5 @@ STRICT_FP = os.getenv("STRICT_FP", "1") == "1"  # 1 = same fingerprint + same IP
 MIN_TASKS_FOR_WITHDRAW = int(os.getenv("MIN_TASKS_FOR_WITHDRAW", "2"))  # withdraw se pehle itne task complete hone chahiye (channel join / bot work)
 MIN_TASKS_FOR_REFER = int(os.getenv("MIN_TASKS_FOR_REFER", "2"))  # dost itne task kare tab referrer ko reward
 ORDER_EXPIRY_MIN = int(os.getenv("ORDER_EXPIRY_MIN", "30"))  # itne minute baad unpaid deposit/premium order history me Failed dikhta hai
-WITHDRAW_EXPIRE_HOURS = int(os.getenv("WITHDRAW_EXPIRE_HOURS", "24"))  # pending withdraw itne ghante me approve na ho to expire + refund
+WITHDRAW_EXPIRE_HOURS = int(os.getenv("WITHDRAW_EXPIRE_HOURS", "48"))  # pending withdraw itne ghante me approve na ho to expire + refund
 BW_MAX_ATTEMPTS = int(os.getenv("BW_MAX_ATTEMPTS", "2"))  # bot work me ek worker ke kitne try (reject ke baad retry), uske baad lock

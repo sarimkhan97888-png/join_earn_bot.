@@ -112,6 +112,29 @@ nav svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:1.8;st
 .cost{background:var(--card2);border-radius:13px;padding:11px 13px;margin:2px 0 12px;font-size:14px}
 #chat{position:fixed;inset:0;z-index:50;background:var(--bg);display:none;flex-direction:column}
 #chat.open{display:flex}
+#prem{position:fixed;inset:0;z-index:30;background:var(--bg);display:none;overflow:auto;-webkit-overflow-scrolling:touch}
+#prem.open{display:block}
+.pm-in{max-width:540px;margin:0 auto;padding:0 14px calc(28px + env(safe-area-inset-bottom))}
+.pm-h{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:10px;padding:12px 0;background:var(--bg)}
+.pm-h button{border:0;background:var(--card2);color:var(--text);width:36px;height:36px;border-radius:12px;font-size:22px;line-height:1}
+.pm-h b{font-size:18px}
+.pm-st{border:1px solid var(--line);background:var(--card);border-radius:16px;padding:12px 14px;margin-bottom:14px;font-size:14px}
+.pm-card{position:relative;border-radius:22px;padding:20px 18px 18px;margin-bottom:16px;color:#fff;overflow:hidden;box-shadow:0 10px 26px rgba(0,0,0,.35)}
+.pm-card:before{content:"";position:absolute;right:-40px;top:-40px;width:160px;height:160px;border-radius:50%;background:rgba(255,255,255,.14)}
+.pm-card:after{content:"";position:absolute;left:-50px;bottom:-60px;width:150px;height:150px;border-radius:50%;background:rgba(255,255,255,.08)}
+.pm-card>*{position:relative;z-index:1}
+.pm-tag{display:inline-block;font-size:11px;font-weight:800;letter-spacing:.6px;padding:4px 10px;border-radius:99px;background:rgba(255,255,255,.22);margin-bottom:8px}
+.pm-top{display:flex;align-items:flex-end;justify-content:space-between;gap:8px}
+.pm-lv{font-size:13px;font-weight:800;opacity:.9;letter-spacing:.8px;text-transform:uppercase}
+.pm-price{font-size:42px;font-weight:900;line-height:1}
+.pm-price small{font-size:13px;font-weight:700;opacity:.85;margin-left:4px}
+.pm-feat{list-style:none;margin:14px 0 14px;padding:0}
+.pm-feat li{padding:5px 0 5px 24px;position:relative;font-size:14px;line-height:1.35}
+.pm-feat li:before{content:"✓";position:absolute;left:0;top:5px;width:18px;height:18px;border-radius:50%;background:rgba(255,255,255,.25);font-size:11px;font-weight:900;display:grid;place-items:center}
+.pm-btns{display:flex;gap:8px}
+.pm-btns button{flex:1;border:0;border-radius:14px;padding:13px 6px;font-weight:800;font-size:14px;cursor:pointer;background:#fff;color:#111}
+.pm-btns button.alt{background:rgba(0,0,0,.28);color:#fff}
+.pm-free{font-size:12.5px;color:var(--sub);text-align:center;margin:4px 6px 0;line-height:1.5}
 .ch-h{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line);background:var(--card)}
 .ch-h button{border:0;background:var(--card2);color:var(--text);width:36px;height:36px;border-radius:12px;font-size:22px;line-height:1}
 .ch-h b{font-size:16px}.ch-h span{display:block;font-size:12px;color:var(--sub);font-weight:400}
@@ -391,8 +414,8 @@ function deviceWarn() {
 function rHome() {
   const m = S.me;
   const banner = m.premium
-    ? `<div class="banner on"><span style="font-size:26px">${m.admin ? '👑' : '💎'}</span><div><b>${m.admin ? 'Admin · unlimited' : 'Premium active'}</b><small>${m.admin ? 'Tasks free, coins nahi katenge' : 'till ' + dateOnly(m.premium_until)}</small></div><button class="go" data-act="studio">➕ Add Task</button></div>`
-    : `<div class="banner" data-act="studio"><span style="font-size:26px">💎</span><div><b>Get Premium · ₹${S.cfg.premium_price}/month</b><small>Apna channel / bot promote karo</small></div><span class="go">Upgrade</span></div>`;
+    ? `<div class="banner on"><span style="font-size:26px">${m.admin ? '👑' : '💎'}</span><div><b>${m.admin ? 'Admin · unlimited' : 'Premium Level ' + m.real_level}</b><small>${m.admin ? 'Tasks free, coins nahi katenge' : 'till ' + dateOnly(m.premium_until) + ' · tap = upgrade'}</small></div><button class="go" data-act="studio">➕ Add Task</button></div>`
+    : `<div class="banner" data-act="prem"><span style="font-size:26px">💎</span><div><b>Get Premium · ₹${S.cfg.plans[0].price} se shuru</b><small>Task create, faster withdraw, 0% fee</small></div><span class="go">View</span></div>`;
   const hist = S.hist.length ? S.hist.map(h => {
     const k = KIND[h.kind] || ['•', h.kind]; const a = Number(h.amount);
     return `<div class="item"><div class="ico">${k[0]}</div><div class="sp"><b>${k[1]}</b><span class="sub">${when(h.at)}</span></div><span class="${a >= 0 ? 'pos' : 'neg'}">${a >= 0 ? '+' : ''}${fmt(a)}</span></div>`;
@@ -458,6 +481,7 @@ function withdrawSheet() {
   <div class="cost">UPI: <b>${esc(m.upi)}</b></div>
   <label>Coins</label><input id="wc" type="number" inputmode="numeric" placeholder="${c.min_withdraw}" data-inp="wd">
   <div class="qs"><button data-act="wmax">Max</button></div><div class="cost" id="wh">Tum paoge: ₹0<br><span class="sub">Tax ${c.withdraw_tax}% upar se alag katega</span></div>
+  <div class="cost" style="font-size:13px">${c.wd_daily == null ? 'Roz unlimited withdraw' : `Aaj: <b>${Math.max(c.wd_daily - (m.wd_today || 0), 0)} / ${c.wd_daily}</b> withdraw baaki`} · Process time: <b>${c.wd_hours} ghante</b> (nahi to coins wapas)${m.premium ? '' : ' · <span class="link" data-act="prem">Premium se faster + kam fee</span>'}</div>
   <button class="btn" data-act="wdgo">Withdraw</button>`);
 }
 function showQR(o, kind) {
@@ -475,9 +499,9 @@ function showQR(o, kind) {
     const j = await api('/api/order?id=' + encodeURIComponent(o.order_id));
     if (j.status === 'paid') {
       clearInterval(S.poll); closeSheet();
-      await popup('ok', 'Payment successful', kind === 'premium' ? 'Premium activate ho gaya! Ab Add Task se apna task daalo.' : `${fmt(o.coins)} coins ad balance me add ho gaye.`);
+      await popup('ok', 'Payment successful', kind === 'premium' ? 'Premium mil gaya! Features ab active hain (ya queue me hain).' : `${fmt(o.coins)} coins ad balance me add ho gaye.`);
       await refresh();
-      if (kind === 'premium') studio();
+      if (kind === 'premium') premPage();
     } else if (j.status === 'mismatch') {
       clearInterval(S.poll); closeSheet();
       await popup('error', 'Payment mismatch', 'Amount match nahi hua. Support se contact karo.');
@@ -491,12 +515,12 @@ function rProfile() {
   const name = [u.first_name, u.last_name].filter(Boolean).join(' ') || 'User';
   const av = u.photo_url ? `<img src="${esc(u.photo_url)}" alt="">` : esc(name[0].toUpperCase());
   $('#view').innerHTML = `<div class="card" style="text-align:center"><div class="avatar">${av}</div><h3>${esc(name)}</h3><div class="sub">${u.username ? '@' + esc(u.username) : 'ID ' + m.id}</div>
-  <div style="margin-top:10px">${m.premium ? '<span class="chip g">💎 Premium</span>' : '<span class="chip">Free user</span>'} ${m.device_ok ? '<span class="chip g">Device verified</span>' : '<span class="chip y">Not verified</span>'}</div></div>
+  <div style="margin-top:10px">${m.premium ? `<span class="chip g">💎 Level ${m.level}</span>` : '<span class="chip">Free user</span>'} ${m.device_ok ? '<span class="chip g">Device verified</span>' : '<span class="chip y">Not verified</span>'}</div></div>
   ${deviceWarn()}
   <div class="card"><div class="kv"><span>UPI ID</span><b>${esc(m.upi || '—')}</b></div><div class="kv"><span>Telegram ID</span><b>${m.id}</b></div>${m.premium ? `<div class="kv"><span>Premium till</span><b>${dateOnly(m.premium_until)}</b></div>` : ''}</div>
   <div class="card" style="padding:4px 16px">
    <div class="item" data-act="upi" style="cursor:pointer"><div class="ico">⚙️</div><div class="sp"><b>Settings</b><span class="sub">UPI ID set / change</span></div>›</div>
-   <div class="item" data-act="studio" style="cursor:pointer"><div class="ico">💎</div><div class="sp"><b>Premium</b><span class="sub">${m.admin ? 'Admin: unlimited, free tasks' : m.premium ? 'Add task, manage posts' : 'Unlock karne ke liye ₹' + S.cfg.premium_price + '/month'}</span></div>›</div>
+   <div class="item" data-act="prem" style="cursor:pointer"><div class="ico">💎</div><div class="sp"><b>Premium</b><span class="sub">${m.admin ? 'Admin: unlimited, free tasks' : m.premium ? 'Level ' + m.level + ' · plans, add task' : '3 levels: ₹' + S.cfg.plans.map(p => p.price).join(' / ₹')}</span></div>›</div>
    <div class="item" data-act="sound" style="cursor:pointer"><div class="ico">${Snd.isOn() ? '🔊' : '🔇'}</div><div class="sp"><b>Sound</b><span class="sub">${Snd.isOn() ? 'On' : 'Off'} · tap to change</span></div>›</div>
    <div class="item" data-act="notify" style="cursor:pointer"><div class="ico">${m.notify ? '🔔' : '🔕'}</div><div class="sp"><b>Task notification</b><span class="sub">${m.notify ? 'On' : 'Off'} · naya task aane par DM · tap to change</span></div>›</div>
    <div class="item" data-act="refer" style="cursor:pointer"><div class="ico">🤝</div><div class="sp"><b>Refer & Earn</b><span class="sub">Dost ke ${S.cfg.min_ref_tasks} task complete = +${S.cfg.refer_reward} coins</span></div>›</div>
@@ -519,17 +543,82 @@ async function fingerprint() {
   return [...new Uint8Array(b)].map(v => v.toString(16).padStart(2, '0')).join('');
 }
 
+/* ---------- PREMIUM PAGE (3 levels) ---------- */
+const LV = { 1: { g: 'linear-gradient(135deg,#2563eb,#06b6d4)', ico: '🥉', tag: 'STARTER' }, 2: { g: 'linear-gradient(135deg,#7c3aed,#ec4899)', ico: '🥈', tag: 'MOST POPULAR' }, 3: { g: 'linear-gradient(135deg,#f59e0b,#ef4444)', ico: '👑', tag: 'BEST · UNLIMITED' } };
+function premFeatures(p) {
+  const c = S.cfg, f = [];
+  f.push(p.tasks == null ? 'Unlimited task create (channel / group / bot work)' : `Roz ${p.tasks} task create (channel / group / bot work)`);
+  f.push(p.wd == null ? 'Unlimited withdraw roz' : `Roz ${p.wd} withdraw (free: ${c.free_wd})`);
+  f.push(p.fee === 0 ? 'Withdraw par <b>0% fee</b> (tax free)' : `Withdraw fee ${p.fee}%`);
+  f.push(`Faster withdraw: <b>${p.wd_hours} ghante</b> me process (free: ${c.free_wd_hours}h)`);
+  f.push(p.level === 3 ? 'Sabse fast customer support (sabse upar)' : 'Faster customer support (priority)');
+  f.push('Support me voice message bhejo');
+  if (p.ref > 100) f.push(`Per refer <b>${p.ref} coins</b> (free: 100)`);
+  if (p.top) f.push('Tumhare task sabse upar dikhenge');
+  return f;
+}
+function premPage() {
+  const m = S.me, c = S.cfg;
+  let el = $('#prem'); if (!el) { el = document.createElement('div'); el.id = 'prem'; document.body.appendChild(el); }
+  const cur = m.real_level, q = (m.queued || []).map(x => 'Level ' + x.level).join(', ');
+  const st = m.admin ? '👑 <b>Admin</b>: sab features unlocked.'
+    : cur ? `✅ <b>Level ${cur}</b> active · ${dateOnly(m.premium_until)} tak${q ? `<br>⏭️ Aage queue me: <b>${esc(q)}</b> (purana khatam hone ke baad chalu)` : ''}`
+    : 'Abhi tum <b>Free</b> user ho. Level chuno aur turant features unlock karo.';
+  const cards = c.plans.map(p => {
+    const same = cur === p.level;
+    return `<div class="pm-card" style="background:${LV[p.level].g}"><span class="pm-tag">${LV[p.level].tag}</span>
+      <div class="pm-top"><div><div class="pm-lv">${LV[p.level].ico} Level ${p.level}</div><div class="pm-price">₹${p.price}<small>/ ${p.days} din</small></div></div></div>
+      <ul class="pm-feat">${premFeatures(p).map(x => `<li>${x}</li>`).join('')}</ul>
+      <div class="pm-btns"><button data-act="pbuy" data-l="${p.level}" data-m="qr">${same ? '➕ Extend' : 'Pay'} ₹${p.price} (UPI)</button><button class="alt" data-act="pbuy" data-l="${p.level}" data-m="stars">⭐ ${p.price} Stars</button></div></div>`;
+  }).join('');
+  el.innerHTML = `<div class="pm-in"><div class="pm-h"><button data-act="pclose" aria-label="Back">‹</button><b>💎 Premium</b></div>
+    <div class="pm-st">${st}</div>${m.premium ? '<button class="btn" data-act="studio2" style="margin-bottom:14px">➕ Add Task / My posts</button>' : ''}
+    ${cards}
+    <div class="pm-free">Free user: roz ${c.free_wd} withdraw · withdraw ${c.free_wd_hours}h me · fee ${c.plans.length ? c.plans[0].fee : 10}% · task create nahi · support me voice nahi</div></div>`;
+  el.classList.add('open'); document.body.style.overflow = 'hidden';
+}
+function premClose() { const el = $('#prem'); if (el) el.classList.remove('open'); document.body.style.overflow = ''; }
+function premBuy(d) {
+  const l = +d.l, cur = S.me.real_level, c = S.cfg;
+  if (cur && l !== cur) {
+    if (l < cur) {
+      openSheet(`<h3>Level ${l} baad me</h3><p>Tumhara <b>Level ${cur}</b> abhi active hai. Ye chhota level hai, isliye purana khatam hone ke baad apne aap chalu hoga.</p>
+      <button class="btn" data-act="ppay" data-l="${l}" data-m="${d.m}" data-mode="later">Theek hai, aage badho</button><button class="btn ghost" data-act="closesheet">Cancel</button>`);
+    } else {
+      openSheet(`<h3>Level ${l} kaise chalu karein?</h3><p>Tumhara <b>Level ${cur}</b> abhi active hai (${dateOnly(S.me.premium_until)} tak).</p>
+      <button class="btn" data-act="ppay" data-l="${l}" data-m="${d.m}" data-mode="now">⚡ Turant active karo<br><small style="font-weight:500">Level ${l} abhi se, purane ke bache din khatam</small></button>
+      <button class="btn ghost" data-act="ppay" data-l="${l}" data-m="${d.m}" data-mode="later">⏭️ Purana khatam hone ke baad<br><small style="font-weight:500">Level ${cur} poora chalega, phir Level ${l}</small></button>`);
+    }
+    return;
+  }
+  premPay(l, d.m, 'now');
+}
+async function premPay(l, method, mode) {
+  closeSheet();
+  if (method === 'stars') {
+    const j = await act('/api/premium/stars', { level: l, mode }); if (!j.ok) return;
+    if (!(tg && tg.openInvoice)) return popup('error', 'Stars', 'Stars payment sirf Telegram app ke andar chalta hai.');
+    tg.openInvoice(j.link, async st => {
+      if (st === 'paid') {
+        $('#loader').classList.add('open');
+        const before = JSON.stringify([S.me.real_level, S.me.premium_until, (S.me.queued || []).length]);
+        for (let i = 0; i < 8; i++) { await new Promise(r => setTimeout(r, 1200)); await go(S.tab); if (JSON.stringify([S.me.real_level, S.me.premium_until, (S.me.queued || []).length]) !== before) break; }
+        $('#loader').classList.remove('open');
+        await popup('ok', 'Payment successful', 'Premium mil gaya! Features ab active hain.'); premPage();
+      } else if (st === 'failed') popup('error', 'Payment fail', 'Stars payment fail hua. Dobara try karo.');
+    });
+    return;
+  }
+  const j = await act('/api/premium/buy', { level: l, mode }); if (j.ok) showQR(j, 'premium');
+}
+
 /* ---------- PREMIUM STUDIO ---------- */
 function studio() {
   const m = S.me, c = S.cfg;
-  if (!m.premium) {
-    openSheet(`<div style="text-align:center;font-size:44px">💎</div><h3 style="text-align:center">Premium · ₹${c.premium_price}/month</h3>
-    <ul class="steps"><li>Apna channel / group promote karo (real users join karte hain)</li><li>Bot Work post karo: apne bot ke refer link pe log kaam karenge</li><li>Min ${c.min_task_members} members, ${c.ad_cost} coins per member</li></ul>
-    <button class="btn" data-act="buyprem">Pay ₹${c.premium_price} (QR)</button>`);
-    return;
-  }
+  if (!m.premium) { premPage(); return; }
   const tabs = [['ch', '📣 Channel'], ['bw', '🤖 Bot Work'], ['my', '📊 My posts']];
-  openSheet(`<h3>Premium Studio</h3><div class="cost">${m.admin ? '👑 Admin mode: task free, coins nahi katenge' : `Ad balance: <b>${fmt(m.ad_balance)}</b> coins <span class="link" data-act="deposit" style="float:right">+ Deposit</span>`}</div>
+  const tl = c.tasks_daily == null ? 'Unlimited' : `${Math.max(c.tasks_daily - (m.tasks_today || 0), 0)} / ${c.tasks_daily} baaki`;
+  openSheet(`<h3>Premium Studio <span class="chip g" style="vertical-align:middle">Level ${m.level}</span></h3><div class="cost">${m.admin ? '👑 Admin mode: task free, coins nahi katenge' : `Aaj ke tasks: <b>${tl}</b><br>Ad balance: <b>${fmt(m.ad_balance)}</b> coins <span class="link" data-act="deposit" style="float:right">+ Deposit</span>`}</div>
   <div class="tabs2">${tabs.map(([k, l]) => `<button class="${S.studioTab === k ? 'on' : ''}" data-act="stab" data-t="${k}">${l}</button>`).join('')}</div><div id="stBody"></div>`);
   stBody();
 }
@@ -636,6 +725,7 @@ function recUi(on) { $('#recBar').classList.toggle('on', on); $('#chatFoot').sty
 function recCleanup() { clearInterval(Rec.tm); try { Rec.stream && Rec.stream.getTracks().forEach(t => t.stop()); } catch (e) {} Rec.mr = null; Rec.stream = null; recUi(false); }
 async function recStart() {
   if (Rec.mr) return;
+  if (S.chat && S.chat.mode !== 'admin' && !S.me.premium) return popup('error', '🎤 Premium feature', 'Voice message sirf Premium users bhej sakte hain. Text ya photo bhej sakte ho.');
   if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder)) return popup('error', 'Voice', 'Is phone/app me voice record support nahi hai.');
   try { Rec.stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
   catch (e) { return popup('error', 'Mic permission', 'Microphone ki permission nahi mili. Phone settings me Telegram ko mic allow karo, phir dobara try karo.'); }
@@ -689,7 +779,7 @@ async function inboxLoad(force) {
   const j = await api('/api/admin/support'); if (!j.ok) return;
   const sig = JSON.stringify(j.threads.map(t => [t.uid, t.at]));
   if (!force && sig === S.chatSig) return; S.chatSig = sig;
-  $('#chatBody').innerHTML = j.threads.length ? j.threads.map(t => `<div class="item" data-act="adminchat" data-uid="${t.uid}" style="cursor:pointer"><div class="ico">👤</div><div class="sp"><b>${esc(t.name)}</b><span class="sub">${esc(t.last || '')}</span></div>${t.from === 'user' ? '<span class="chip r">Reply</span>' : '<span class="chip g">Done</span>'}</div>`).join('')
+  $('#chatBody').innerHTML = j.threads.length ? j.threads.map(t => `<div class="item" data-act="adminchat" data-uid="${t.uid}" style="cursor:pointer"><div class="ico">👤</div><div class="sp"><b>${esc(t.name)} ${t.lvl ? `<span class="chip y">⭐ L${t.lvl}</span>` : ''}</b><span class="sub">${esc(t.last || '')}</span></div>${t.from === 'user' ? '<span class="chip r">Reply</span>' : '<span class="chip g">Done</span>'}</div>`).join('')
     : '<div class="empty"><i>📭</i>Koi support chat nahi.</div>';
 }
 function showChat(mode, uid, fromInbox) {
@@ -742,6 +832,7 @@ const H = {
   reload: () => location.reload(),
   go: d => go(d.tab),
   closesheet: closeSheet,
+  prem: premPage, pclose: premClose, pbuy: premBuy, ppay: d => premPay(+d.l, d.m, d.mode), studio2: () => { premClose(); studio(); },
   open: d => openLink(d.url),
   paylink: d => { if (/^https?:/i.test(d.url)) openLink(d.url); else window.location.href = d.url; },
   seg: d => { S.seg = d.seg; rTasks(); },
@@ -763,7 +854,6 @@ const H = {
     const j = await act('/api/withdraw', { coins: +$('#wc').value });
     if (j.ok) { closeSheet(); await popup('ok', 'Request sent', j.msg); refresh(); }
   },
-  async buyprem() { const j = await act('/api/premium/buy', {}); if (j.ok) showQR(j, 'premium'); },
   studio,
   stab: d => { S.studioTab = d.t; studio(); },
   async tprev() {

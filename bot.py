@@ -9,7 +9,7 @@ import time
 
 from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as M, MenuButtonWebApp, Update, WebAppInfo
 from telegram.error import TelegramError
-from telegram.ext import CallbackQueryHandler, ChatMemberHandler, CommandHandler, MessageHandler, filters
+from telegram.ext import CallbackQueryHandler, ChatMemberHandler, CommandHandler, MessageHandler, PreCheckoutQueryHandler, filters
 
 import botwork
 import config
@@ -375,20 +375,76 @@ async def job_orders(ctx):
 async def job_refs(ctx):
     """Dost ke 2 task complete hue -> referrer ko coins."""
     for r in await db.ref_ready():
-        rid = await db.ref_complete(r["referred_id"])
-        if rid:
+        res = await db.ref_complete(r["referred_id"])
+        if res:
+            rid, reward = res
             await util.notify(ctx.bot, rid, f"🎉 <b>Refer complete!</b> Tumhare dost ne apne task complete kar liye. "
-                                            f"<b>+{config.REFER_REWARD}</b> coins balance me add.")
+                                            f"<b>+{reward}</b> coins balance me add.")
 
 
 async def job_wd_expire(ctx):
     """Pending withdraw WITHDRAW_EXPIRE_HOURS me admin ne na approve kiya na reject: expire + coins wapas."""
     for w in await db.wd_expire_pending(config.WITHDRAW_EXPIRE_HOURS):
+        hrs = w["expire_hours"] or config.WITHDRAW_EXPIRE_HOURS
         await util.notify(ctx.bot, w["user_id"],
-                          f"⌛ Withdraw #{w['id']} {config.WITHDRAW_EXPIRE_HOURS} ghante me process nahi hua, isliye expire ho gaya.\n"
+                          f"⌛ Withdraw #{w['id']} {hrs} ghante me process nahi hua, isliye expire ho gaya.\n"
                           f"<b>{w['coins']}</b> coins (tax samet) tumhare balance me wapas aa gaye. Chaho to dobara withdraw karo.")
         await extras.bk_delete(w["id"])
-        extras.feed(f"⌛ Withdraw #{w['id']} <b>expired</b> (24h), {w['coins']} coins refund (user <code>{w['user_id']}</code>)")
+        extras.feed(f"⌛ Withdraw #{w['id']} <b>expired</b> ({hrs}h, {util.tag(w['level'])}), {w['coins']} coins refund (user <code>{w['user_id']}</code>)")
+
+
+async def job_prem(ctx):
+    """Queue me rakha premium (purana khatam hone ke baad) chalu karo aur user ko batao."""
+    for uid, lvl, days in await db.prem_activate_queued():
+        await util.notify(ctx.bot, uid, f"⭐ <b>Premium Level {lvl} chalu ho gaya!</b> ({days} din). Purana premium khatam ho gaya tha.")
+        extras.feed(f"⭐ Premium L{lvl} queue se chalu (user <code>{uid}</code>)")
+
+
+async def on_precheckout(update: Update, ctx):
+    """Stars invoice: payment se pehle order check (pending, isi user ka, sahi amount). Fail to charge hi nahi hota."""
+    q = update.pre_checkout_query
+    o = await db.order_row(q.invoice_payload)
+    good = (o and o["status"] == "pending" and o["method"] == "stars" and o["user_id"] == q.from_user.id
+            and q.currency == "XTR" and q.total_amount == int(o["amount_inr"]))
+    try:
+        await q.answer(ok=bool(good), error_message=None if good else "Ye order ab valid nahi hai. App se dobara Stars payment shuru karo.")
+    except TelegramError:
+        pass
+
+
+async def on_stars_paid(update: Update, ctx):
+    sp = update.message.successful_payment
+    if sp.currency != "XTR":
+        return
+    o = await db.order_row(sp.invoice_payload)
+    done = await db.complete_order(sp.invoice_payload, None) if o and o["method"] == "stars" and sp.total_amount == int(o["amount_inr"]) else None
+    if not done:
+        log.error("Stars payment complete nahi hua: payload=%s charge=%s amount=%s", sp.invoice_payload, sp.telegram_payment_charge_id, sp.total_amount)
+        extras.feed(f"🚨 Stars payment complete nahi hua! payload <code>{html.escape(str(sp.invoice_payload))}</code> "
+                    f"charge <code>{html.escape(str(sp.telegram_payment_charge_id))}</code> — check/refund karo")
+        return
+    try:
+        await db.pool.execute("UPDATE orders SET charge_id=$2 WHERE order_id=$1", sp.invoice_payload, sp.telegram_payment_charge_id)
+    except Exception:
+        log.exception("charge_id save failed")
+    await util.notify(ctx.bot, done["user_id"], payments.premium_msg(done))
+    extras.feed(f"⭐ <b>Premium L{done['level']} paid (Stars {sp.total_amount})</b> — user <code>{done['user_id']}</code>")
+
+
+async def pending_cmd(update: Update, ctx):
+    """Admin: pending withdraws, bade level pehle."""
+    if update.effective_user.id not in config.ADMIN_IDS:
+        return
+    rows = await db.wd_pending_list()
+    if not rows:
+        return await update.message.reply_text("✅ Koi pending withdraw nahi.")
+    lines = []
+    for w in rows:
+        left = float(await db.pool.fetchval(
+            "SELECT extract(epoch FROM (created_at + make_interval(hours => COALESCE(expire_hours, $2)) - now()))/3600 FROM withdrawals WHERE id=$1",
+            w["id"], config.WITHDRAW_EXPIRE_HOURS))
+        lines.append(f"{util.tag(w['level'])} · #{w['id']} · ₹{float(w['amount_inr']):.2f} · user <code>{w['user_id']}</code> · {max(left, 0):.1f}h bache")
+    await update.message.reply_text("⏳ <b>Pending withdraws (bada level pehle)</b>\n" + "\n".join(lines), parse_mode="HTML")
 
 
 async def job_cleanup(ctx):
@@ -433,7 +489,7 @@ async def job_wd_stuck(ctx):
     """Restart/crash se jin withdrawals ka admin alert gaya hi nahi ya jo atak gaye: admin ko (dobara) alert."""
     for w in await db.wd_stuck():
         if w["status"] == "pending":
-            txt = (f"⏰ <b>Withdraw #{w['id']} abhi pending hai</b>\nUser: <code>{w['user_id']}</code>\n"
+            txt = (f"⏰ <b>{util.tag(w['level'])} · Withdraw #{w['id']} abhi pending hai</b>\nUser: <code>{w['user_id']}</code>\n"
                    f"₹{float(w['amount_inr']):.2f} → <code>{html.escape(w['upi'])}</code>")
             kb = payouts.admin_kb(w["id"])
         else:
@@ -456,6 +512,7 @@ async def backup_start(update: Update, ctx):
 
 def register_backup(app):
     app.add_handler(CommandHandler("start", backup_start, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("pending", pending_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CallbackQueryHandler(on_admin_wd, pattern=r"^adm_"))
 
 
@@ -465,6 +522,9 @@ def register(app):
     app.add_handler(CommandHandler(["bypass", "unbypass"], bypass_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("allowdev", allowdev_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("ping", ping_cmd, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("pending", pending_cmd, filters=filters.ChatType.PRIVATE))
+    app.add_handler(PreCheckoutQueryHandler(on_precheckout))
+    app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, on_stars_paid))
     app.add_handler(CommandHandler("backup", backup_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("gw", gw_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler(["addbalance", "add_balance", "add"], addbal_cmd, filters=filters.ChatType.PRIVATE))
@@ -482,6 +542,7 @@ def register(app):
     app.job_queue.run_repeating(job_orders, interval=120, first=90)
     app.job_queue.run_repeating(payouts.job, interval=90, first=100)
     app.job_queue.run_repeating(job_refs, interval=60, first=70)
+    app.job_queue.run_repeating(job_prem, interval=120, first=80)
     app.job_queue.run_repeating(job_cleanup, interval=86400, first=600)
     app.job_queue.run_repeating(job_support_clean, interval=3600, first=120)
     app.job_queue.run_repeating(extras.job_bcast, interval=30, first=40)

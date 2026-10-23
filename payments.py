@@ -12,6 +12,13 @@ log = logging.getLogger("payments")
 _last = {}
 
 
+def premium_msg(done):
+    p = config.PLANS[int(done["level"])]
+    how = {"activated": "Turant chalu ho gaya 🎉", "extended": f"Purane premium me {p['days']} din jud gaye 🎉",
+           "queued": "Purana premium khatam hone ke baad apne aap chalu ho jayega ⏭️"}.get(done.get("outcome"), "")
+    return f"✅ <b>Premium Level {done['level']} mil gaya!</b> ({p['days']} din)\n{how}"
+
+
 async def settle(bot, o, min_gap=0):
     """Order pending ho to gateway se status pooch ke, paid ho to credit karo. Return final status."""
     if o["status"] != "pending" or not o["gateway_ref"]:
@@ -40,9 +47,9 @@ async def settle(bot, o, min_gap=0):
         if done["kind"] == "deposit":
             msg = f"✅ <b>Deposit successful!</b>\n+{done['coins']} coins ad balance me add ho gaye."
         else:
-            msg = f"✅ <b>Premium activated!</b> {config.PREMIUM_DAYS} din ke liye."
+            msg = premium_msg(done)
         await util.notify(bot, done["user_id"], msg)
-        extras.feed(f"💰 <b>{'Deposit' if done['kind'] == 'deposit' else 'Premium'} paid</b> ₹{float(done['amount_inr'] if 'amount_inr' in done else amt):.2f} (user <code>{done['user_id']}</code>)")
+        extras.feed(f"💰 <b>{'Deposit' if done['kind'] == 'deposit' else 'Premium L%s' % done.get('level')} paid</b> ₹{float(done['amount_inr'] if 'amount_inr' in done else amt):.2f} (user <code>{done['user_id']}</code>)")
         return "paid"
     row = await db.order_row(o["order_id"])
     return row["status"] if row else "pending"

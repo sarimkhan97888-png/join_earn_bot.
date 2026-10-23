@@ -54,7 +54,7 @@ async def main():
         await bk.start()
         await bk.updater.start_polling(allowed_updates=["message", "callback_query"], drop_pending_updates=True)
     await app.updater.start_polling(
-        allowed_updates=["message", "callback_query", "chat_member"], drop_pending_updates=False)  # deploy ke beech ke join/leave events na khoyen
+        allowed_updates=["message", "callback_query", "chat_member", "pre_checkout_query"], drop_pending_updates=False)  # deploy ke beech ke join/leave events na khoyen
     try:
         await asyncio.Event().wait()
     finally:

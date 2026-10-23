@@ -22,13 +22,54 @@ def inr(coins):
     return f"₹{coins / config.COIN_PER_INR:,.2f}"
 
 
+def _g(u, k, d=None):
+    try:
+        return u[k]
+    except (KeyError, IndexError, TypeError):
+        return d
+
+
+def real_level(u):
+    """Kharide hue premium ka level (admin override ke bina)."""
+    pu = _g(u, "premium_until")
+    if u and pu and pu > datetime.now(timezone.utc):
+        return max(1, int(_g(u, "premium_level", 0) or 0))
+    return 0
+
+
+def level(u):
+    """0 = free, 1..3 = premium level. Admin hamesha top level."""
+    if not u:
+        return 0
+    if u["id"] in config.ADMIN_IDS:
+        return max(config.PLANS)
+    return real_level(u)
+
+
+def plan_of(lvl):
+    """Is level ke limits/fees. Free ke liye bhi poora dict (tasks 0 = task create nahi)."""
+    if lvl in config.PLANS:
+        p = dict(config.PLANS[lvl])
+    else:
+        p = dict(price=0, days=0, tasks=0, wd=1, fee=None, wd_hours=config.WITHDRAW_EXPIRE_HOURS, ref=config.REFER_REWARD, top=False)
+    if p["fee"] is None:
+        p["fee"] = config.WITHDRAW_TAX_PERCENT
+    p["level"] = lvl
+    return p
+
+
+def plan(u):
+    return plan_of(level(u))
+
+
 def is_prem(u):
     """Admin (ADMIN_IDS) ke liye premium hamesha unlocked."""
-    if not u:
-        return False
-    if u["id"] in config.ADMIN_IDS:
-        return True
-    return bool(u["premium_until"] and u["premium_until"] > datetime.now(timezone.utc))
+    return level(u) > 0
+
+
+def tag(lvl):
+    """Admin ko dikhne wala chhota tag."""
+    return f"⭐ L{lvl}" if lvl else "Free"
 
 
 def in_chat(cm):

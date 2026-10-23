@@ -14,7 +14,7 @@ from urllib.parse import parse_qsl
 
 import qrcode
 from aiohttp import web
-from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as M, WebAppInfo
+from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as M, LabeledPrice, WebAppInfo
 from telegram.error import TelegramError
 
 import botwork
@@ -85,20 +85,30 @@ async def body(request):
 def pub(u):
     return {"id": u["id"], "balance": u["balance"], "hold": u["hold"], "total_earned": u["total_earned"],
             "ad_balance": u["ad_balance"], "premium": util.is_prem(u), "premium_until": iso(u["premium_until"]),
+            "level": util.level(u), "real_level": util.real_level(u),
             "gmail": u["gmail"], "upi": u["upi"], "device_ok": u["device_ok"],
             "device_state": u.get("device_state", "ok"), "admin": u["id"] in config.ADMIN_IDS, "debt": u.get("debt", 0), "notify": bool(u.get("notify", True))}
+
+
+def plans_json():
+    return [{"level": k, "price": p["price"], "days": p["days"], "tasks": p["tasks"], "wd": p["wd"],
+             "fee": config.WITHDRAW_TAX_PERCENT if p["fee"] is None else p["fee"], "wd_hours": p["wd_hours"],
+             "ref": p["ref"], "top": p["top"]} for k, p in sorted(config.PLANS.items())]
 
 
 def cfg(request):
     return {"coin_per_inr": config.COIN_PER_INR, "join_reward": config.JOIN_REWARD, "ad_cost": config.AD_COST,
             "min_task_members": config.MIN_TASK_MEMBERS, "max_task_members": config.MAX_TASK_MEMBERS,
             "min_deposit": config.MIN_DEPOSIT_COINS, "min_withdraw": config.MIN_WITHDRAW_COINS,
-            "hold_hours": config.HOLD_HOURS, "premium_price": config.PREMIUM_PRICE,
-            "premium_days": config.PREMIUM_DAYS, "bw_min_reward": config.BW_MIN_REWARD,
+            "hold_hours": config.HOLD_HOURS, "plans": plans_json(),
+            "bw_min_reward": config.BW_MIN_REWARD,
             "bw_min_users": config.BW_MIN_USERS, "bw_max_users": config.BW_MAX_USERS,
             "support_url": config.SUPPORT_URL, "bot_username": request.app["bot"].username,
-            "withdraw_tax": config.WITHDRAW_TAX_PERCENT, "payout_link": config.PAYOUT_CHANNEL_LINK, "app_name": config.APP_NAME,
-            "refer_reward": config.REFER_REWARD, "min_tasks": config.MIN_TASKS_FOR_WITHDRAW, "min_ref_tasks": config.MIN_TASKS_FOR_REFER, "order_expiry_min": config.ORDER_EXPIRY_MIN,
+            "withdraw_tax": util.plan(request["u"])["fee"], "wd_hours": util.plan(request["u"])["wd_hours"],
+            "wd_daily": None if request["u"]["id"] in config.ADMIN_IDS else util.plan(request["u"])["wd"],
+            "tasks_daily": None if request["u"]["id"] in config.ADMIN_IDS else util.plan(request["u"])["tasks"],
+            "free_wd_hours": config.WITHDRAW_EXPIRE_HOURS, "free_wd": 1, "payout_link": config.PAYOUT_CHANNEL_LINK, "app_name": config.APP_NAME,
+            "refer_reward": util.plan(request["u"])["ref"], "min_tasks": config.MIN_TASKS_FOR_WITHDRAW, "min_ref_tasks": config.MIN_TASKS_FOR_REFER, "order_expiry_min": config.ORDER_EXPIRY_MIN,
             "auto_payout": bool(config.AUTO_PAYOUT)}
 
 
@@ -225,10 +235,13 @@ def client_ip(request):
 @routes.get("/api/me")
 async def api_me(request):
     u = request["u"]
-    left, led = await asyncio.gather(db.left_chats(u["id"]), db.recent_ledger(u["id"]))
+    left, led, tdone, wdone, queued = await asyncio.gather(
+        db.left_chats(u["id"]), db.recent_ledger(u["id"]), db.created_today(u["id"]), db.wd_today(u["id"]), db.prem_queued(u["id"]))
     blocked = [{"chat_id": r["chat_id"], "title": r["title"], "link": r["link"]} for r in left]
     hist = [{"kind": r["kind"], "amount": r["amount"], "at": iso(r["created_at"])} for r in led]
-    return ok(me=pub(u), blocked=blocked, history=hist, cfg=cfg(request))
+    me = pub(u)
+    me.update(tasks_today=tdone, wd_today=wdone, queued=[{"level": r["level"], "days": r["days"]} for r in queued])
+    return ok(me=me, blocked=blocked, history=hist, cfg=cfg(request))
 
 
 # ---------------- channel tasks (worker) ----------------
@@ -302,7 +315,7 @@ async def api_wallet(request):
     return ok(orders=orders, withdrawals=wds)
 
 
-async def make_order(request, kind, coins, amount):
+async def make_order(request, kind, coins, amount, level=None, mode=None):
     uid = request["u"]["id"]
     if not cooldown(uid, "order", 5):
         return too_fast()
@@ -318,8 +331,8 @@ async def make_order(request, kind, coins, amount):
         log.error("gateway response me payment id nahi mili; keys=%s",
                   list(res.get("raw", {}).keys()) if isinstance(res.get("raw"), dict) else None)
         return err("Payment gateway se payment ID nahi mili. Support se contact karo.")
-    await db.new_order(order_id, uid, kind, coins, amount, res["ref"])
-    extras.feed(f"🧾 {'Premium' if kind == 'premium' else 'Deposit'} order bana ₹{amount} — {extras.uname(request['u'])}")
+    await db.new_order(order_id, uid, kind, coins, amount, res["ref"], level, mode, "gateway")
+    extras.feed(f"🧾 {('Premium L%s' % level) if kind == 'premium' else 'Deposit'} order bana ₹{amount} — {extras.uname(request['u'])}")
     qr = res.get("qr_url")
     if not qr and res.get("upi_url"):
         bio = io.BytesIO()
@@ -336,9 +349,53 @@ async def api_deposit(request):
     return await make_order(request, "deposit", coins, coins // config.COIN_PER_INR)
 
 
+def prem_args(u, d):
+    """(level, mode, error). Active premium ke dauran alag level: mode 'now' (turant) ya 'later' (purana khatam hone ke baad)."""
+    lvl = to_int(d.get("level"))
+    if lvl not in config.PLANS:
+        return None, None, "Sahi premium level chuno."
+    cur = util.real_level(u)
+    mode = d.get("mode")
+    if cur and lvl != cur:
+        if lvl < cur:
+            mode = "later"  # chhota level turant lagana bekar hai: purana khatam hone ke baad
+        elif mode not in ("now", "later"):
+            return None, None, "Turant active karna hai ya purana premium khatam hone ke baad? Chuno."
+    else:
+        mode = "now"
+    return lvl, mode, None
+
+
 @routes.post("/api/premium/buy")
 async def api_premium_buy(request):
-    return await make_order(request, "premium", 0, config.PREMIUM_PRICE)
+    lvl, mode, e = prem_args(request["u"], await body(request))
+    if e:
+        return err(e)
+    return await make_order(request, "premium", 0, config.PLANS[lvl]["price"], lvl, mode)
+
+
+@routes.post("/api/premium/stars")
+async def api_premium_stars(request):
+    """Telegram Stars se premium: jitne rupaye utne Stars. Invoice link banake deta hai; payment bot handler pakadta hai."""
+    u = request["u"]
+    lvl, mode, e = prem_args(u, await body(request))
+    if e:
+        return err(e)
+    if not cooldown(u["id"], "order", 5):
+        return too_fast()
+    p = config.PLANS[lvl]
+    await db.order_supersede_stars(u["id"])
+    order_id = f"T{u['id']}{int(time.time() * 1000)}"
+    try:
+        link = await request.app["bot"].create_invoice_link(
+            title=f"{config.APP_NAME} Premium Level {lvl}", description=f"{p['days']} din ka Premium Level {lvl}",
+            payload=order_id, provider_token="", currency="XTR", prices=[LabeledPrice(f"Level {lvl} · {p['days']} din", p["price"])])
+    except TelegramError:
+        log.exception("create_invoice_link failed")
+        return err("❌ Stars payment abhi available nahi. Baad me try karo.")
+    await db.new_order(order_id, u["id"], "premium", 0, p["price"], None, lvl, mode, "stars")
+    extras.feed(f"🧾 Premium L{lvl} Stars invoice ({p['price']} ⭐) — {extras.uname(u)}")
+    return ok(link=link, order_id=order_id)
 
 
 @routes.get("/api/order")
@@ -365,6 +422,11 @@ async def api_withdraw(request):
     if u.get("debt", 0) > 0:
         return err(f"⚠️ Tumne pehle channel leave kiya tha, {u['debt']} coins ka hisaab baaki hai. "
                    f"Agle channel rewards se ye kat-ta rahega; poora kat-ne ke baad withdraw khulega.")
+    pl = util.plan(u)
+    is_admin_u = uid in config.ADMIN_IDS
+    if not is_admin_u and pl["wd"] is not None and await db.wd_today(uid) >= pl["wd"]:
+        nxt = "Level upgrade karo ya " if pl["level"] < max(config.PLANS) else ""
+        return err(f"⚠️ Aaj ke {pl['wd']} withdraw ho chuke. {nxt}kal (12 baje ke baad) dobara karo.")
     if uid not in config.ADMIN_IDS and config.MIN_TASKS_FOR_WITHDRAW > 0:
         done = await db.tasks_done(uid)
         if done < config.MIN_TASKS_FOR_WITHDRAW:
@@ -372,28 +434,32 @@ async def api_withdraw(request):
                        f"(channel join ya bot work). Abhi complete: {done}.")
     if coins < config.MIN_WITHDRAW_COINS or coins % config.COIN_PER_INR:
         return err(f"Min {config.MIN_WITHDRAW_COINS} coins aur 100 ke multiple me daalo.")
-    need = coins + db.wd_fee(coins)
+    pct = pl["fee"]
+    need = coins + db.wd_fee(coins, pct)
     if need > u["balance"]:
-        mx = u["balance"] * 100 // (100 + config.WITHDRAW_TAX_PERCENT) // 100 * 100
-        return err(f"{coins} coins + {db.wd_fee(coins)} tax = {need} coins chahiye, balance {u['balance']}. "
+        mx = u["balance"] * 100 // (100 + pct) // 100 * 100
+        return err(f"{coins} coins + {db.wd_fee(coins, pct)} tax = {need} coins chahiye, balance {u['balance']}. "
                    f"Max withdraw: {mx} coins.")
-    r = await db.request_withdraw(uid, coins)
+    r = await db.request_withdraw(uid, coins, pct, pl["level"] if not is_admin_u else 0, pl["wd_hours"],
+                                  None if is_admin_u else pl["wd"])
+    if r == "limit":
+        return err(f"⚠️ Aaj ke {pl['wd']} withdraw ho chuke. Kal dobara karo.")
     if not r:
         return err("❌ Withdraw nahi ho paya. Balance aur verification check karo.")
     wid, upi, fee, net = r
     auto = payouts.eligible(u, net, await db.wd_recent_count(uid))
-    t = asyncio.create_task(_after_withdraw(request.app["bot"], u, wid, coins, fee, net, upi, auto))
+    t = asyncio.create_task(_after_withdraw(request.app["bot"], u, wid, coins, fee, net, upi, auto, pl["level"] if not is_admin_u else 0))
     _bg.add(t)
     t.add_done_callback(_bg.discard)
     if auto:
         return ok(msg=f"Withdraw #{wid} process ho raha hai: ₹{net:.2f} → {upi}. 2-5 minute me aa jayega.")
     return ok(msg=f"Withdraw request #{wid} bhej di gayi. ₹{net:.2f} → {upi} (balance se {coins} + {fee} tax = {coins + fee} coins kate). "
-                  f"Admin approve karega to paisa aa jayega.")
+                  f"Admin approve karega to paisa aa jayega. {pl['wd_hours']} ghante me process na hua to coins apne aap wapas aa jayenge.")
 
 
-async def _after_withdraw(bot, u, wid, coins, fee, net, upi, auto):
+async def _after_withdraw(bot, u, wid, coins, fee, net, upi, auto, lvl=0):
     try:
-        extras.feed(f"💸 <b>Withdraw request</b> #{wid}: ₹{net:.2f} → <code>{html.escape(upi)}</code>, {coins + fee} coins kate "
+        extras.feed(f"💸 <b>Withdraw request</b> [{util.tag(lvl)}] #{wid}: ₹{net:.2f} → <code>{html.escape(upi)}</code>, {coins + fee} coins kate "
                     f"— {extras.uname(u)}" + (" (auto payout)" if auto else ""))
         if auto:
             await payouts.send(bot, wid)  # fail/unsure par payouts.send khud admin ko alert karta hai
@@ -403,7 +469,7 @@ async def _after_withdraw(bot, u, wid, coins, fee, net, upi, auto):
             why += "\n⚠️ <b>Suspect:</b> iska device fingerprint kisi aur account se match karta hai. Pehle check karo."
         if config.AUTO_PAYOUT and not u["suspect"]:
             why += "\nℹ️ Auto limit se bahar / abhi auto pause hai, isliye manual approval."
-        await payouts.alert(bot, f"💸 Withdraw #{wid}\nUser: <code>{u['id']}</code>\n₹{net:.2f} payable "
+        await payouts.alert(bot, f"💸 <b>{util.tag(lvl)}</b> · Withdraw #{wid}\nUser: <code>{u['id']}</code>\n₹{net:.2f} payable "
                                  f"(user se {coins + fee} coins kate = {coins} + {fee} tax)\nUPI: <code>{html.escape(upi)}</code>{why}",
                             payouts.admin_kb(wid), wid=wid)
     except Exception:
@@ -496,6 +562,8 @@ async def api_support_send(request):
     text = str(fields.get("text", "")).strip()[:1000]
     if not text and photo is None and voice is None:
         return err("Message khali hai.")
+    if voice is not None and not util.is_prem(request["u"]):
+        return err("🎤 Voice message sirf Premium users bhej sakte hain. Text ya photo bhejo.")
     if await db.sup_recent_count(uid) >= 20:
         return err("Bahut zyada messages ho gaye. Thodi der baad likho.")
     if photo is not None or voice is not None:
@@ -512,7 +580,7 @@ async def api_support_send(request):
         for a in config.ADMIN_IDS:
             try:
                 m = await request.app["bot"].send_message(
-                    a, f"🎧 <b>Naya support message</b>\nFrom: {html.escape(name)} (<code>{uid}</code>)\n"
+                    a, f"🎧 <b>Naya support message</b> [{util.tag(util.real_level(request['u']))}]\nFrom: {html.escape(name)} (<code>{uid}</code>)\n"
                        f"Neeche button se chat kholo aur wahin reply do.", parse_mode="HTML", reply_markup=kb)
                 await db.sup_notif_add(a, m.message_id, uid)
             except TelegramError:
@@ -526,7 +594,7 @@ async def api_admin_threads(request):
         return err("Not allowed")
     rows = await db.sup_threads()
     return ok(threads=[{"uid": r["user_id"], "name": ("@" + r["username"]) if r["username"] else (r["first_name"] or str(r["user_id"])),
-                        "last": r["last_text"], "from": r["last_sender"], "at": iso(r["last_at"])} for r in rows])
+                        "last": r["last_text"], "from": r["last_sender"], "at": iso(r["last_at"]), "lvl": r["lvl"]} for r in rows])
 
 
 @routes.get("/api/admin/support/chat")
@@ -573,7 +641,7 @@ async def api_refer(request):
     st, lst = await asyncio.gather(db.ref_stats(uid), db.ref_list(uid))
     items = [{"name": (r["first_name"] or "User")[:20], "status": r["status"], "at": iso(r["created_at"])} for r in lst]
     return ok(link=f"https://t.me/{request.app['bot'].username}?start=r{uid}", total=st["total"], done=st["done"],
-              earned=st["done"] * config.REFER_REWARD, reward=config.REFER_REWARD, items=items)
+              earned=st["done"] * util.plan(request["u"])["ref"], reward=util.plan(request["u"])["ref"], items=items)
 
 
 # ---------------- profile ----------------
@@ -686,6 +754,19 @@ async def resolve_chat(request, raw, make_link):
     return {"chat_id": chat.id, "title": chat.title or str(chat.id), "link": link}
 
 
+async def task_limit_err(u):
+    """Roz ki task limit (channel + group + bot work milake) premium level ke hisaab se. Admin unlimited."""
+    if u["id"] in config.ADMIN_IDS:
+        return None
+    pl = util.plan(u)
+    if pl["level"] == 0:
+        return "Pehle Premium lo."
+    if pl["tasks"] is not None and await db.created_today(u["id"]) >= pl["tasks"]:
+        up = " Level upgrade karo ya" if pl["level"] < max(config.PLANS) else ""
+        return f"Aaj ki task limit ({pl['tasks']}) poori ho gayi.{up} kal dobara banao."
+    return None
+
+
 @routes.post("/api/task/preview")
 async def api_task_preview(request):
     if not util.is_prem(request["u"]):
@@ -702,6 +783,9 @@ async def api_task_create(request):
     d = await body(request)
     if not util.is_prem(u):
         return err("Pehle Premium lo.")
+    e = await task_limit_err(u)
+    if e:
+        return err(e)
     n = to_int(d.get("count"))
     if not (config.MIN_TASK_MEMBERS <= n <= config.MAX_TASK_MEMBERS):
         return err(f"Members {config.MIN_TASK_MEMBERS} se {config.MAX_TASK_MEMBERS} ke beech rakho.")
@@ -749,6 +833,9 @@ async def api_bw_create(request):
     d = await body(request)
     if not util.is_prem(u):
         return err("Pehle Premium lo.")
+    e = await task_limit_err(u)
+    if e:
+        return err(e)
     title = str(d.get("title", "")).strip()
     link = str(d.get("link", "")).strip()
     reward = to_int(d.get("reward"))

@@ -3,6 +3,7 @@ from decimal import Decimal
 import asyncpg
 
 import config
+import util
 
 pool: asyncpg.Pool = None
 
@@ -117,6 +118,18 @@ ALTER TABLE completions ADD COLUMN IF NOT EXISTS rejoin_paid BOOLEAN NOT NULL DE
 ALTER TABLE users ADD COLUMN IF NOT EXISTS debt BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS last_alert TIMESTAMPTZ;
 ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS bk_msgs TEXT;
+ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS level SMALLINT NOT NULL DEFAULT 0;
+ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS expire_hours INT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS premium_level SMALLINT NOT NULL DEFAULT 0;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS level SMALLINT;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS mode TEXT;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS method TEXT;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS charge_id TEXT;
+CREATE TABLE IF NOT EXISTS prem_queue(
+  id SERIAL PRIMARY KEY, user_id BIGINT NOT NULL, level SMALLINT NOT NULL, days INT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS prem_queue_user_idx ON prem_queue(user_id, id);
 ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
 ALTER TABLE bw_subs ADD COLUMN IF NOT EXISTS report_sent BOOLEAN NOT NULL DEFAULT FALSE;
 CREATE INDEX IF NOT EXISTS wd_status_idx ON withdrawals(status, id);
@@ -285,7 +298,8 @@ async def open_tasks(uid):
         """SELECT t.* FROM tasks t
            WHERE t.status='active' AND t.joined<t.target AND t.owner_id<>$1
              AND NOT EXISTS(SELECT 1 FROM completions c WHERE c.chat_id=t.chat_id AND c.user_id=$1)
-           ORDER BY md5(t.id::text || $1::bigint::text) LIMIT 8""", uid)  # har user ko alag mix: dead task sabke aage na atke
+           ORDER BY EXISTS(SELECT 1 FROM users o WHERE o.id=t.owner_id AND o.premium_level >= $2 AND o.premium_until > now()) DESC,
+                    md5(t.id::text || $1::bigint::text) LIMIT 8""", uid, config.TOP_LEVEL)  # har user ko alag mix: dead task sabke aage na atke
 
 
 async def claim(task_id, uid):
@@ -407,10 +421,10 @@ async def release(comp_id):
 
 
 # ---------- orders ----------
-async def new_order(order_id, uid, kind, coins, amount_inr, gateway_ref=None):
+async def new_order(order_id, uid, kind, coins, amount_inr, gateway_ref=None, level=None, mode=None, method=None):
     await pool.execute(
-        "INSERT INTO orders(order_id,user_id,kind,coins,amount_inr,gateway_ref) VALUES($1,$2,$3,$4,$5,$6)",
-        order_id, uid, kind, coins, amount_inr, gateway_ref)
+        "INSERT INTO orders(order_id,user_id,kind,coins,amount_inr,gateway_ref,level,mode,method) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+        order_id, uid, kind, coins, amount_inr, gateway_ref, level, mode, method)
 
 
 async def order_row(order_id):
@@ -421,6 +435,11 @@ async def order_lookup(ref, order_id):
     return await pool.fetchrow(
         "SELECT * FROM orders WHERE gateway_ref=$1::text OR order_id=$2::text ORDER BY created_at DESC LIMIT 1",
         ref, order_id)
+
+
+async def order_supersede_stars(uid):
+    """Naya Stars invoice banne par purane unpaid Stars invoices band (precheckout unhe reject karega)."""
+    await pool.execute("UPDATE orders SET status='failed' WHERE user_id=$1 AND method='stars' AND status='pending'", uid)
 
 
 async def order_set_status(order_id, status):
@@ -450,12 +469,69 @@ async def complete_order(order_id, paid_amount):
         if o["kind"] == "deposit":
             await c.execute("UPDATE users SET ad_balance=ad_balance+$1 WHERE id=$2", o["coins"], o["user_id"])
             await led(c, o["user_id"], "deposit", o["coins"], order_id)
+            return dict(o, outcome="deposit")
+        # premium: level kharida. Active nahi / same level = turant (same level me din jud jaate hain);
+        # active aur alag level: mode 'now' = turant badlo, 'later' = purana khatam hone ke baad (queue)
+        lvl = int(o["level"] or 1)
+        days = config.PLANS[lvl]["days"]
+        u = await c.fetchrow("SELECT premium_level, (premium_until IS NOT NULL AND premium_until > now()) AS active "
+                             "FROM users WHERE id=$1 FOR UPDATE", o["user_id"])
+        active = bool(u and u["active"])
+        cur = max(1, int(u["premium_level"] or 0)) if active else 0
+        mode = o["mode"] if o["mode"] in ("now", "later") else "now"
+        if active and lvl != cur and (mode == "later" or lvl < cur):
+            await c.execute("INSERT INTO prem_queue(user_id,level,days) VALUES($1,$2,$3)", o["user_id"], lvl, days)
+            outcome = "queued"
+        elif active and lvl == cur:
+            await c.execute("UPDATE users SET premium_until=premium_until+make_interval(days => $1) WHERE id=$2", days, o["user_id"])
+            outcome = "extended"
         else:
-            await c.execute(
-                """UPDATE users SET premium_until = GREATEST(COALESCE(premium_until, now()), now())
-                   + make_interval(days => $1) WHERE id=$2""", config.PREMIUM_DAYS, o["user_id"])
-            await led(c, o["user_id"], "premium", 0, order_id)
-        return o
+            await c.execute("UPDATE users SET premium_level=$3, premium_until=now()+make_interval(days => $1) WHERE id=$2",
+                            days, o["user_id"], lvl)
+            outcome = "activated"
+        await led(c, o["user_id"], "premium", 0, order_id)
+        return dict(o, outcome=outcome, level=lvl)
+
+
+async def prem_activate_queued():
+    """Purana premium khatam: queue me rakha agla level chalu. Return [(user_id, level, days)]."""
+    rows = await pool.fetch(
+        """SELECT q.id, q.user_id, q.level, q.days FROM prem_queue q JOIN users u ON u.id=q.user_id
+           WHERE u.premium_until IS NULL OR u.premium_until <= now() ORDER BY q.id LIMIT 200""")
+    out, seen = [], set()
+    for r in rows:
+        if r["user_id"] in seen:
+            continue
+        seen.add(r["user_id"])
+        async with pool.acquire() as c, c.transaction():
+            gone = await c.fetchval("DELETE FROM prem_queue WHERE id=$1 RETURNING id", r["id"])
+            if not gone:
+                continue
+            await c.execute("UPDATE users SET premium_level=$2, premium_until=now()+make_interval(days => $3) WHERE id=$1",
+                            r["user_id"], r["level"], r["days"])
+        out.append((r["user_id"], r["level"], r["days"]))
+    return out
+
+
+async def prem_queued(uid):
+    return await pool.fetch("SELECT level, days FROM prem_queue WHERE user_id=$1 ORDER BY id", uid)
+
+
+IST_DAY = "date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata'"
+
+
+async def created_today(uid):
+    """Aaj (IST) bane channel/group + bot work tasks (premium roz limit ke liye)."""
+    return await pool.fetchval(
+        f"""SELECT (SELECT count(*) FROM tasks WHERE owner_id=$1 AND created_at >= {IST_DAY})
+                 + (SELECT count(*) FROM botworks WHERE owner_id=$1 AND created_at >= {IST_DAY})""", uid)
+
+
+async def wd_today(uid):
+    """Aaj (IST) ke withdraw requests (reject/expire/fail wale nahi gine jaate)."""
+    return await pool.fetchval(
+        f"SELECT count(*) FROM withdrawals WHERE user_id=$1 AND created_at >= {IST_DAY} "
+        "AND status NOT IN ('rejected','expired','failed')", uid)
 
 
 # ---------- withdrawals ----------
@@ -466,26 +542,33 @@ async def tasks_done(uid):
                 + (SELECT count(*) FROM bw_subs WHERE worker_id=$1 AND status='approved')""", uid)
 
 
-def wd_fee(coins):
-    """Tax withdraw ki rakam ke UPAR lagta hai: 1000 coins ka paisa chahiye to 100 tax, kul 1100 katenge."""
-    return coins * config.WITHDRAW_TAX_PERCENT // 100
+def wd_fee(coins, pct=None):
+    """Tax withdraw ki rakam ke UPAR lagta hai: 1000 coins ka paisa chahiye to 100 tax, kul 1100 katenge. pct premium level se."""
+    return coins * (config.WITHDRAW_TAX_PERCENT if pct is None else pct) // 100
 
 
-async def request_withdraw(uid, coins):
+async def request_withdraw(uid, coins, pct=None, level=0, hours=None, max_day=None):
     """coins = jitne ka paisa user ko milega. Tax upar se: balance se coins + tax kat-ta hai.
     Return (wid, upi, fee_coins, net_inr). withdrawals.coins = kul kata hua (coins+fee) taaki refund poora ho."""
-    fee = wd_fee(coins)
+    fee = wd_fee(coins, pct)
     total = coins + fee
     net_inr = Decimal(coins) / Decimal(config.COIN_PER_INR)
     async with pool.acquire() as c, c.transaction():
+        if max_day is not None:  # user row lock: do parallel request me bhi roz ki limit pakki
+            await c.fetchval("SELECT id FROM users WHERE id=$1 FOR UPDATE", uid)
+            n = await c.fetchval(
+                f"SELECT count(*) FROM withdrawals WHERE user_id=$1 AND created_at >= {IST_DAY} "
+                "AND status NOT IN ('rejected','expired','failed')", uid)
+            if n >= max_day:
+                return "limit"
         u = await c.fetchrow(
             """UPDATE users SET balance=balance-$1 WHERE id=$2 AND balance>=$1
                AND device_ok AND NOT banned AND debt=0 AND upi IS NOT NULL RETURNING upi""", total, uid)
         if not u:
             return None
         wid = await c.fetchval(
-            "INSERT INTO withdrawals(user_id,coins,amount_inr,fee_coins,upi) VALUES($1,$2,$3,$4,$5) RETURNING id",
-            uid, total, net_inr, fee, u["upi"])
+            "INSERT INTO withdrawals(user_id,coins,amount_inr,fee_coins,upi,level,expire_hours) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id",
+            uid, total, net_inr, fee, u["upi"], level, hours)
         await led(c, uid, "withdraw", -total, wid)
         if fee:
             await led(c, 0, "tax", fee, wid)
@@ -512,7 +595,8 @@ async def wd_move_refund(wid, frm, to):
 async def wd_expire_pending(hours):
     """Admin ne 'hours' ghante me approve/reject nahi kiya: withdraw 'expired' + coins wapas. Return [withdraw rows]."""
     ids = await pool.fetch(
-        "SELECT id FROM withdrawals WHERE status='pending' AND created_at < now() - make_interval(hours => $1) ORDER BY id LIMIT 50", hours)
+        "SELECT id FROM withdrawals WHERE status='pending' "
+        "AND created_at < now() - make_interval(hours => COALESCE(expire_hours, $1)) ORDER BY id LIMIT 50", hours)
     out = []
     for r in ids:
         w = await wd_move_refund(r["id"], "pending", "expired")
@@ -546,7 +630,13 @@ async def wd_stuck(limit=20):
            WHERE ((status='pending' AND created_at < now() - interval '5 minutes')
                OR (status='sending' AND updated_at < now() - interval '10 minutes'))
              AND (last_alert IS NULL OR last_alert < now() - interval '3 hours')
-           ORDER BY id LIMIT $1""", limit)
+           ORDER BY level DESC, id LIMIT $1""", limit)
+
+
+async def wd_pending_list(limit=25):
+    """Pending withdraws: bada level pehle, phir purana."""
+    return await pool.fetch(
+        """SELECT * FROM withdrawals WHERE status='pending' ORDER BY level DESC, id LIMIT $1""", limit)
 
 
 async def admin_add(uid, coins, ad=False):
@@ -659,8 +749,10 @@ async def bw_open(uid):
              AND (SELECT count(*) FROM bw_subs s WHERE s.bw_id=b.id AND s.worker_id=$1) < $2
              AND (b.target > (SELECT count(*) FROM bw_subs s WHERE s.bw_id=b.id AND s.status NOT IN ('closed','retried'))
                   OR EXISTS(SELECT 1 FROM bw_subs s WHERE s.bw_id=b.id AND s.worker_id=$1 AND s.status='rejected'))
-           ORDER BY (SELECT count(*) FROM bw_subs s WHERE s.bw_id=b.id AND s.worker_id=$1) DESC, b.reward DESC, b.id LIMIT 8""",
-        uid, config.BW_MAX_ATTEMPTS)
+           ORDER BY (SELECT count(*) FROM bw_subs s WHERE s.bw_id=b.id AND s.worker_id=$1) DESC,
+                    EXISTS(SELECT 1 FROM users o WHERE o.id=b.owner_id AND o.premium_level >= $3 AND o.premium_until > now()) DESC,
+                    b.reward DESC, b.id LIMIT 8""",
+        uid, config.BW_MAX_ATTEMPTS, config.TOP_LEVEL)
 
 
 async def bw_submit(bid, worker, photo_id, photo_uid, ref_link, photo2_uid=None):
@@ -949,9 +1041,11 @@ async def sup_recent_photos(uid, hours=1):
 
 async def sup_threads(limit=40):
     return await pool.fetch(
-        """SELECT t.user_id, t.last_sender, t.last_text, t.last_at, u.username, u.first_name
+        """SELECT t.user_id, t.last_sender, t.last_text, t.last_at, u.username, u.first_name,
+                  CASE WHEN u.premium_until > now() THEN GREATEST(u.premium_level, 1) ELSE 0 END AS lvl
            FROM support_threads t LEFT JOIN users u ON u.id=t.user_id
-           ORDER BY (t.last_sender='user') DESC, t.last_at DESC LIMIT $1""", limit)
+           ORDER BY (t.last_sender='user') DESC, CASE WHEN u.premium_until > now() THEN GREATEST(u.premium_level, 1) ELSE 0 END DESC,
+                    t.last_at DESC LIMIT $1""", limit)
 
 
 async def sup_notif_recent(uid):
@@ -1005,20 +1099,22 @@ async def ref_ready(limit=100):
 
 
 async def ref_complete(referred):
-    """Refer complete: referrer ko REFER_REWARD. Return referrer_id (ya None agar pehle ho chuka)."""
+    """Refer complete: referrer ko uske level ka reward. Return (referrer_id, reward) ya None agar pehle ho chuka."""
     async with pool.acquire() as c, c.transaction():
         r = await c.fetchrow(
             "UPDATE referrals SET status='done', done_at=now() WHERE referred_id=$1 AND status='pending' RETURNING referrer_id",
             referred)
         if not r:
             return None
-        if await c.fetchval("SELECT banned FROM users WHERE id=$1", r["referrer_id"]) is not False:
+        ru = await c.fetchrow("SELECT id, banned, premium_level, premium_until FROM users WHERE id=$1", r["referrer_id"])
+        if not ru or ru["banned"] is not False:
             await c.execute("UPDATE referrals SET status='void' WHERE referred_id=$1", referred)  # banned/gayab referrer
             return None
+        reward = util.plan(ru)["ref"]  # referrer ke premium level ke hisaab se (L3 = 200)
         await c.execute("UPDATE users SET balance=balance+$1, total_earned=total_earned+$1 WHERE id=$2",
-                        config.REFER_REWARD, r["referrer_id"])
-        await led(c, r["referrer_id"], "referral", config.REFER_REWARD, referred)
-        return r["referrer_id"]
+                        reward, r["referrer_id"])
+        await led(c, r["referrer_id"], "referral", reward, referred)
+        return r["referrer_id"], reward
 
 
 async def ref_stats(uid):
