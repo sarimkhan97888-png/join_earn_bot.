@@ -469,10 +469,10 @@ function rWallet() {
 }
 function depositSheet() {
   const c = S.cfg;
-  openSheet(`<h3>Deposit coins</h3><p>Min ${fmt(c.min_deposit)} coins (₹${inr(c.min_deposit)}). Jitne coins, utne hi paise ka QR banega. 100 coins = ₹1</p>
+  openSheet(`<h3>Deposit coins</h3><p>Min ${fmt(c.min_deposit)} coins (₹${inr(c.min_deposit)}), max ${fmt(c.max_deposit)} coins (₹${inr(c.max_deposit)}). 100 coins = ₹1. Payment ke liye QR/UPI ID milega, paise bhejte hi auto credit.</p>
   <label>Coins</label><input id="dc" type="number" inputmode="numeric" placeholder="${c.min_deposit}" data-inp="dep">
   <div class="qs">${[2000, 5000, 10000, 50000].map(v => `<button data-act="qa" data-v="${v}">${fmt(v)}</button>`).join('')}</div>
-  <div class="cost" id="dh">Pay: ₹0</div><button class="btn" data-act="depgo">Generate QR</button>`);
+  <div class="cost" id="dh">Pay: ₹0</div><button class="btn" data-act="depgo">Pay karo</button>`);
 }
 function withdrawSheet() {
   const m = S.me, c = S.cfg;
@@ -484,16 +484,28 @@ function withdrawSheet() {
   <div class="cost" style="font-size:13px">${c.wd_daily == null ? 'Roz unlimited withdraw' : `Aaj: <b>${Math.max(c.wd_daily - (m.wd_today || 0), 0)} / ${c.wd_daily}</b> withdraw baaki`} · Process time: <b>${c.wd_hours} ghante</b> (nahi to coins wapas)${m.premium ? '' : ' · <span class="link" data-act="prem">Premium se faster + kam fee</span>'}</div>
   <button class="btn" data-act="wdgo">Withdraw</button>`);
 }
+async function copyText(t) {
+  let ok = false;
+  try { await navigator.clipboard.writeText(t); ok = true; } catch (e) { const x = document.createElement('textarea'); x.value = t; document.body.appendChild(x); x.select(); try { ok = document.execCommand('copy'); } catch (e2) {} x.remove(); }
+  return ok;
+}
 function showQR(o, kind) {
-  openSheet(`<h3 style="text-align:center">Pay ₹${o.amount}</h3>${o.qr ? `<img class="qr" src="${esc(o.qr)}" alt="QR">` : ''}
-  <p style="text-align:center">Kisi bhi UPI app se scan karke pay karo.<br><span class="sub">Order ${esc(o.order_id)}</span></p>
-  ${o.pay_url ? `<button class="btn ghost" data-act="paylink" data-url="${esc(o.pay_url)}">${/^upi:/i.test(o.pay_url) ? 'Open UPI app' : 'Open payment page'}</button>` : ''}
-  <div class="wait"><span class="spin"></span>&nbsp; Payment ka wait...</div>`);
-  const t0 = Date.now();
+  const ttl = o.expires_in || 600, t0 = Date.now();
+  openSheet(`<h3 style="text-align:center">Pay <span style="color:var(--acc,#22c55e)">₹${esc(o.pay_amount)}</span></h3>
+  <div class="cost" style="text-align:center;font-size:13px">⚠️ Bilkul yahi amount <b>₹${esc(o.pay_amount)}</b> (paise ke saath) bhejo, warna auto credit nahi hoga.${kind === 'deposit' ? `<br>Tumhe <b>${fmt(o.coins)}</b> coins milenge.` : ''}</div>
+  ${o.qr ? `<img class="qr" src="${esc(o.qr)}" alt="QR">` : ''}
+  <div class="cost"><span class="sub">UPI ID</span><br><b>${esc(o.upi_id)}</b> <span class="link" data-act="cpy" data-t="${esc(o.upi_id)}">Copy</span><br>
+  <span class="sub">Amount</span> <b>₹${esc(o.pay_amount)}</b> <span class="link" data-act="cpy" data-t="${esc(o.pay_amount)}">Copy</span></div>
+  ${o.pay_url ? `<button class="btn ghost" data-act="paylink" data-url="${esc(o.pay_url)}">Open UPI app</button>` : ''}
+  <div class="wait"><span class="spin"></span>&nbsp; Payment ka wait... <b id="cd"></b></div>
+  <p style="text-align:center;margin-top:10px"><span class="link" data-act="claimsheet" data-amt="${esc(o.pay_amount)}">Paise kat gaye par credit nahi hua?</span></p>`);
+  const tick = () => { const left = Math.max(ttl - Math.floor((Date.now() - t0) / 1000), 0), el = $('#cd'); if (el) el.textContent = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`; return left; };
+  tick();
   S.poll = setInterval(async () => {
-    if (Date.now() - t0 > S.cfg.order_expiry_min * 60000) {
+    const left = tick();
+    if (left <= 0) {
       clearInterval(S.poll); closeSheet();
-      await popup('error', 'Payment time khatam', 'Payment nahi mila, order Failed ho gaya. Paisa kat gaya ho to kuch der me apne aap add ho jayega, nahi to Support se contact karo.');
+      await popup('error', 'Payment time khatam', 'Order expire ho gaya. Agar paise kat gaye hain to Deposit/Premium screen me "credit nahi hua" se transaction ID daalo, ya Support se contact karo.');
       refresh(); return;
     }
     const j = await api('/api/order?id=' + encodeURIComponent(o.order_id));
@@ -502,11 +514,14 @@ function showQR(o, kind) {
       await popup('ok', 'Payment successful', kind === 'premium' ? 'Premium mil gaya! Features ab active hain (ya queue me hain).' : `${fmt(o.coins)} coins ad balance me add ho gaye.`);
       await refresh();
       if (kind === 'premium') premPage();
-    } else if (j.status === 'mismatch') {
-      clearInterval(S.poll); closeSheet();
-      await popup('error', 'Payment mismatch', 'Amount match nahi hua. Support se contact karo.');
     }
   }, 3000);
+}
+function claimSheet(amt) {
+  openSheet(`<h3>Payment credit nahi hua?</h3><p>Fam/UPI app me payment detail kholo aur wahan se <b>Transaction ID</b> aur amount yahan daalo. Mail check hone par apne aap credit ho jayega, nahi to admin dekhega.</p>
+  <label>Transaction ID</label><input id="ctx" type="text" autocomplete="off" placeholder="Fam wala Transaction ID">
+  <label>Amount (₹)</label><input id="cam" type="text" inputmode="decimal" value="${esc(amt || '')}" placeholder="20.37">
+  <button class="btn" data-act="claimgo">Claim bhejo</button>`);
 }
 
 /* ---------- PROFILE ---------- */
@@ -847,6 +862,12 @@ const H = {
   deposit: depositSheet, withdraw: withdrawSheet,
   qa: d => { $('#dc').value = d.v; onInp('dep'); },
   wmax: () => { $('#wc').value = Math.floor(S.me.balance * 100 / (100 + S.cfg.withdraw_tax) / 100) * 100; onInp('wd'); },
+  cpy: async d => { const ok = await copyText(d.t); popup(ok ? 'ok' : 'info', ok ? 'Copied' : 'Copy nahi hua', ok ? d.t : 'Dabake rakho aur copy karo.'); },
+  claimsheet: d => { clearInterval(S.poll); claimSheet(d.amt); },
+  async claimgo() {
+    const j = await act('/api/deposit/claim', { txn: $('#ctx').value, amount: $('#cam').value });
+    if (j.ok) { closeSheet(); await popup('ok', j.credited ? 'Credited' : 'Claim bheja', j.msg); refresh(); }
+  },
   async depgo() {
     const j = await act('/api/deposit', { coins: +$('#dc').value }); if (j.ok) showQR(j, 'deposit');
   },

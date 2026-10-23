@@ -8,10 +8,11 @@ import bot
 import config
 import db
 import extras
+import fam
 from webapp import make_web
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
-# httpx har request ka poora URL INFO me log karta hai (bot token / gateway key leak ho sakti hai). Band karo.
+# httpx har request ka poora URL INFO me log karta hai (bot token leak ho sakti hai). Band karo.
 for _n in ("httpx", "httpcore"):
     logging.getLogger(_n).setLevel(logging.WARNING)
 
@@ -50,6 +51,9 @@ async def main():
             bk = None
 
     await app.start()
+    fam_task = asyncio.create_task(fam.run()) if fam.enabled() else None
+    if not fam_task:
+        logging.getLogger("main").warning("Fam mail reader band: FAM_UPI_ID / IMAP_USER / IMAP_PASS set nahi")
     if bk:
         await bk.start()
         await bk.updater.start_polling(allowed_updates=["message", "callback_query"], drop_pending_updates=True)
@@ -58,6 +62,8 @@ async def main():
     try:
         await asyncio.Event().wait()
     finally:
+        if fam_task:
+            fam_task.cancel()
         if bk:
             await bk.updater.stop()
             await bk.stop()
