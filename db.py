@@ -1,3 +1,4 @@
+import random
 from decimal import Decimal
 
 import asyncpg
@@ -125,6 +126,18 @@ ALTER TABLE orders ADD COLUMN IF NOT EXISTS level SMALLINT;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS mode TEXT;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS method TEXT;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS charge_id TEXT;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS pay_paise INT;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_fam_pending ON orders(pay_paise) WHERE status='pending' AND method='fam';
+CREATE TABLE IF NOT EXISTS fam_payments(
+  txn_id TEXT PRIMARY KEY, pay_paise INT NOT NULL, sender TEXT, email_ts TIMESTAMPTZ, balance_paise BIGINT,
+  status TEXT NOT NULL, order_id TEXT, user_id BIGINT, created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS fam_claims(
+  id SERIAL PRIMARY KEY, user_id BIGINT NOT NULL, txn_id TEXT NOT NULL, amount_paise INT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending', created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_fam_claim_pending ON fam_claims(txn_id) WHERE status='pending';
+CREATE TABLE IF NOT EXISTS fam_meta(k TEXT PRIMARY KEY, v TEXT);
 CREATE TABLE IF NOT EXISTS prem_queue(
   id SERIAL PRIMARY KEY, user_id BIGINT NOT NULL, level SMALLINT NOT NULL, days INT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -459,6 +472,12 @@ async def orders_expire_old():
 
 async def complete_order(order_id, paid_amount):
     async with pool.acquire() as c, c.transaction():
+        return await _complete_c(c, order_id, paid_amount)
+
+
+async def _complete_c(c, order_id, paid_amount):
+    """Order credit/premium activate, diye hue connection (transaction) me."""
+    if True:
         o = await c.fetchrow("SELECT * FROM orders WHERE order_id=$1 FOR UPDATE", order_id)
         if not o or o["status"] != "pending":
             return None
@@ -491,6 +510,163 @@ async def complete_order(order_id, paid_amount):
             outcome = "activated"
         await led(c, o["user_id"], "premium", 0, order_id)
         return dict(o, outcome=outcome, level=lvl)
+
+
+# ---------- Fam mail deposits ----------
+async def fam_states():
+    """{folder: (uidvalidity, last_uid)} jo pehle padh chuke hain."""
+    out = {}
+    for r in await pool.fetch("SELECT k, v FROM fam_meta WHERE k LIKE 'uid:%'"):
+        val, _, last = r["v"].partition(":")
+        out[r["k"][4:]] = (val, int(last or 0))
+    return out
+
+
+async def fam_set_state(folder, validity, uid):
+    await pool.execute("INSERT INTO fam_meta(k,v) VALUES($1,$2) ON CONFLICT(k) DO UPDATE SET v=EXCLUDED.v",
+                       "uid:" + folder, f"{validity}:{uid}")
+
+
+async def fam_expire_old():
+    """Fam order TTL + grace + 1 min ke baad 'failed' (amount ka unique slot bhi khali)."""
+    await pool.execute(
+        "UPDATE orders SET status='failed' WHERE method='fam' AND status='pending' "
+        "AND created_at < now() - make_interval(secs => $1)", config.FAM_TTL + config.FAM_GRACE + 60)
+
+
+async def fam_order_counts(uid):
+    r = await pool.fetchrow(
+        """SELECT count(*) FILTER (WHERE status='pending') AS pending,
+                  count(*) AS hour FROM orders
+           WHERE user_id=$1 AND method='fam' AND created_at > now() - interval '1 hour'""", uid)
+    return r["pending"], r["hour"]
+
+
+async def fam_new_order(order_id, uid, kind, coins, base_paise, level=None, mode=None):
+    """Unique amount (base + 1..99 paise) ka pending order. Return pay_paise ya None (busy)."""
+    await fam_expire_old()
+    for _ in range(4):
+        used = {r["pay_paise"] for r in await pool.fetch(
+            "SELECT pay_paise FROM orders WHERE method='fam' AND status='pending' AND pay_paise BETWEEN $1 AND $2",
+            base_paise + 1, base_paise + 99)}
+        free = [x for x in range(base_paise + 1, base_paise + 100) if x not in used]
+        if not free:
+            return None
+        pay = random.choice(free)
+        try:
+            await pool.execute(
+                "INSERT INTO orders(order_id,user_id,kind,coins,amount_inr,level,mode,method,pay_paise) "
+                "VALUES($1,$2,$3,$4,$5,$6,$7,'fam',$8)",
+                order_id, uid, kind, coins, base_paise // 100, level, mode, pay)
+            return pay
+        except asyncpg.UniqueViolationError:
+            continue  # race: kisi aur ne wahi amount le liya
+    return None
+
+
+async def fam_process(p, ts):
+    """Ek 'received' mail: order match -> credit; ya claim match; ya unmatched. Sab ek transaction me.
+    Return None (duplicate mail) ya dict(done, claim_user, claim_coins, unmatched, gap)."""
+    out = {"done": None, "claim_user": None, "claim_coins": 0, "unmatched": False, "gap": None}
+    async with pool.acquire() as c, c.transaction():
+        got = await c.fetchval(
+            "INSERT INTO fam_payments(txn_id,pay_paise,sender,email_ts,balance_paise,status) "
+            "VALUES($1,$2,$3,to_timestamp($4),$5,'unmatched') ON CONFLICT DO NOTHING RETURNING txn_id",
+            p["txn"], p["paise"], p["sender"], float(ts), p["bal"])
+        if not got:
+            return None
+        order = await c.fetchrow(
+            """SELECT order_id FROM orders WHERE status='pending' AND method='fam' AND pay_paise=$1
+               AND created_at - interval '30 seconds' <= to_timestamp($2)
+               AND to_timestamp($2) <= created_at + make_interval(secs => $3) FOR UPDATE""",
+            p["paise"], float(ts), config.FAM_TTL + config.FAM_GRACE)
+        if order:
+            done = await _complete_c(c, order["order_id"], p["paise"] / 100)
+            if done:
+                await c.execute("UPDATE fam_payments SET status='credited', order_id=$2, user_id=$3 WHERE txn_id=$1",
+                                p["txn"], order["order_id"], done["user_id"])
+                out["done"] = done
+        if not out["done"]:
+            cl = await c.fetchrow(
+                "SELECT * FROM fam_claims WHERE status='pending' AND txn_id=$1 AND amount_paise=$2 FOR UPDATE",
+                p["txn"], p["paise"])
+            if cl:
+                await c.execute("UPDATE fam_claims SET status='approved' WHERE id=$1", cl["id"])
+                await c.execute("UPDATE fam_payments SET status='claimed', user_id=$2 WHERE txn_id=$1", p["txn"], cl["user_id"])
+                await c.execute("UPDATE users SET ad_balance=ad_balance+$1 WHERE id=$2", p["paise"], cl["user_id"])
+                await led(c, cl["user_id"], "deposit", p["paise"], p["txn"])
+                out["claim_user"], out["claim_coins"] = cl["user_id"], p["paise"]
+            else:
+                out["unmatched"] = True
+        if p["bal"] is not None:  # balance gap: mail miss hui ho sakti hai (ya Fam se paise kharch hue)
+            last = await c.fetchval("SELECT v FROM fam_meta WHERE k='last_balance'")
+            if last is not None and int(last) + p["paise"] != p["bal"]:
+                out["gap"] = (int(last) + p["paise"], p["bal"])
+            await c.execute("INSERT INTO fam_meta(k,v) VALUES('last_balance',$1) ON CONFLICT(k) DO UPDATE SET v=EXCLUDED.v", str(p["bal"]))
+    return out
+
+
+async def fam_claim(uid, txn, paise):
+    """User: 'paid but credit nahi hua'. Return (status, extra): credited/pending/used/dup/limit."""
+    async with pool.acquire() as c, c.transaction():
+        n = await c.fetchval("SELECT count(*) FROM fam_claims WHERE user_id=$1 AND created_at > now() - interval '1 hour'", uid)
+        if n >= config.MAX_CLAIMS_PER_HOUR:
+            return "limit", None
+        pay = await c.fetchrow("SELECT * FROM fam_payments WHERE txn_id=$1 FOR UPDATE", txn)
+        if pay:
+            if pay["status"] == "unmatched" and pay["pay_paise"] == paise:
+                await c.execute("UPDATE fam_payments SET status='claimed', user_id=$2 WHERE txn_id=$1", txn, uid)
+                await c.execute("UPDATE users SET ad_balance=ad_balance+$1 WHERE id=$2", paise, uid)
+                await led(c, uid, "deposit", paise, txn)
+                return "credited", paise
+            return "used", None
+        if await c.fetchval("SELECT 1 FROM fam_claims WHERE txn_id=$1 AND status='pending'", txn):
+            return "dup", None
+        cid = await c.fetchval("INSERT INTO fam_claims(user_id,txn_id,amount_paise) VALUES($1,$2,$3) RETURNING id", uid, txn, paise)
+        return "pending", cid
+
+
+async def fam_claim_get(cid):
+    return await pool.fetchrow("SELECT * FROM fam_claims WHERE id=$1", cid)
+
+
+async def fam_claim_approve(cid):
+    """Admin manually credit. Return claim row ya None."""
+    async with pool.acquire() as c, c.transaction():
+        cl = await c.fetchrow("SELECT * FROM fam_claims WHERE id=$1 AND status='pending' FOR UPDATE", cid)
+        if not cl:
+            return None
+        if await c.fetchval("SELECT 1 FROM fam_payments WHERE txn_id=$1", cl["txn_id"]):
+            return None  # mail aa chuki: wo process ho chuki / manual assign se hoga
+        await c.execute(
+            "INSERT INTO fam_payments(txn_id,pay_paise,sender,status,user_id) VALUES($1,$2,'manual','claimed',$3)",
+            cl["txn_id"], cl["amount_paise"], cl["user_id"])
+        await c.execute("UPDATE users SET ad_balance=ad_balance+$1 WHERE id=$2", cl["amount_paise"], cl["user_id"])
+        await led(c, cl["user_id"], "deposit", cl["amount_paise"], cl["txn_id"])
+        await c.execute("UPDATE fam_claims SET status='approved' WHERE id=$1", cid)
+        return cl
+
+
+async def fam_claim_reject(cid):
+    return await pool.fetchrow("UPDATE fam_claims SET status='rejected' WHERE id=$1 AND status='pending' RETURNING *", cid)
+
+
+async def fam_assign(txn, uid):
+    """Admin: unmatched payment kisi user ko do. Return payment row ya None."""
+    async with pool.acquire() as c, c.transaction():
+        pay = await c.fetchrow("SELECT * FROM fam_payments WHERE txn_id=$1 AND status='unmatched' FOR UPDATE", txn)
+        if not pay or not await c.fetchval("SELECT 1 FROM users WHERE id=$1", uid):
+            return None
+        await c.execute("UPDATE fam_payments SET status='claimed', user_id=$2 WHERE txn_id=$1", txn, uid)
+        await c.execute("UPDATE users SET ad_balance=ad_balance+$1 WHERE id=$2", pay["pay_paise"], uid)
+        await led(c, uid, "deposit", pay["pay_paise"], txn)
+        return pay
+
+
+async def fam_review():
+    claims = await pool.fetch("SELECT * FROM fam_claims WHERE status='pending' ORDER BY id LIMIT 50")
+    unmatched = await pool.fetch("SELECT * FROM fam_payments WHERE status='unmatched' ORDER BY created_at DESC LIMIT 50")
+    return claims, unmatched
 
 
 async def prem_activate_queued():

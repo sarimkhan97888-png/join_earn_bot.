@@ -15,7 +15,6 @@ import botwork
 import config
 import db
 import extras
-import gateway
 import payments
 import payouts
 import util
@@ -152,36 +151,6 @@ async def ban_cmd(update: Update, ctx):
         await update.message.reply_text("User nahi mila.")
 
 
-# ---------------- admin: gateway test ----------------
-async def gw_cmd(update: Update, ctx):
-    uid = update.effective_user.id
-    if uid not in config.ADMIN_IDS:
-        return
-    a = ctx.args
-    usage = "Usage:\n/gw balance\n/gw create 10\n/gw status <paymentId>"
-    if not a:
-        return await update.message.reply_text(usage)
-    try:
-        if a[0] == "balance":
-            raw = await gateway.get_balance()
-        elif a[0] == "create":
-            amount = int(a[1]) if len(a) > 1 and a[1].isdigit() else 10
-            res = await gateway.create_order(f"T{uid}{int(time.time())}", amount, "gwtest")
-            raw = {"parsed": {k: v for k, v in res.items() if k != "raw"}, "raw": res["raw"]}
-        elif a[0] == "status" and len(a) > 1:
-            state, amt, raw0 = await gateway.check_payment(a[1])
-            raw = {"parsed_state": state, "parsed_amount": str(amt), "raw": raw0}
-        else:
-            return await update.message.reply_text(usage)
-        text = json.dumps(raw, indent=1, ensure_ascii=False, default=str)
-    except Exception as e:
-        text = f"Error: {type(e).__name__}: {e}"
-    for s in (config.GATEWAY_KEY, config.GATEWAY_SECRET):
-        if s:
-            text = text.replace(s, "***")
-    await update.message.reply_text(text[:3800])
-
-
 # ---------------- admin: apne account me balance ----------------
 async def addbal_cmd(update: Update, ctx):
     """/addbalance 5000 (withdraw balance) ya /addbalance ad 5000 (ad balance). Sirf admin, sirf apne account me."""
@@ -250,26 +219,14 @@ async def on_admin_wd(update: Update, ctx):
         extras.feed(f"❌ Withdraw #{wid} <b>rejected</b>, {w['coins']} coins refund (user <code>{w['user_id']}</code>)")
         await util.notify(main, w["user_id"], f"❌ Withdraw #{wid} reject hua, coins wapas mil gaye.")
     elif act == "adm_ok":
-        if payouts.enabled():
-            res = await payouts.send(main, wid)
-            if res == "skip":
-                return await stale()
-            if res == "processing":
-                await ans("✅ Payout bhej diya (2-5 min me user ko milega)")
-                w = await db.wd_get(wid)
-                await util.notify(main, w["user_id"], f"⏳ Withdraw #{wid} approve hua, paisa 2-5 minute me aayega.")
-            else:
-                keep = True  # payouts.send ne naya alert bhej diya
-                await ans("⚠️ Payout nahi gaya, naya alert dekho")
-        else:
-            w = await db.wd_move(wid, "pending", "paid")
-            if not w:
-                return await stale()
-            await ans("✅ Approved — UPI par manually pay kar do")
-            await extras.post_payout(w)
-            extras.feed(f"✅ Withdraw #{wid} <b>approved (manual paid)</b> ₹{float(w['amount_inr']):.2f} → <code>{html.escape(w['upi'])}</code> (user <code>{w['user_id']}</code>)")
-            await util.notify(main, w["user_id"],
-                              f"✅ Withdraw #{wid} paid: ₹{float(w['amount_inr']):.2f} → {w['upi']} (tax {tax}% alag se kata)")
+        w = await db.wd_move(wid, "pending", "paid")
+        if not w:
+            return await stale()
+        await ans("✅ Approved — UPI par manually pay kar do")
+        await extras.post_payout(w)
+        extras.feed(f"✅ Withdraw #{wid} <b>approved (manual paid)</b> ₹{float(w['amount_inr']):.2f} → <code>{html.escape(w['upi'])}</code> (user <code>{w['user_id']}</code>)")
+        await util.notify(main, w["user_id"],
+                          f"✅ Withdraw #{wid} paid: ₹{float(w['amount_inr']):.2f} → {w['upi']} (tax {tax}% alag se kata)")
     elif act == "adm_paid":
         w = await db.wd_move(wid, "sending", "paid")
         if not w:
@@ -291,6 +248,45 @@ async def on_admin_wd(update: Update, ctx):
             await q.message.delete()
         except TelegramError:
             pass
+
+
+# ---------------- admin: deposit claims / unmatched ----------------
+async def on_admin_claim(update: Update, ctx):
+    q = update.callback_query
+    if q.from_user.id not in config.ADMIN_IDS:
+        return await q.answer("Not allowed", show_alert=True)
+    act, cid = q.data.split(":")
+    main = util.main_bot or ctx.bot
+    if act == "clm_ok":
+        cl = await db.fam_claim_approve(int(cid))
+        msg = "✅ Credit ho gaya" if cl else "Already processed / mail aa chuki"
+        if cl:
+            extras.feed(f"✅ Claim #{cid} approved: ₹{cl['amount_paise'] / 100:.2f} (user <code>{cl['user_id']}</code>)")
+            await util.notify(main, cl["user_id"], f"✅ <b>Deposit successful!</b>\n+{cl['amount_paise']} coins ad balance me add ho gaye.")
+    else:
+        cl = await db.fam_claim_reject(int(cid))
+        msg = "❌ Reject" if cl else "Already processed"
+        if cl:
+            await util.notify(main, cl["user_id"], "❌ Tumhara deposit claim verify nahi ho paya. Galti ho to Support me batao.")
+    try:
+        await q.answer(msg, show_alert=True)
+        await q.message.delete()
+    except TelegramError:
+        pass
+
+
+async def assign_cmd(update: Update, ctx):
+    """/assign <txn_id> <user_id>: unmatched payment kisi user ke ad balance me."""
+    if update.effective_user.id not in config.ADMIN_IDS:
+        return
+    a = ctx.args
+    if len(a) != 2 or not a[1].isdigit():
+        return await update.message.reply_text("Usage: /assign <txn_id> <user_id>")
+    pay = await db.fam_assign(a[0].upper(), int(a[1]))
+    if not pay:
+        return await update.message.reply_text("Nahi hua: txn unmatched nahi hai ya user nahi mila.")
+    await util.notify(util.main_bot or ctx.bot, int(a[1]), f"✅ <b>Deposit successful!</b>\n+{pay['pay_paise']} coins ad balance me add ho gaye.")
+    await update.message.reply_text(f"✅ ₹{pay['pay_paise'] / 100:.2f} → user {a[1]} ke ad balance me.")
 
 
 # ---------------- chat member events ----------------
@@ -365,10 +361,8 @@ async def job_recheck(ctx):
 
 
 async def job_orders(ctx):
-    """Webhook na aaye to bhi pending deposits/premium ko gateway se verify karke credit karo."""
-    for o in await db.pending_gateway_orders():
-        await payments.settle(ctx.bot, o, min_gap=60)
-        await asyncio.sleep(0.2)
+    """Purane unpaid Fam / Stars orders band karo."""
+    await db.fam_expire_old()
     await db.orders_expire_old()
 
 
@@ -494,8 +488,7 @@ async def job_wd_stuck(ctx):
             kb = payouts.admin_kb(w["id"])
         else:
             txt = (f"🚨 <b>Withdraw #{w['id']} 'sending' me atka hai</b>\n₹{float(w['amount_inr']):.2f} → "
-                   f"<code>{html.escape(w['upi'])}</code>\nElite Pay dashboard check karo: paisa gaya ho to Mark paid, "
-                   f"nahi gaya to Refund.")
+                   f"<code>{html.escape(w['upi'])}</code>\nPaisa gaya ho to Mark paid, nahi gaya to Refund.")
             kb = payouts.fix_kb(w["id"])
         await payouts.alert(ctx.bot, txt, kb, wid=w["id"])
 
@@ -514,6 +507,8 @@ def register_backup(app):
     app.add_handler(CommandHandler("start", backup_start, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("pending", pending_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CallbackQueryHandler(on_admin_wd, pattern=r"^adm_"))
+    app.add_handler(CallbackQueryHandler(on_admin_claim, pattern=r"^clm_"))
+    app.add_handler(CommandHandler("assign", assign_cmd, filters=filters.ChatType.PRIVATE))
 
 
 def register(app):
@@ -526,12 +521,13 @@ def register(app):
     app.add_handler(PreCheckoutQueryHandler(on_precheckout))
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, on_stars_paid))
     app.add_handler(CommandHandler("backup", backup_cmd, filters=filters.ChatType.PRIVATE))
-    app.add_handler(CommandHandler("gw", gw_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler(["addbalance", "add_balance", "add"], addbal_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("resetdev", resetdev_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CallbackQueryHandler(on_support_legacy, pattern=r"^sup_reply:"))
     app.add_handler(CommandHandler(["ban", "unban"], ban_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CallbackQueryHandler(on_admin_wd, pattern=r"^adm_"))
+    app.add_handler(CallbackQueryHandler(on_admin_claim, pattern=r"^clm_"))
+    app.add_handler(CommandHandler("assign", assign_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CallbackQueryHandler(botwork.on_cb, pattern=r"^(bws_|bwa_)"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, botwork.on_text))
     app.add_handler(ChatMemberHandler(on_chat_member, ChatMemberHandler.CHAT_MEMBER))
@@ -540,7 +536,6 @@ def register(app):
     app.job_queue.run_repeating(job_recheck, interval=300, first=120)
     app.job_queue.run_repeating(botwork.job, interval=900, first=180)
     app.job_queue.run_repeating(job_orders, interval=120, first=90)
-    app.job_queue.run_repeating(payouts.job, interval=90, first=100)
     app.job_queue.run_repeating(job_refs, interval=60, first=70)
     app.job_queue.run_repeating(job_prem, interval=120, first=80)
     app.job_queue.run_repeating(job_cleanup, interval=86400, first=600)

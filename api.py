@@ -10,7 +10,8 @@ import logging
 import re
 import time
 import types
-from urllib.parse import parse_qsl
+from decimal import Decimal
+from urllib.parse import parse_qsl, quote
 
 import qrcode
 from aiohttp import web
@@ -21,8 +22,7 @@ import botwork
 import config
 import db
 import extras
-import gateway
-import payments
+import fam
 import payouts
 import util
 
@@ -109,7 +109,7 @@ def cfg(request):
             "tasks_daily": None if request["u"]["id"] in config.ADMIN_IDS else util.plan(request["u"])["tasks"],
             "free_wd_hours": config.WITHDRAW_EXPIRE_HOURS, "free_wd": 1, "payout_link": config.PAYOUT_CHANNEL_LINK, "app_name": config.APP_NAME,
             "refer_reward": util.plan(request["u"])["ref"], "min_tasks": config.MIN_TASKS_FOR_WITHDRAW, "min_ref_tasks": config.MIN_TASKS_FOR_REFER, "order_expiry_min": config.ORDER_EXPIRY_MIN,
-            "auto_payout": bool(config.AUTO_PAYOUT)}
+            "upi_id": config.FAM_UPI_ID, "max_deposit": config.MAX_DEPOSIT_COINS, "fam_ttl": config.FAM_TTL}
 
 
 # ---------------- auth + rate limit + device check ----------------
@@ -315,37 +315,74 @@ async def api_wallet(request):
     return ok(orders=orders, withdrawals=wds)
 
 
+def make_qr(text):
+    bio = io.BytesIO()
+    qrcode.make(text).save(bio, "PNG")
+    return "data:image/png;base64," + base64.b64encode(bio.getvalue()).decode()
+
+
 async def make_order(request, kind, coins, amount, level=None, mode=None):
-    uid = request["u"]["id"]
+    """Fam order: base amount + 1..99 paise (unique). User ye exact amount Fam UPI par bhejta hai."""
+    u = request["u"]
+    uid = u["id"]
+    if not config.FAM_UPI_ID:
+        return err("❌ Payment abhi available nahi. Baad me try karo.")
     if not cooldown(uid, "order", 5):
         return too_fast()
-    if await db.pending_orders(uid) >= 5:
-        return err("Bahut saare pending orders hain. Thodi der baad try karo.")
+    pend, hour = await db.fam_order_counts(uid)
+    if pend >= config.MAX_PENDING_FAM:
+        return err("Pehle wale payment order ko pura karo ya 12 minute ruko, phir naya banao.")
+    if hour >= config.MAX_FAM_ORDERS_PER_HOUR:
+        return err("Bahut saare orders. Thodi der baad try karo.")
     order_id = f"{kind[0].upper()}{uid}{int(time.time() * 1000)}"
+    pay = await db.fam_new_order(order_id, uid, kind, coins, amount * 100, level, mode)
+    if not pay:
+        return err("Abhi bahut log payment kar rahe hain. 1 minute baad try karo.")
+    extras.feed(f"🧾 {('Premium L%s' % level) if kind == 'premium' else 'Deposit'} order bana ₹{pay / 100:.2f} — {extras.uname(u)}")
+    amt = f"{pay // 100}.{pay % 100:02d}"
+    link = f"upi://pay?pa={quote(config.FAM_UPI_ID)}&pn={quote(config.PAYEE_NAME)}&am={amt}&cu=INR&tn={quote(order_id[-8:])}"
+    return ok(order_id=order_id, amount=amount, pay_amount=amt, coins=coins, upi_id=config.FAM_UPI_ID,
+              pay_url=link, qr=make_qr(link), expires_in=config.FAM_TTL)
+
+
+@routes.post("/api/deposit/claim")
+async def api_deposit_claim(request):
+    """'Paise bheje par credit nahi hua': Fam app wala transaction id + amount."""
+    u = request["u"]
+    d = await body(request)
+    txn = re.sub(r"[^A-Za-z0-9]", "", str(d.get("txn") or "")).upper()
     try:
-        res = await gateway.create_order(order_id, amount, f"{kind} {uid}")
+        paise = int(Decimal(str(d.get("amount") or "0").replace(",", "")) * 100)
     except Exception:
-        log.exception("gateway create_order failed")
-        return err("❌ Payment gateway abhi available nahi. Baad me try karo.")
-    if not res.get("ref"):
-        log.error("gateway response me payment id nahi mili; keys=%s",
-                  list(res.get("raw", {}).keys()) if isinstance(res.get("raw"), dict) else None)
-        return err("Payment gateway se payment ID nahi mili. Support se contact karo.")
-    await db.new_order(order_id, uid, kind, coins, amount, res["ref"], level, mode, "gateway")
-    extras.feed(f"🧾 {('Premium L%s' % level) if kind == 'premium' else 'Deposit'} order bana ₹{amount} — {extras.uname(request['u'])}")
-    qr = res.get("qr_url")
-    if not qr and res.get("upi_url"):
-        bio = io.BytesIO()
-        qrcode.make(res["upi_url"]).save(bio, "PNG")
-        qr = "data:image/png;base64," + base64.b64encode(bio.getvalue()).decode()
-    return ok(order_id=order_id, amount=amount, coins=coins, qr=qr, pay_url=res.get("pay_url") or res.get("upi_url"))
+        paise = 0
+    if not (8 <= len(txn) <= 40):
+        return err("Transaction ID sahi daalo (Fam app me payment detail me hota hai).")
+    if not (config.MIN_DEPOSIT_COINS <= paise <= config.MAX_DEPOSIT_COINS):
+        return err(f"Amount ₹{config.MIN_DEPOSIT_COINS // 100} se ₹{config.MAX_DEPOSIT_COINS // 100} ke beech daalo.")
+    if not cooldown(u["id"], "claim", 10):
+        return too_fast()
+    st, extra = await db.fam_claim(u["id"], txn, paise)
+    if st == "credited":
+        return ok(msg=f"✅ Payment mil gayi! +{paise} coins ad balance me add ho gaye.", credited=True)
+    if st == "pending":
+        extras.feed(f"🧾 Deposit claim #{extra} ₹{paise / 100:.2f} — {extras.uname(u)}")
+        try:
+            await fam.claim_alert(extra, u["id"], txn, paise)
+        except Exception:
+            log.exception("claim alert failed")
+        return ok(msg="Claim bhej diya. Admin check karke credit kar dega. Mail aate hi apne aap bhi ho jayega.")
+    if st == "dup":
+        return err("Is transaction ka claim pehle se pending hai.")
+    if st == "limit":
+        return err("Bahut claims. Thodi der baad try karo.")
+    return err("Ye transaction pehle hi use ho chuka hai ya amount match nahi karta.")
 
 
 @routes.post("/api/deposit")
 async def api_deposit(request):
     coins = to_int((await body(request)).get("coins"))
-    if coins < config.MIN_DEPOSIT_COINS or coins % config.COIN_PER_INR or coins > 10_000_000:
-        return err(f"Min {config.MIN_DEPOSIT_COINS} coins aur 100 ke multiple me daalo.")
+    if coins < config.MIN_DEPOSIT_COINS or coins % config.COIN_PER_INR or coins > config.MAX_DEPOSIT_COINS:
+        return err(f"Min {config.MIN_DEPOSIT_COINS} aur max {config.MAX_DEPOSIT_COINS} coins, 100 ke multiple me daalo.")
     return await make_order(request, "deposit", coins, coins // config.COIN_PER_INR)
 
 
@@ -403,7 +440,7 @@ async def api_order(request):
     row = await db.order_row(request.query.get("id", ""))
     if not row or row["user_id"] != request["u"]["id"]:
         return ok(status="none")
-    return ok(status=await payments.settle(request.app["bot"], row, min_gap=4))
+    return ok(status=row["status"])
 
 
 @routes.post("/api/withdraw")
@@ -447,28 +484,20 @@ async def api_withdraw(request):
     if not r:
         return err("❌ Withdraw nahi ho paya. Balance aur verification check karo.")
     wid, upi, fee, net = r
-    auto = payouts.eligible(u, net, await db.wd_recent_count(uid))
-    t = asyncio.create_task(_after_withdraw(request.app["bot"], u, wid, coins, fee, net, upi, auto, pl["level"] if not is_admin_u else 0))
+    t = asyncio.create_task(_after_withdraw(request.app["bot"], u, wid, coins, fee, net, upi, pl["level"] if not is_admin_u else 0))
     _bg.add(t)
     t.add_done_callback(_bg.discard)
-    if auto:
-        return ok(msg=f"Withdraw #{wid} process ho raha hai: ₹{net:.2f} → {upi}. 2-5 minute me aa jayega.")
     return ok(msg=f"Withdraw request #{wid} bhej di gayi. ₹{net:.2f} → {upi} (balance se {coins} + {fee} tax = {coins + fee} coins kate). "
                   f"Admin approve karega to paisa aa jayega. {pl['wd_hours']} ghante me process na hua to coins apne aap wapas aa jayenge.")
 
 
-async def _after_withdraw(bot, u, wid, coins, fee, net, upi, auto, lvl=0):
+async def _after_withdraw(bot, u, wid, coins, fee, net, upi, lvl=0):
     try:
         extras.feed(f"💸 <b>Withdraw request</b> [{util.tag(lvl)}] #{wid}: ₹{net:.2f} → <code>{html.escape(upi)}</code>, {coins + fee} coins kate "
-                    f"— {extras.uname(u)}" + (" (auto payout)" if auto else ""))
-        if auto:
-            await payouts.send(bot, wid)  # fail/unsure par payouts.send khud admin ko alert karta hai
-            return
+                    f"— {extras.uname(u)}")
         why = ""
         if u["suspect"]:
             why += "\n⚠️ <b>Suspect:</b> iska device fingerprint kisi aur account se match karta hai. Pehle check karo."
-        if config.AUTO_PAYOUT and not u["suspect"]:
-            why += "\nℹ️ Auto limit se bahar / abhi auto pause hai, isliye manual approval."
         await payouts.alert(bot, f"💸 <b>{util.tag(lvl)}</b> · Withdraw #{wid}\nUser: <code>{u['id']}</code>\n₹{net:.2f} payable "
                                  f"(user se {coins + fee} coins kate = {coins} + {fee} tax)\nUPI: <code>{html.escape(upi)}</code>{why}",
                             payouts.admin_kb(wid), wid=wid)
