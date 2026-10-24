@@ -88,6 +88,7 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS fp TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS dev_ver INT NOT NULL DEFAULT 1;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS device_changes INT NOT NULL DEFAULT 0;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS suspect BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS lang TEXT;
 UPDATE users SET fp=device_hash WHERE fp IS NULL AND device_hash IS NOT NULL;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS free BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE botworks ADD COLUMN IF NOT EXISTS free BOOLEAN NOT NULL DEFAULT FALSE;
@@ -252,6 +253,14 @@ async def ensure_user(tu):
         except Exception:
             pass
     return row
+
+
+async def get_lang(uid):
+    return await pool.fetchval("SELECT lang FROM users WHERE id=$1", uid)
+
+
+async def set_lang(uid, lang):
+    return await pool.fetchval("UPDATE users SET lang=$2 WHERE id=$1 RETURNING id", uid, lang)
 
 
 async def get_user(uid):
@@ -723,7 +732,10 @@ def wd_fee(coins, pct=None):
     return coins * (config.WITHDRAW_TAX_PERCENT if pct is None else pct) // 100
 
 
-async def request_withdraw(uid, coins, pct=None, level=0, hours=None, max_day=None):
+GPLAY = "Google Play Code"
+
+
+async def request_withdraw(uid, coins, pct=None, level=0, hours=None, max_day=None, gplay=False):
     """coins = jitne ka paisa user ko milega. Tax upar se: balance se coins + tax kat-ta hai.
     Return (wid, upi, fee_coins, net_inr). withdrawals.coins = kul kata hua (coins+fee) taaki refund poora ho."""
     fee = wd_fee(coins, pct)
@@ -744,11 +756,11 @@ async def request_withdraw(uid, coins, pct=None, level=0, hours=None, max_day=No
             return None
         wid = await c.fetchval(
             "INSERT INTO withdrawals(user_id,coins,amount_inr,fee_coins,upi,level,expire_hours) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id",
-            uid, total, net_inr, fee, u["upi"], level, hours)
+            uid, total, net_inr, fee, GPLAY if gplay else u["upi"], level, hours)
         await led(c, uid, "withdraw", -total, wid)
         if fee:
             await led(c, 0, "tax", fee, wid)
-        return wid, u["upi"], fee, net_inr
+        return wid, (GPLAY if gplay else u["upi"]), fee, net_inr
 
 
 async def wd_move(wid, frm, to):
@@ -1357,7 +1369,7 @@ async def bc_next():
 
 async def bc_users(last_uid, limit=100):
     return await pool.fetch(
-        "SELECT id FROM users WHERE id>$1 AND notify AND NOT banned ORDER BY id LIMIT $2", last_uid, limit)
+        "SELECT id, lang FROM users WHERE id>$1 AND notify AND NOT banned ORDER BY id LIMIT $2", last_uid, limit)
 
 
 async def bc_progress(bid, last_uid, sent, done=False):

@@ -23,6 +23,7 @@ import botwork
 import config
 import db
 import extras
+import i18n
 import fam
 import payouts
 import util
@@ -57,11 +58,13 @@ def check_init_data(init_data: str):
 
 
 def ok(**kw):
+    if "msg" in kw:
+        kw["msg"] = i18n.tr(kw["msg"])
     return web.json_response({"ok": True, **kw})
 
 
 def err(msg):
-    return web.json_response({"ok": False, "msg": msg})
+    return web.json_response({"ok": False, "msg": i18n.tr(msg)})
 
 
 def iso(dt):
@@ -88,7 +91,8 @@ def pub(u):
             "ad_balance": u["ad_balance"], "premium": util.is_prem(u), "premium_until": iso(u["premium_until"]),
             "level": util.level(u), "real_level": util.real_level(u),
             "gmail": u["gmail"], "upi": u["upi"], "device_ok": u["device_ok"],
-            "device_state": u.get("device_state", "ok"), "admin": u["id"] in config.ADMIN_IDS, "debt": u.get("debt", 0), "notify": bool(u.get("notify", True))}
+            "device_state": u.get("device_state", "ok"), "admin": u["id"] in config.ADMIN_IDS, "debt": u.get("debt", 0), "notify": bool(u.get("notify", True)),
+            "lang": u.get("lang") or "en", "lang_set": bool(u.get("lang"))}
 
 
 def plans_json():
@@ -117,7 +121,7 @@ def cfg(request):
 _rl = {}
 _rl_gc = [0.0]
 # Device verify ke bina sirf ye endpoints chalte hain (baaki sab server par block)
-OPEN_PATHS = {"/api/me", "/api/verify", "/api/support", "/api/support/send", "/api/support/photo", "/api/wallet",
+OPEN_PATHS = {"/api/me", "/api/lang", "/api/verify", "/api/support", "/api/support/send", "/api/support/photo", "/api/wallet",
               "/api/order", "/api/tasks"}
 _cd = {}
 _giftfail = {}
@@ -211,12 +215,14 @@ async def auth_mw(request, handler):
     try:
         u = await db.ensure_user(types.SimpleNamespace(
             id=user["id"], username=user.get("username"), first_name=user.get("first_name")))
+        i18n.remember(u["id"], u.get("lang"))
+        i18n.cur.set(u.get("lang") or "en")
         if u["banned"]:
-            return web.json_response({"ok": False, "msg": "🚫 Account banned."}, status=403)
+            return web.json_response({"ok": False, "msg": i18n.tr("🚫 Account banned.")}, status=403)
         u = await with_device(u, request.headers.get("X-Device", ""), request.headers.get("X-Fp", ""))
         if not u["device_ok"] and u["id"] not in config.ADMIN_IDS and request.path not in OPEN_PATHS:
             return web.json_response({"ok": False, "code": "need_verify",
-                                      "msg": "🔐 Pehle device verify karo."})
+                                      "msg": i18n.tr("🔐 Pehle device verify karo.")})
         request["u"] = u
         request["tg"] = user
         return await handler(request)
@@ -300,8 +306,9 @@ async def api_rejoin(request):
             got += await db.unblock(r["chat_id"], uid) or 0
     if await db.left_chats(uid):
         return err("❌ Abhi bhi kuch channels join nahi kiye.")
-    extra = f" {got} coins ({config.REJOIN_PERCENT}%) {config.HOLD_HOURS}h hold me mile." if got else ""
-    return ok(msg="Unblocked! Ab tasks kar sakte ho." + extra)
+    if got:
+        return ok(msg=f"Unblocked! Ab tasks kar sakte ho. {got} coins ({config.REJOIN_PERCENT}%) {config.HOLD_HOURS}h hold me mile.")
+    return ok(msg="Unblocked! Ab tasks kar sakte ho.")
 
 
 # ---------------- wallet ----------------
@@ -426,7 +433,7 @@ async def api_premium_stars(request):
     order_id = f"T{u['id']}{int(time.time() * 1000)}"
     try:
         link = await request.app["bot"].create_invoice_link(
-            title=f"{config.APP_NAME} Premium Level {lvl}", description=f"{p['days']} din ka Premium Level {lvl}",
+            title=f"{config.APP_NAME} Premium Level {lvl}", description=i18n.tr(f"{p['days']} din ka Premium Level {lvl}", i18n.cur.get()),
             payload=order_id, provider_token="", currency="XTR", prices=[LabeledPrice(f"Level {lvl} · {p['days']} din", p["price"])])
     except TelegramError:
         log.exception("create_invoice_link failed")
@@ -434,6 +441,17 @@ async def api_premium_stars(request):
     await db.new_order(order_id, u["id"], "premium", 0, p["price"], None, lvl, mode, "stars")
     extras.feed(f"🧾 Premium L{lvl} Stars invoice ({p['price']} ⭐) — {extras.uname(u)}")
     return ok(link=link, order_id=order_id)
+
+
+@routes.post("/api/lang")
+async def api_lang(request):
+    lang = str((await body(request)).get("lang"))
+    if lang not in i18n.LANGS:
+        return err("Galat bhasha.")
+    await db.set_lang(request["u"]["id"], lang)
+    i18n.remember(request["u"]["id"], lang)
+    i18n.cur.set(lang)
+    return ok(lang=lang, msg="✅ Bhasha badal gayi.")
 
 
 @routes.get("/api/order")
@@ -448,7 +466,9 @@ async def api_order(request):
 async def api_withdraw(request):
     u = request["u"]
     uid = u["id"]
-    coins = to_int((await body(request)).get("coins"))
+    bd = await body(request)
+    coins = to_int(bd.get("coins"))
+    gplay = bd.get("method") == "gplay"
     if not u["device_ok"]:
         return err("🔐 Withdraw ke liye pehle device verify karo.")
     if not cooldown(uid, "wd", 8):
@@ -463,8 +483,9 @@ async def api_withdraw(request):
     pl = util.plan(u)
     is_admin_u = uid in config.ADMIN_IDS
     if not is_admin_u and pl["wd"] is not None and await db.wd_today(uid) >= pl["wd"]:
-        nxt = "Level upgrade karo ya " if pl["level"] < max(config.PLANS) else ""
-        return err(f"⚠️ Aaj ke {pl['wd']} withdraw ho chuke. {nxt}kal (12 baje ke baad) dobara karo.")
+        if pl["level"] < max(config.PLANS):
+            return err(f"⚠️ Aaj ke {pl['wd']} withdraw ho chuke. Level upgrade karo ya kal (12 baje ke baad) dobara karo.")
+        return err(f"⚠️ Aaj ke {pl['wd']} withdraw ho chuke. Kal (12 baje ke baad) dobara karo.")
     if uid not in config.ADMIN_IDS and config.MIN_TASKS_FOR_WITHDRAW > 0:
         done = await db.tasks_done(uid)
         if done < config.MIN_TASKS_FOR_WITHDRAW:
@@ -479,7 +500,7 @@ async def api_withdraw(request):
         return err(f"{coins} coins + {db.wd_fee(coins, pct)} tax = {need} coins chahiye, balance {u['balance']}. "
                    f"Max withdraw: {mx} coins.")
     r = await db.request_withdraw(uid, coins, pct, pl["level"] if not is_admin_u else 0, pl["wd_hours"],
-                                  None if is_admin_u else pl["wd"])
+                                  None if is_admin_u else pl["wd"], gplay=gplay)
     if r == "limit":
         return err(f"⚠️ Aaj ke {pl['wd']} withdraw ho chuke. Kal dobara karo.")
     if not r:
@@ -488,6 +509,9 @@ async def api_withdraw(request):
     t = asyncio.create_task(_after_withdraw(request.app["bot"], u, wid, coins, fee, net, upi, pl["level"] if not is_admin_u else 0))
     _bg.add(t)
     t.add_done_callback(_bg.discard)
+    if gplay:
+        return ok(msg=f"Withdraw request #{wid} bhej di gayi. ₹{net:.2f} ka Google Play code (balance se {coins} + {fee} tax = {coins + fee} coins kate). "
+                      f"Admin approve karega to code bot me mil jayega. {pl['wd_hours']} ghante me process na hua to coins apne aap wapas aa jayenge.")
     return ok(msg=f"Withdraw request #{wid} bhej di gayi. ₹{net:.2f} → {upi} (balance se {coins} + {fee} tax = {coins + fee} coins kate). "
                   f"Admin approve karega to paisa aa jayega. {pl['wd_hours']} ghante me process na hua to coins apne aap wapas aa jayenge.")
 
@@ -500,7 +524,9 @@ async def _after_withdraw(bot, u, wid, coins, fee, net, upi, lvl=0):
         if u["suspect"]:
             why += "\n⚠️ <b>Suspect:</b> iska device fingerprint kisi aur account se match karta hai. Pehle check karo."
         await payouts.alert(bot, f"💸 <b>{util.tag(lvl)}</b> · Withdraw #{wid}\nUser: <code>{u['id']}</code>\n₹{net:.2f} payable "
-                                 f"(user se {coins + fee} coins kate = {coins} + {fee} tax)\nUPI: <code>{html.escape(upi)}</code>{why}",
+                                 f"(user se {coins + fee} coins kate = {coins} + {fee} tax)\n"
+                                 + ("🎁 <b>Google Play redeem code bhejna hai</b> (Approve se pehle user ko code DM/chat se bhejo)" if upi == db.GPLAY
+                                    else f"UPI: <code>{html.escape(upi)}</code>") + why,
                             payouts.admin_kb(wid), wid=wid)
     except Exception:
         log.exception("after_withdraw failed for #%s", wid)
@@ -850,7 +876,7 @@ async def api_verify(request):
                           "ya tumhara account pehle kisi aur device se verify tha. Account block hai, Customer service se contact karo.")
         return err("🚫 Device verification fail. Account block hai, Customer service se contact karo.")
     await util.notify(bot, u["id"], "✅ <b>Device verify ho gaya!</b>\n\n" + util.WELCOME + "\n\n👇 Ab app kholo",
-                      reply_markup=M([[B("🚀 Open App", web_app=WebAppInfo(url=f"{config.BASE_URL}/app"))]]))
+                      reply_markup=M([[B(i18n.tr("🚀 Open App"), web_app=WebAppInfo(url=f"{config.BASE_URL}/app"))]]))
     return ok(msg="Device verified! Bot par wapas jao aur Open App dabao.")
 
 
@@ -913,8 +939,9 @@ async def task_limit_err(u):
     if pl["level"] == 0:
         return "Pehle Premium lo."
     if pl["tasks"] is not None and await db.created_today(u["id"]) >= pl["tasks"]:
-        up = " Level upgrade karo ya" if pl["level"] < max(config.PLANS) else ""
-        return f"Aaj ki task limit ({pl['tasks']}) poori ho gayi.{up} kal dobara banao."
+        if pl["level"] < max(config.PLANS):
+            return f"Aaj ki task limit ({pl['tasks']}) poori ho gayi. Level upgrade karo ya kal dobara banao."
+        return f"Aaj ki task limit ({pl['tasks']}) poori ho gayi. Kal dobara banao."
     return None
 
 
@@ -1088,11 +1115,13 @@ async def api_bw_submit(request):
            f"Worker: {esc(name)} (<code>{uid}</code>)\nRefer link: {esc(ref)}\nReward: {b['reward']} coins\n\n"
            "Screenshot dekho. Sahi ho to <b>Done</b>, nahi to Reject." + ("\n🔐 Is bot me device verification hai: upar wali alag photo me uska result dekho." if photo2 else ""))
     kb = M([[B("✅ Done", callback_data=f"bws_ok:{sid}"), B("❌ Reject", callback_data=f"bws_no:{sid}")]])
+    ol = await i18n.lang_of(b["owner_id"])  # poster ki bhasha me caption
+    cap = i18n.tr(cap, ol)
     try:
         f2 = None
         if photo2:  # pehle device-verification wali photo, phir buttons wali main photo
             m2 = await bot.send_photo(b["owner_id"], photo2, parse_mode="HTML",
-                                      caption=f"🔐 <b>Device verification screenshot</b> (submission #{sid}). Result success hai ya failed, dekho.")
+                                      caption=i18n.tr(f"🔐 <b>Device verification screenshot</b> (submission #{sid}). Result success hai ya failed, dekho.", ol))
             f2 = m2.photo[-1].file_id
         m = await bot.send_photo(b["owner_id"], photo, caption=cap, parse_mode="HTML", reply_markup=kb)
         await db.bw_set_photo(sid, m.photo[-1].file_id, f2)

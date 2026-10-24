@@ -2,9 +2,11 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
+from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as M
 from telegram.error import RetryAfter, TelegramError
 
 import config
+import i18n
 
 log = logging.getLogger("util")
 WELCOME = (
@@ -15,6 +17,15 @@ WELCOME = (
     "📺 Watch Ads &amp; Earn Rewards\n"
     "👥 Get Subscribers &amp; Referrals\n\n"
     "🚀 <b>𝐒𝐭𝐚𝐫𝐭 𝐄𝐚𝐫𝐧𝐢𝐧𝐠 𝐓𝐨𝐝𝐚𝐲!</b> 💎")
+LANG_PROMPT = "🌐 <b>Choose your language</b>\nअपनी भाषा चुनें\nApni bhasha chuno"
+LANG_NAMES = {"hn": "Hinglish", "hi": "हिन्दी", "en": "English"}
+
+
+def lang_kb(prefix="lang"):
+    return M([[B("🇮🇳 Hinglish", callback_data=f"{prefix}:hn")], [B("🇮🇳 हिन्दी", callback_data=f"{prefix}:hi")],
+              [B("🇬🇧 English", callback_data=f"{prefix}:en")]])
+
+
 main_bot = None  # main bot object (backup bot ke callbacks me bhi user ko main bot se hi DM jaata hai)
 
 
@@ -87,6 +98,10 @@ async def member_status(bot, chat_id, uid):
 
 async def notify(bot, uid, text, **kw):
     """Message bhejo. Telegram flood limit aaye to ek baar ruk ke retry."""
+    try:
+        text = await i18n.tr_for(uid, text)  # user ki chuni hui bhasha
+    except Exception:
+        pass
     for _ in range(2):
         try:
             await bot.send_message(uid, text, parse_mode="HTML", **kw)

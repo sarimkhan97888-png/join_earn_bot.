@@ -16,6 +16,7 @@ import botwork
 import config
 import db
 import extras
+import i18n
 import payments
 import payouts
 import util
@@ -23,8 +24,8 @@ import util
 log = logging.getLogger("bot")
 
 
-def app_kb():
-    return M([[B("🚀 Open App", web_app=WebAppInfo(url=f"{config.BASE_URL}/app"))]])
+def app_kb(lang="en"):
+    return M([[B(i18n.tr("🚀 Open App", lang), web_app=WebAppInfo(url=f"{config.BASE_URL}/app"))]])
 
 
 async def post_init(app):
@@ -68,29 +69,59 @@ async def start(update: Update, ctx):
             _last_start.pop(k, None)
     existed, left = await asyncio.gather(db.get_user(tu.id), db.left_chats(tu.id))
     u = await db.ensure_user(tu)  # (existed pehle: refer sirf bilkul naye user ke liye)
+    L = u["lang"] or "en"
+    i18n.remember(tu.id, u["lang"])
+    T = lambda s: i18n.tr(s, L)
     if u["banned"]:
-        return await update.message.reply_text("🚫 Tumhara account banned hai.")
+        return await update.message.reply_text(T("🚫 Tumhara account banned hai."))
     if not existed and ctx.args and re.fullmatch(r"r\d{1,15}", ctx.args[0]):
         await db.ref_add(tu.id, int(ctx.args[0][1:]))  # sirf bilkul naya user refer ban sakta hai
     await intro_anim(update)  # har /start par chhota "PROFITIX" animation (naya ho ya purana)
     app = html.escape(config.APP_NAME)
     if left:
-        rows = [[B(f"➕ Join {r['title'][:28]}", url=r["link"])] for r in left if r["link"]]
-        rows.append([B("🚀 Open App", web_app=WebAppInfo(url=f"{config.BASE_URL}/app"))])
+        rows = [[B(T(f"➕ Join {r['title'][:28]}"), url=r["link"])] for r in left if r["link"]]
+        rows.append([B(T("🚀 Open App"), web_app=WebAppInfo(url=f"{config.BASE_URL}/app"))])
         names = "\n".join("• " + html.escape(r["title"]) for r in left)
         return await update.message.reply_text(
-            f"🚫 <b>App block hai</b>\nTumne ye channel leave kar diya hai:\n{names}\n\n"
-            f"Dobara join karo, phir app me <b>Re-check</b> dabao.", parse_mode="HTML", reply_markup=M(rows))
+            T(f"🚫 <b>App block hai</b>\nTumne ye channel leave kar diya hai:\n{names}\n\n"
+              f"Dobara join karo, phir app me <b>Re-check</b> dabao."), parse_mode="HTML", reply_markup=M(rows))
     if not u["device_ok"]:
         await update.message.reply_text(
-            f"👋 <b>{app} me welcome!</b>\n\n🔐 Shuru karne se pehle <b>Device Verification</b> zaroori hai "
-            f"(ek device = ek account).\nNeeche button dabao, verification page khulega. Pass hone par yahin bot par wapas aa jaoge, phir app khulega.",
-            parse_mode="HTML", reply_markup=M([[B("🔐 Verify Device", web_app=WebAppInfo(url=f"{config.BASE_URL}/app?v=1"))]]))
+            T(f"👋 <b>{app} me welcome!</b>\n\n🔐 Shuru karne se pehle <b>Device Verification</b> zaroori hai "
+              f"(ek device = ek account).\nNeeche button dabao, verification page khulega. Pass hone par yahin bot par wapas aa jaoge, phir app khulega."),
+            parse_mode="HTML", reply_markup=M([[B(T("🔐 Verify Device"), web_app=WebAppInfo(url=f"{config.BASE_URL}/app?v=1"))]]))
         return
-    kb = app_kb()
+    kb = app_kb(L)
     if tu.id in config.ADMIN_IDS:
         kb = M(kb.inline_keyboard + adminops.panel_kb().inline_keyboard)
-    await update.message.reply_text(WELCOME, parse_mode="HTML", reply_markup=kb)
+    await update.message.reply_text(T(WELCOME), parse_mode="HTML", reply_markup=kb)
+
+
+async def lang_cmd(update: Update, ctx):
+    """/language : bhasha badlo."""
+    await update.message.reply_text(util.LANG_PROMPT, parse_mode="HTML", reply_markup=util.lang_kb("langc"))
+
+
+async def on_lang(update: Update, ctx):
+    """lang:xx = verify ke baad pehli baar (phir welcome bhejo), langc:xx = baad me badalna."""
+    q = update.callback_query
+    kind, _, l = q.data.partition(":")
+    if l not in i18n.LANGS:
+        return await q.answer()
+    uid = q.from_user.id
+    await db.set_lang(uid, l)
+    i18n.remember(uid, l)
+    try:
+        await q.answer()
+        await q.edit_message_text(f"✅ {util.LANG_NAMES[l]}")
+    except TelegramError:
+        pass
+    if kind == "lang":
+        u = await db.get_user(uid)
+        kb = app_kb(l)
+        if uid in config.ADMIN_IDS:
+            kb = M(kb.inline_keyboard + adminops.panel_kb().inline_keyboard)
+        await util.notify(ctx.bot, uid, WELCOME + "\n\n👇 Ab app kholo", reply_markup=kb)
 
 
 async def admin_cmd(update: Update, ctx):
@@ -465,6 +496,8 @@ def register(app):
     app.add_handler(CommandHandler("start", start, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("gift", gift_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("admin", admin_cmd, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("language", lang_cmd, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CallbackQueryHandler(on_lang, pattern=r"^langc?:"))
     app.add_handler(CommandHandler(["bypass", "unbypass"], bypass_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("allowdev", allowdev_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("ping", ping_cmd, filters=filters.ChatType.PRIVATE))

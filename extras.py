@@ -13,6 +13,7 @@ from telegram import Bot
 from telegram.error import Forbidden, RetryAfter, TelegramError
 
 import config
+import i18n
 import db
 import util
 
@@ -38,7 +39,7 @@ async def job_bcast(ctx):
             return
         for r in users:
             try:
-                await ctx.bot.send_message(r["id"], b["text"], parse_mode="HTML", disable_notification=False)
+                await ctx.bot.send_message(r["id"], i18n.tr(b["text"], r["lang"] or "en"), parse_mode="HTML", disable_notification=False)
                 sent += 1
             except Forbidden:
                 await db.set_notify(r["id"], False)  # bot block kiya: dobara try nahi
