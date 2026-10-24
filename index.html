@@ -82,7 +82,7 @@ nav button.on{color:var(--acc)}
 nav svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 .dot{position:absolute;top:2px;right:28%;width:9px;height:9px;border-radius:50%;background:var(--bad)}
 /* sheet + modal */
-#sheet{position:fixed;inset:0;z-index:40;display:none}
+#sheet{position:fixed;inset:0;z-index:55;display:none}
 #sheet.open{display:block}
 #sheet .bd{position:absolute;inset:0;background:rgba(0,0,0,.55)}
 #sheet .pn{position:absolute;left:0;right:0;bottom:0;max-height:90vh;overflow:auto;background:var(--bg);border-radius:24px 24px 0 0;
@@ -201,6 +201,18 @@ nav svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:1.8;st
 #recBar.on{display:flex}
 .rdot{width:12px;height:12px;border-radius:50%;background:#ff3b4e;animation:rblink 1s ease-in-out infinite;flex:none}
 @keyframes rblink{50%{opacity:.25}}
+#adm{position:fixed;inset:0;z-index:35;background:var(--bg);display:none;overflow:auto;-webkit-overflow-scrolling:touch}
+#adm.open{display:block}
+.adm-in{max-width:560px;margin:0 auto;padding:0 16px calc(30px + env(safe-area-inset-bottom))}
+.adm-t{display:flex;gap:6px;overflow-x:auto;padding:4px 0 12px;position:sticky;top:48px;z-index:2;background:var(--bg);scrollbar-width:none}
+.adm-t::-webkit-scrollbar{display:none}
+.adm-t button{flex:none;border:0;background:var(--card2);color:var(--sub);font-weight:700;font-size:13px;padding:9px 13px;border-radius:99px;white-space:nowrap}
+.adm-t button.on{background:var(--acc);color:#fff}
+.adm-t button i{font-style:normal;background:var(--bad);color:#fff;border-radius:99px;padding:1px 6px;font-size:11px;margin-left:4px}
+.adm-g{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+.adm-g .mini{padding:14px 8px}.adm-g .mini b{font-size:19px}
+.adm-r{display:flex;gap:8px;margin-top:10px}.adm-r .btn{flex:1;padding:10px;font-size:13px}
+.adm-s{display:flex;gap:8px}.adm-s input{margin:0}
 #recT{font-variant-numeric:tabular-nums;min-width:40px}
 </style>
 </head>
@@ -414,7 +426,7 @@ function deviceWarn() {
 function rHome() {
   const m = S.me;
   const banner = m.premium
-    ? `<div class="banner on"><span style="font-size:26px">${m.admin ? '👑' : '💎'}</span><div><b>${m.admin ? 'Admin · unlimited' : 'Premium Level ' + m.real_level}</b><small>${m.admin ? 'Tasks free, coins nahi katenge' : 'till ' + dateOnly(m.premium_until) + ' · tap = upgrade'}</small></div><button class="go" data-act="studio">➕ Add Task</button></div>`
+    ? `<div class="banner on" data-act="prem"><span style="font-size:26px">${m.admin ? '👑' : '💎'}</span><div><b>${m.admin ? 'Admin · unlimited' : 'Premium Level ' + m.real_level}</b><small>${m.admin ? 'Tasks free, coins nahi katenge' : 'till ' + dateOnly(m.premium_until) + ' · tap = upgrade'}</small></div><span class="go">Plans</span></div>`
     : `<div class="banner" data-act="prem"><span style="font-size:26px">💎</span><div><b>Get Premium · ₹${S.cfg.plans[0].price} se shuru</b><small>Task create, faster withdraw, 0% fee</small></div><span class="go">View</span></div>`;
   const hist = S.hist.length ? S.hist.map(h => {
     const k = KIND[h.kind] || ['•', h.kind]; const a = Number(h.amount);
@@ -431,6 +443,9 @@ function rHome() {
 function rTasks() {
   const T = S.tasks || { channels: [], botworks: [], mine: [] };
   let h = '<h2>Tasks</h2>' + deviceWarn();
+  h += S.me.premium
+    ? `<div class="card" data-act="studio" style="cursor:pointer"><div class="row"><div class="ico">➕</div><div class="sp"><b>Add Task / My posts</b><span class="sub">Apna channel ya bot promote karo</span></div><span class="chip g">Open</span></div></div>`
+    : `<div class="card" data-act="lock" data-f="Task create karna" data-l="1" style="cursor:pointer;opacity:.85"><div class="row"><div class="ico">🔒</div><div class="sp"><b>Add Task</b><span class="sub">Premium me khulta hai · tap karo</span></div><span class="chip y">Locked</span></div></div>`;
   if (S.blocked.length) {
     h += `<div class="card badbox"><b>🚫 Tasks blocked</b><p style="margin:4px 0 10px">Tumne channel leave kiya. In sabko dobara join karo:</p>${S.blocked.map(b => `<div class="item"><div class="ico">📣</div><div class="sp"><b>${esc(b.title)}</b></div><button class="btn sm ghost" data-act="open" data-url="${esc(b.link)}">Join</button></div>`).join('')}<button class="btn" style="margin-top:10px" data-act="rejoin">Re-check</button></div>`;
   }
@@ -466,6 +481,11 @@ function rWallet() {
   <div class="row" style="margin-bottom:14px"><button class="btn" data-act="deposit">⬇️ Deposit</button><button class="btn ghost" data-act="withdraw">⬆️ Withdraw</button></div>
   ${deviceWarn()}
   <h3 style="margin:8px 0">History</h3><div class="card" style="padding:4px 16px">${rows.length ? rows.map(r => { const s = st[r.st] || ['', r.st]; return `<div class="item"><div class="ico">${r.ico}</div><div class="sp"><b>${r.t}</b><span class="sub">${esc(r.s)} · ${when(r.at)}</span></div><span class="chip ${s[0]}">${s[1]}</span></div>`; }).join('') : '<div class="empty"><i>🧾</i>Koi transaction nahi</div>'}</div>`;
+}
+function lockSheet(feat, lvl) {
+  const p = S.cfg.plans.find(x => x.level === (+lvl || 1)) || S.cfg.plans[0];
+  openSheet(`<div style="text-align:center"><div style="font-size:46px">🔒</div><h3>${esc(feat)} locked hai</h3><p>Ye option <b>Premium Level ${p.level}</b> (₹${p.price}, ${p.days} din) se khulta hai. Upgrade karo, tab ye option khul jayega.</p></div>
+  <button class="btn" data-act="lockup">💎 Premium dekho</button><button class="btn ghost" style="margin-top:8px" data-act="closesheet">Baad me</button>`);
 }
 function depositSheet() {
   const c = S.cfg;
@@ -535,10 +555,11 @@ function rProfile() {
   <div class="card"><div class="kv"><span>UPI ID</span><b>${esc(m.upi || '—')}</b></div><div class="kv"><span>Telegram ID</span><b>${m.id}</b></div>${m.premium ? `<div class="kv"><span>Premium till</span><b>${dateOnly(m.premium_until)}</b></div>` : ''}</div>
   <div class="card" style="padding:4px 16px">
    <div class="item" data-act="upi" style="cursor:pointer"><div class="ico">⚙️</div><div class="sp"><b>Settings</b><span class="sub">UPI ID set / change</span></div>›</div>
-   <div class="item" data-act="prem" style="cursor:pointer"><div class="ico">💎</div><div class="sp"><b>Premium</b><span class="sub">${m.admin ? 'Admin: unlimited, free tasks' : m.premium ? 'Level ' + m.level + ' · plans, add task' : '3 levels: ₹' + S.cfg.plans.map(p => p.price).join(' / ₹')}</span></div>›</div>
+   <div class="item" data-act="prem" style="cursor:pointer"><div class="ico">💎</div><div class="sp"><b>Premium</b><span class="sub">${m.admin ? 'Admin: unlimited, free tasks' : m.premium ? 'Level ' + m.level + ' · plans, upgrade' : '3 levels: ₹' + S.cfg.plans.map(p => p.price).join(' / ₹')}</span></div>›</div>
    <div class="item" data-act="sound" style="cursor:pointer"><div class="ico">${Snd.isOn() ? '🔊' : '🔇'}</div><div class="sp"><b>Sound</b><span class="sub">${Snd.isOn() ? 'On' : 'Off'} · tap to change</span></div>›</div>
    <div class="item" data-act="notify" style="cursor:pointer"><div class="ico">${m.notify ? '🔔' : '🔕'}</div><div class="sp"><b>Task notification</b><span class="sub">${m.notify ? 'On' : 'Off'} · naya task aane par DM · tap to change</span></div>›</div>
    <div class="item" data-act="refer" style="cursor:pointer"><div class="ico">🤝</div><div class="sp"><b>Refer & Earn</b><span class="sub">Dost ke ${S.cfg.min_ref_tasks} task complete = +${S.cfg.refer_reward} coins</span></div>›</div>
+   ${m.admin ? '<div class="item" data-act="admopen" style="cursor:pointer"><div class="ico">🛠</div><div class="sp"><b>Admin Panel</b><span class="sub">Users, withdraws, deposits, tasks, stats</span></div>›</div>' : ''}
    ${m.admin ? '<div class="item" data-act="inbox" style="cursor:pointer"><div class="ico">📥</div><div class="sp"><b>Support inbox</b><span class="sub">Users ke messages, yahin reply</span></div>›</div>' : ''}
    <div class="item" data-act="gift" style="cursor:pointer"><div class="ico">🎁</div><div class="sp"><b>Gift code</b><span class="sub">Code redeem karke coins pao</span></div>›</div>
    <div class="item" data-act="rules" style="cursor:pointer"><div class="ico">📜</div><div class="sp"><b>Rules</b><span class="sub">Earning & withdraw rules</span></div>›</div>
@@ -587,7 +608,7 @@ function premPage() {
       <div class="pm-btns"><button data-act="pbuy" data-l="${p.level}" data-m="qr">${same ? '➕ Extend' : 'Pay'} ₹${p.price} (UPI)</button><button class="alt" data-act="pbuy" data-l="${p.level}" data-m="stars">⭐ ${p.price} Stars</button></div></div>`;
   }).join('');
   el.innerHTML = `<div class="pm-in"><div class="pm-h"><button data-act="pclose" aria-label="Back">‹</button><b>💎 Premium</b></div>
-    <div class="pm-st">${st}</div>${m.premium ? '<button class="btn" data-act="studio2" style="margin-bottom:14px">➕ Add Task / My posts</button>' : ''}
+    <div class="pm-st">${st}</div>
     ${cards}
     <div class="pm-free">Free user: roz ${c.free_wd} withdraw · withdraw ${c.free_wd_hours}h me · fee ${c.plans.length ? c.plans[0].fee : 10}% · task create nahi · support me voice nahi</div></div>`;
   el.classList.add('open'); document.body.style.overflow = 'hidden';
@@ -740,7 +761,7 @@ function recUi(on) { $('#recBar').classList.toggle('on', on); $('#chatFoot').sty
 function recCleanup() { clearInterval(Rec.tm); try { Rec.stream && Rec.stream.getTracks().forEach(t => t.stop()); } catch (e) {} Rec.mr = null; Rec.stream = null; recUi(false); }
 async function recStart() {
   if (Rec.mr) return;
-  if (S.chat && S.chat.mode !== 'admin' && !S.me.premium) return popup('error', '🎤 Premium feature', 'Voice message sirf Premium users bhej sakte hain. Text ya photo bhej sakte ho.');
+  if (S.chat && S.chat.mode !== 'admin' && !S.me.premium) return lockSheet('Voice message', 1);
   if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder)) return popup('error', 'Voice', 'Is phone/app me voice record support nahi hai.');
   try { Rec.stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
   catch (e) { return popup('error', 'Mic permission', 'Microphone ki permission nahi mili. Phone settings me Telegram ko mic allow karo, phir dobara try karo.'); }
@@ -801,6 +822,7 @@ function showChat(mode, uid, fromInbox) {
   recCancel(); S.chat = { mode, uid: uid || 0, fromInbox: !!fromInbox }; S.chatSig = ''; chatPrevClear();
   $('#chat').classList.add('open'); document.body.style.overflow = 'hidden';
   $('#chatFoot').style.display = mode === 'inbox' ? 'none' : '';
+  $('#micBtn').textContent = (mode !== 'admin' && !S.me.premium) ? '🔒' : '🎤';
   $('#chTitle').textContent = mode === 'inbox' ? 'Support inbox' : mode === 'admin' ? 'Chat' : 'Customer service';
   $('#chSub').textContent = mode === 'user' ? 'Apni problem likho, hum reply karenge' : mode === 'inbox' ? 'Users ke messages' : '';
   $('#chatBody').innerHTML = '<div class="empty"><span class="spin"></span></div>';
@@ -860,6 +882,7 @@ const H = {
   async report(d) { const j = await act('/api/bw/report', { sid: +d.sid }); if (j.ok) { await popup('ok', 'Reported', j.msg); refresh(); } },
   openpay: () => openLink(S.cfg && S.cfg.payout_link),
   deposit: depositSheet, withdraw: withdrawSheet,
+  lock: d => lockSheet(d.f, d.l), lockup: () => { closeSheet(); if ($('#chat').classList.contains('open')) chatBack(); premPage(); },
   qa: d => { $('#dc').value = d.v; onInp('dep'); },
   wmax: () => { $('#wc').value = Math.floor(S.me.balance * 100 / (100 + S.cfg.withdraw_tax) / 100) * 100; onInp('wd'); },
   cpy: async d => { const ok = await copyText(d.t); popup(ok ? 'ok' : 'info', ok ? 'Copied' : 'Copy nahi hua', ok ? d.t : 'Dabake rakho aur copy karo.'); },
@@ -996,12 +1019,134 @@ function rBlocked() {
   <p style="margin-top:14px"><span class="link" data-act="support">🎧 Customer service</span></p></div>`;
 }
 
+/* ---------- ADMIN PANEL ---------- */
+const AD = { tab: 'dash', q: '' };
+const ADT = [['dash', '📊 Dashboard'], ['users', '👥 Users'], ['wd', '💸 Withdraws'], ['dep', '💰 Deposits'], ['tasks', '🎯 Tasks'], ['sup', '🎧 Support']];
+const askYes = m => new Promise(r => (tg && tg.showConfirm) ? tg.showConfirm(m, r) : r(confirm(m)));
+const inrf = v => '₹' + Number(v || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+function admOpen(tab) {
+  if (!S.me || !S.me.admin) return;
+  let el = $('#adm'); if (!el) { el = document.createElement('div'); el.id = 'adm'; document.body.appendChild(el); }
+  AD.tab = tab || AD.tab || 'dash'; el.classList.add('open'); document.body.style.overflow = 'hidden'; admRender();
+}
+function admClose() { const el = $('#adm'); if (el) el.classList.remove('open'); document.body.style.overflow = ''; }
+async function admRender() {
+  const el = $('#adm'); if (!el) return;
+  const keep = el.scrollTop;
+  if (!$('#admB') || el.dataset.tab !== AD.tab) {
+    el.dataset.tab = AD.tab;
+    el.innerHTML = `<div class="adm-in"><div class="pm-h"><button data-act="admclose" aria-label="Back">‹</button><b>🛠 Admin Panel</b></div>
+    <div class="adm-t" id="admT"></div><div id="admB"><div class="empty"><span class="spin"></span></div></div></div>`;
+  }
+  let bd = '';
+  try { bd = await ({ dash: admDash, users: admUsers, wd: admWd, dep: admDep, tasks: admTasks, sup: admSup })[AD.tab](); }
+  catch (e) { bd = '<div class="card empty"><i>⚠️</i>Load nahi hua. Dobara try karo.</div>'; }
+  if (!$('#admB')) return;
+  $('#admB').innerHTML = bd; el.scrollTop = keep;
+}
+function admTabs(c) {
+  const badge = { wd: c.wd_pending, dep: (c.claims || 0) + (c.unmatched || 0) };
+  $('#admT').innerHTML = ADT.map(([k, l]) => `<button class="${AD.tab === k ? 'on' : ''}" data-act="admtab" data-t="${k}">${l}${badge[k] ? `<i>${badge[k]}</i>` : ''}</button>`).join('');
+}
+async function admDash() {
+  const j = await api('/api/admin/stats'); if (!j.ok) return `<div class="card empty">${esc(j.msg)}</div>`;
+  const c = j.stats; admTabs(c);
+  const box = (b, l) => `<div class="mini"><b>${b}</b><span>${l}</span></div>`;
+  return `<div class="adm-g">${box(fmt(c.users), 'Total users')}${box('+' + fmt(c.new24), 'Naye (24h)')}${box(fmt(c.verified), 'Device verified')}${box(fmt(c.prem), 'Premium active')}${box(fmt(c.banned), 'Banned')}${box(inrf(c.paid24), 'Deposits (24h)')}${box(inrf(c.wd_paid24), 'Paid out (24h)')}${box(fmt(c.tasks) + ' / ' + fmt(c.bws), 'Active tasks / bot work')}</div>
+  <div class="card" style="margin-top:12px"><div class="kv"><span>Users ka total balance</span><b>${fmt(c.bal_sum)}</b></div><div class="kv"><span>Total ad balance</span><b>${fmt(c.ad_sum)}</b></div>
+  <div class="kv"><span>Pending withdraw</span><b>${c.wd_pending} (${inrf(c.wd_pending_inr)})</b></div><div class="kv"><span>Deposit claims</span><b>${c.claims}</b></div><div class="kv"><span>Unmatched payments</span><b>${c.unmatched}</b></div></div>`;
+}
+const ULV = u => u.level ? `<span class="chip g">💎 L${u.level}</span>` : '<span class="chip">Free</span>';
+async function admUsers() {
+  const j = await api('/api/admin/users?q=' + encodeURIComponent(AD.q)); admTabs({});
+  const list = j.ok ? (j.users.length ? j.users.map(u => `<div class="item" data-act="admuser" data-id="${u.id}" style="cursor:pointer"><div class="ico">${u.banned ? '🚫' : '👤'}</div><div class="sp"><b>${esc(u.name || u.username || u.id)}</b><span class="sub">${u.username ? '@' + esc(u.username) + ' · ' : ''}${u.id} · ${fmt(u.balance)} coins</span></div>${ULV(u)}</div>`).join('') : '<div class="empty"><i>🔎</i>Koi user nahi mila</div>') : esc(j.msg);
+  return `<div class="adm-s"><input id="admQ" placeholder="ID / @username / naam / UPI" value="${esc(AD.q)}"><button class="btn sm" data-act="admsearch">Search</button></div><div class="card" style="padding:4px 16px;margin-top:8px">${list}</div>`;
+}
+async function admUser(id) {
+  const j = await act('/api/admin/user?id=' + id); if (!j.ok) return;
+  const u = j.user, a = (t, a2, cls = 'ghost') => `<button class="btn ${cls}" data-act="admua" data-id="${u.id}" data-a="${a2}">${t}</button>`;
+  openSheet(`<h3>${esc(u.name || u.username || u.id)} ${ULV(u)}</h3>
+  <div class="card"><div class="kv"><span>ID</span><b>${u.id}</b></div><div class="kv"><span>Username</span><b>${u.username ? '@' + esc(u.username) : '—'}</b></div>
+  <div class="kv"><span>Balance / Hold</span><b>${fmt(u.balance)} / ${fmt(u.hold)}</b></div><div class="kv"><span>Ad balance</span><b>${fmt(u.ad)}</b></div>
+  <div class="kv"><span>Total earned</span><b>${fmt(u.earned)}</b></div><div class="kv"><span>Debt</span><b>${fmt(u.debt)}</b></div>
+  <div class="kv"><span>UPI</span><b>${esc(u.upi || '—')}</b></div><div class="kv"><span>Tasks done / Refers</span><b>${u.tasks_done} / ${u.refs}</b></div>
+  <div class="kv"><span>Device</span><b>${u.verified ? '✅ verified' : '❌ no'}${u.suspect ? ' · ⚠️ suspect' : ''}</b></div>${u.until ? `<div class="kv"><span>Premium till</span><b>${dateOnly(u.until)}</b></div>` : ''}
+  <div class="kv"><span>Joined</span><b>${when(u.at)}</b></div>${u.banned ? '<div class="kv"><span>Status</span><b style="color:var(--bad)">🚫 Banned</b></div>' : ''}</div>
+  ${u.wds.length ? `<div class="sub" style="margin:8px 0 2px">Last withdraws</div>${u.wds.map(w => `<div class="kv"><span>#${w.id} · ${inrf(w.inr)}</span><b>${esc(w.status)}</b></div>`).join('')}` : ''}
+  ${u.ledger.length ? `<div class="sub" style="margin:8px 0 2px">Last activity</div>${u.ledger.map(l => `<div class="kv"><span>${esc((KIND[l.kind] || ['', l.kind])[1])}</span><b>${l.amount >= 0 ? '+' : ''}${fmt(l.amount)}</b></div>`).join('')}` : ''}
+  <div class="adm-r"><button class="btn" data-act="admchat" data-uid="${u.id}">💬 Message</button>${a(u.banned ? '✅ Unban' : '🚫 Ban', u.banned ? 'unban' : 'ban', u.banned ? 'ok' : 'bad')}</div>
+  <div class="adm-r">${a('♻️ Reset device', 'resetdev')}${a('➕ Balance', 'addbal')}${a('➕ Ad balance', 'addad')}</div>`);
+}
+async function admWd() {
+  const j = await api('/api/admin/withdraws'); if (!j.ok) return esc(j.msg);
+  admTabs({ wd_pending: j.pending.length });
+  const row = (w, btns) => `<div class="card"><div class="row"><div class="sp"><b>#${w.id} · ${inrf(w.inr)}</b><span class="sub">User ${w.user} · L${w.level} · ${when(w.at)}<br>${esc(w.upi)}</span></div><span class="chip ${w.status === 'paid' ? 'g' : w.status === 'pending' || w.status === 'sending' ? 'y' : 'r'}">${esc(w.status)}</span></div>${btns}</div>`;
+  const b = w => `<div class="adm-r"><button class="btn ok" data-act="admwd" data-id="${w.id}" data-a="ok">✅ Approve</button><button class="btn bad" data-act="admwd" data-id="${w.id}" data-a="no">❌ Reject</button></div>`;
+  const f = w => `<div class="adm-r"><button class="btn ok" data-act="admwd" data-id="${w.id}" data-a="paid">✅ Mark paid</button><button class="btn bad" data-act="admwd" data-id="${w.id}" data-a="refund">↩️ Refund</button></div>`;
+  return `<h3 style="margin:4px 0 8px">Pending (${j.pending.length})</h3>${j.pending.length ? j.pending.map(w => row(w, b(w))).join('') : '<div class="card empty"><i>✅</i>Koi pending withdraw nahi</div>'}
+  <h3 style="margin:14px 0 8px">Recent</h3>${j.recent.map(w => row(w, w.status === 'sending' ? f(w) : '')).join('') || '<div class="card empty">Kuch nahi</div>'}`;
+}
+async function admDep() {
+  const j = await api('/api/admin/deposits'); if (!j.ok) return esc(j.msg);
+  admTabs({ claims: j.claims.length, unmatched: j.unmatched.length });
+  return `<h3 style="margin:4px 0 8px">Claims (${j.claims.length})</h3>${j.claims.map(c => `<div class="card"><b>${inrf(c.inr)} · User ${c.user}</b><div class="sub">Txn <code>${esc(c.txn)}</code> · ${when(c.at)}</div>
+  <div class="adm-r"><button class="btn ok" data-act="admdep" data-k="claim_ok" data-id="${c.id}">✅ Credit</button><button class="btn bad" data-act="admdep" data-k="claim_no" data-id="${c.id}">❌ Reject</button></div></div>`).join('') || '<div class="card empty"><i>✅</i>Koi claim pending nahi</div>'}
+  <h3 style="margin:14px 0 8px">Unmatched payments (${j.unmatched.length})</h3>${j.unmatched.map(p => `<div class="card"><b>${inrf(p.inr)}</b> <span class="sub">from ${esc(p.sender)}</span><div class="sub">Txn <code>${esc(p.txn)}</code> · ${when(p.at)}</div>
+  <div class="adm-r"><button class="btn" data-act="admassign" data-txn="${esc(p.txn)}">👤 User ko do</button></div></div>`).join('') || '<div class="card empty">Koi unmatched payment nahi</div>'}`;
+}
+async function admTasks() {
+  const j = await api('/api/admin/tasks'); if (!j.ok) return esc(j.msg); admTabs({});
+  const row = (t, k, sub) => `<div class="card"><div class="row"><div class="sp"><b>${esc(t.title)}</b><span class="sub">#${t.id} · Owner ${t.name ? '@' + esc(t.name) + ' ' : ''}${t.owner}<br>${sub}</span></div><button class="btn sm bad" data-act="admtc" data-k="${k}" data-id="${t.id}">Cancel</button></div></div>`;
+  return `<h3 style="margin:4px 0 8px">Channel tasks (${j.channels.length})</h3>${j.channels.map(t => row(t, 'ch', `${t.done} / ${t.target} joined`)).join('') || '<div class="card empty">Koi active task nahi</div>'}
+  <h3 style="margin:14px 0 8px">Bot work (${j.botworks.length})</h3>${j.botworks.map(t => row(t, 'bw', `${t.target} workers · ${t.reward} coins each`)).join('') || '<div class="card empty">Koi active bot work nahi</div>'}`;
+}
+async function admSup() { admTabs({}); showChat('inbox'); AD.tab = 'dash'; return '<div class="card empty"><i>🎧</i>Support inbox khul gaya. Wapas aane par Dashboard.</div>'; }
+function admBalSheet(id, ad) {
+  openSheet(`<h3>${ad ? 'Ad balance' : 'Balance'} me coins add</h3><p>User ${id}. Sirf add hota hai.</p><label>Coins</label><input id="admAmt" type="number" inputmode="numeric" placeholder="500"><button class="btn" data-act="admbalgo" data-id="${id}" data-a="${ad ? 'addad' : 'addbal'}">Add karo</button>`);
+}
+const ADMA = {
+  admopen: () => admOpen(),
+  admclose: admClose,
+  admtab: d => { AD.tab = d.t; admRender(); },
+  admsearch: () => { AD.q = $('#admQ').value.trim(); admRender(); },
+  admuser: d => admUser(+d.id),
+  async admua(d) {
+    const id = +d.id;
+    if (d.a === 'addbal' || d.a === 'addad') return admBalSheet(id, d.a === 'addad');
+    if (!await askYes({ ban: 'User ko ban karna hai?', unban: 'Unban karna hai?', resetdev: 'Device reset karna hai?' }[d.a])) return;
+    const j = await act('/api/admin/user/act', { id, act: d.a }); if (j.ok) { closeSheet(); await popup('ok', 'Done', j.msg); admRender(); }
+  },
+  async admbalgo(d) {
+    const j = await act('/api/admin/user/act', { id: +d.id, act: d.a, amount: +$('#admAmt').value }); if (j.ok) { closeSheet(); await popup('ok', 'Done', j.msg); admRender(); }
+  },
+  async admwd(d) {
+    if (!await askYes({ ok: 'Approve? (pehle UPI par paise bhej do)', no: 'Reject karke coins refund karna hai?', paid: 'Paid mark karna hai?', refund: 'User ko refund karna hai?' }[d.a])) return;
+    const j = await act('/api/admin/withdraw/act', { id: +d.id, act: d.a }); if (j.ok) { await popup('ok', 'Done', j.msg); admRender(); } else admRender();
+  },
+  async admdep(d) {
+    if (!await askYes(d.k === 'claim_ok' ? 'Fam app me payment dekh li? Credit karna hai?' : 'Claim reject karna hai?')) return;
+    const j = await act('/api/admin/deposit/act', { kind: d.k, id: +d.id }); if (j.ok) { await popup('ok', 'Done', j.msg); admRender(); } else admRender();
+  },
+  admassign: d => openSheet(`<h3>Payment kisko dena hai?</h3><p>Txn <code>${esc(d.txn)}</code></p><label>User ID</label><input id="admUid" type="number" inputmode="numeric" placeholder="123456789"><button class="btn" data-act="admassigngo" data-txn="${esc(d.txn)}">Assign karo</button>`),
+  async admassigngo(d) {
+    const j = await act('/api/admin/deposit/act', { kind: 'assign', txn: d.txn, uid: +$('#admUid').value }); if (j.ok) { closeSheet(); await popup('ok', 'Done', j.msg); admRender(); }
+  },
+  async admtc(d) {
+    if (!await askYes('Ye task cancel karke owner ko refund dena hai?')) return;
+    const j = await act('/api/admin/task/cancel', { kind: d.k, id: +d.id }); if (j.ok) { await popup('ok', 'Done', j.msg); admRender(); }
+  },
+};
+
+ADMA.admchat = d => { closeSheet(); showChat('admin', +d.uid, false); };
+Object.assign(H, ADMA);
+
 /* ---------- splash ---------- */
 const HINTS = ['Secure connection...', 'Wallet load ho raha hai...', 'Tasks ready ho rahe hain...'];
 let hi = 0; const hint = setInterval(() => { const e = $('#spHint'); if (e) e.textContent = HINTS[++hi % HINTS.length]; }, 750);
 function hideSplash() { clearInterval(hint); const s = $('#splash'); if (!s) return; s.classList.add('hide'); setTimeout(() => s.remove(), 700); }
 const t0 = Date.now();
-function deepLink() { // admin ko notification ke button se seedha us user ki chat
+function deepLink() { // admin ko notification ke button se seedha us user ki chat / admin panel
+  try { const q = new URLSearchParams(location.search); if ((q.has('admin') || (tg && tg.initDataUnsafe && tg.initDataUnsafe.start_param === 'admin')) && S.me && S.me.admin) { history.replaceState(null, '', location.pathname); admOpen('dash'); return; } } catch (e) {}
   try { const sp = +new URLSearchParams(location.search).get('support'); if (sp && S.me && S.me.admin) { history.replaceState(null, '', location.pathname); showChat('admin', sp, false); } } catch (e) {}
 }
 /* ---------- /verify page: bot ke "Verify Device" button se khulta hai ---------- */

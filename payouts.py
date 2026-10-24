@@ -9,6 +9,7 @@ from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as M
 import config
 import extras
 import db
+import adminops
 import util
 
 log = logging.getLogger("payouts")
@@ -32,7 +33,9 @@ async def alert(bot, text, kb=None, wid=None):
 
 
 def admin_kb(wid):
-    return M([[B("✅ Approve", callback_data=f"adm_ok:{wid}"), B("❌ Reject", callback_data=f"adm_no:{wid}")]])
+    rows = [[B("✅ Approve", callback_data=f"adm_ok:{wid}"), B("❌ Reject", callback_data=f"adm_no:{wid}")]]
+    pr = adminops.panel_row()
+    return M(rows + ([pr] if pr else []))
 
 
 def fix_kb(wid):

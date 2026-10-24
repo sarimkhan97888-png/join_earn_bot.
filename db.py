@@ -1366,3 +1366,78 @@ async def bc_progress(bid, last_uid, sent, done=False):
 
 async def set_notify(uid, on):
     await pool.execute("UPDATE users SET notify=$2 WHERE id=$1", uid, bool(on))
+
+
+# ---------- Admin Panel ----------
+async def adm_stats():
+    r = await pool.fetchrow(
+        """SELECT
+          (SELECT count(*) FROM users) AS users,
+          (SELECT count(*) FROM users WHERE created_at > now() - interval '24 hours') AS new24,
+          (SELECT count(*) FROM users WHERE device_ok) AS verified,
+          (SELECT count(*) FROM users WHERE banned) AS banned,
+          (SELECT count(*) FROM users WHERE premium_until > now()) AS prem,
+          (SELECT coalesce(sum(balance),0) FROM users) AS bal_sum,
+          (SELECT coalesce(sum(ad_balance),0) FROM users) AS ad_sum,
+          (SELECT count(*) FROM withdrawals WHERE status='pending') AS wd_pending,
+          (SELECT coalesce(sum(amount_inr),0) FROM withdrawals WHERE status='pending') AS wd_pending_inr,
+          (SELECT coalesce(sum(amount_inr),0) FROM withdrawals WHERE status='paid' AND created_at > now() - interval '24 hours') AS wd_paid24,
+          (SELECT count(*) FROM fam_claims WHERE status='pending') AS claims,
+          (SELECT count(*) FROM fam_payments WHERE status='unmatched') AS unmatched,
+          (SELECT coalesce(sum(amount_inr),0) FROM orders WHERE status='paid' AND created_at > now() - interval '24 hours') AS paid24,
+          (SELECT count(*) FROM tasks WHERE status='active') AS tasks,
+          (SELECT count(*) FROM botworks WHERE status='active') AS bws""")
+    return {k: (float(v) if k in ("wd_pending_inr", "wd_paid24", "paid24") else int(v)) for k, v in dict(r).items()}
+
+
+_ULIST = "id, username, first_name, balance, ad_balance, banned, premium_level, premium_until, device_ok, created_at"
+
+
+async def adm_users(q):
+    q = (q or "").strip().lstrip("@")[:40]
+    if not q:
+        return await pool.fetch(f"SELECT {_ULIST} FROM users ORDER BY created_at DESC LIMIT 20")
+    like = "%" + q.replace("\\", "").replace("%", "").replace("_", "") + "%"
+    return await pool.fetch(
+        f"""SELECT {_ULIST} FROM users WHERE id::text=$1 OR username ILIKE $2 OR first_name ILIKE $2 OR upi ILIKE $2
+            ORDER BY created_at DESC LIMIT 20""", q, like)
+
+
+async def adm_user(uid):
+    u = await pool.fetchrow(
+        f"""SELECT {_ULIST}, upi, gmail, hold, total_earned, debt, suspect, dev_bypass FROM users WHERE id=$1""", uid)
+    if not u:
+        return None
+    d = dict(u)
+    d["tasks_done"] = await tasks_done(uid)
+    d["refs"] = await pool.fetchval("SELECT count(*) FROM referrals WHERE referrer_id=$1", uid)
+    d["wds"] = [dict(r) for r in await pool.fetch(
+        "SELECT id, coins, amount_inr, status, created_at FROM withdrawals WHERE user_id=$1 ORDER BY id DESC LIMIT 5", uid)]
+    d["ledger"] = [dict(r) for r in await pool.fetch(
+        "SELECT kind, amount, created_at FROM ledger WHERE user_id=$1 ORDER BY id DESC LIMIT 8", uid)]
+    return d
+
+
+async def adm_wd_list():
+    pend = await wd_pending_list(50)
+    rec = await pool.fetch("SELECT * FROM withdrawals WHERE status<>'pending' ORDER BY id DESC LIMIT 20")
+    return pend, rec
+
+
+async def adm_tasks():
+    ch = await pool.fetch(
+        """SELECT t.id, t.owner_id, t.title, t.target, t.joined, u.username FROM tasks t LEFT JOIN users u ON u.id=t.owner_id
+           WHERE t.status='active' ORDER BY t.id DESC LIMIT 40""")
+    bw = await pool.fetch(
+        """SELECT b.id, b.owner_id, b.title, b.target, b.reward, u.username FROM botworks b LEFT JOIN users u ON u.id=b.owner_id
+           WHERE b.status='active' ORDER BY b.id DESC LIMIT 40""")
+    return ch, bw
+
+
+async def adm_cancel(kind, tid):
+    """Admin kisi bhi user ka task cancel kare: refund owner ko. Return refund ya None."""
+    if kind == "ch":
+        owner = await pool.fetchval("SELECT owner_id FROM tasks WHERE id=$1", tid)
+        return None if owner is None else await cancel_task(tid, owner)
+    owner = await pool.fetchval("SELECT owner_id FROM botworks WHERE id=$1", tid)
+    return None if owner is None else await bw_cancel(tid, owner)

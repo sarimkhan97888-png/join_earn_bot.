@@ -18,6 +18,7 @@ from aiohttp import web
 from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as M, LabeledPrice, WebAppInfo
 from telegram.error import TelegramError
 
+import adminops
 import botwork
 import config
 import db
@@ -503,6 +504,127 @@ async def _after_withdraw(bot, u, wid, coins, fee, net, upi, lvl=0):
                             payouts.admin_kb(wid), wid=wid)
     except Exception:
         log.exception("after_withdraw failed for #%s", wid)
+
+
+# ---------------- admin panel (sirf ADMIN_IDS) ----------------
+def adm_only(request):
+    return request["u"]["id"] in config.ADMIN_IDS
+
+
+def _u_row(r):
+    return {"id": r["id"], "name": r["first_name"] or "", "username": r["username"] or "", "balance": r["balance"],
+            "ad": r["ad_balance"], "banned": r["banned"], "level": int(r["premium_level"] or 0) if (r["premium_until"] and r["premium_until"].timestamp() > time.time()) else 0,
+            "verified": r["device_ok"], "at": iso(r["created_at"])}
+
+
+def _wd_row(w):
+    return {"id": w["id"], "user": w["user_id"], "coins": w["coins"], "fee": w["fee_coins"], "inr": float(w["amount_inr"]),
+            "upi": w["upi"], "status": w["status"], "level": int(w.get("level") or 0), "at": iso(w["created_at"])}
+
+
+@routes.get("/api/admin/stats")
+async def api_adm_stats(request):
+    if not adm_only(request):
+        return err("Not allowed")
+    return ok(stats=await db.adm_stats())
+
+
+@routes.get("/api/admin/users")
+async def api_adm_users(request):
+    if not adm_only(request):
+        return err("Not allowed")
+    return ok(users=[_u_row(r) for r in await db.adm_users(request.query.get("q", ""))])
+
+
+@routes.get("/api/admin/user")
+async def api_adm_user(request):
+    if not adm_only(request):
+        return err("Not allowed")
+    d = await db.adm_user(to_int(request.query.get("id")))
+    if not d:
+        return err("User nahi mila.")
+    out = _u_row(d)
+    out.update(upi=d["upi"] or "", gmail=d["gmail"] or "", hold=d["hold"], earned=d["total_earned"], debt=d["debt"],
+               suspect=d["suspect"], bypass=d["dev_bypass"], tasks_done=d["tasks_done"], refs=d["refs"],
+               until=iso(d["premium_until"]),
+               wds=[{"id": w["id"], "coins": w["coins"], "inr": float(w["amount_inr"]), "status": w["status"], "at": iso(w["created_at"])} for w in d["wds"]],
+               ledger=[{"kind": l["kind"], "amount": l["amount"], "at": iso(l["created_at"])} for l in d["ledger"]])
+    return ok(user=out)
+
+
+@routes.post("/api/admin/user/act")
+async def api_adm_user_act(request):
+    if not adm_only(request):
+        return err("Not allowed")
+    d = await body(request)
+    good, msg = await adminops.user_act(request.app["bot"], to_int(d.get("id")), str(d.get("act")), to_int(d.get("amount")))
+    return ok(msg=msg) if good else err(msg)
+
+
+@routes.get("/api/admin/withdraws")
+async def api_adm_wd(request):
+    if not adm_only(request):
+        return err("Not allowed")
+    pend, rec = await db.adm_wd_list()
+    return ok(pending=[_wd_row(w) for w in pend], recent=[_wd_row(w) for w in rec])
+
+
+@routes.post("/api/admin/withdraw/act")
+async def api_adm_wd_act(request):
+    if not adm_only(request):
+        return err("Not allowed")
+    d = await body(request)
+    act = str(d.get("act"))
+    if act not in ("ok", "no", "paid", "refund"):
+        return err("Galat action")
+    good, msg = await adminops.wd_act(request.app["bot"], to_int(d.get("id")), act)
+    return ok(msg=msg) if good else err(msg)
+
+
+@routes.get("/api/admin/deposits")
+async def api_adm_dep(request):
+    if not adm_only(request):
+        return err("Not allowed")
+    claims, unm = await db.fam_review()
+    return ok(claims=[{"id": c["id"], "user": c["user_id"], "txn": c["txn_id"], "inr": c["amount_paise"] / 100, "at": iso(c["created_at"])} for c in claims],
+              unmatched=[{"txn": p["txn_id"], "inr": p["pay_paise"] / 100, "sender": p["sender"], "at": iso(p["created_at"])} for p in unm])
+
+
+@routes.post("/api/admin/deposit/act")
+async def api_adm_dep_act(request):
+    if not adm_only(request):
+        return err("Not allowed")
+    d = await body(request)
+    k, bot = str(d.get("kind")), request.app["bot"]
+    if k in ("claim_ok", "claim_no"):
+        good, msg = await adminops.claim_act(bot, to_int(d.get("id")), k == "claim_ok")
+    elif k == "assign":
+        good, msg = await adminops.assign(bot, str(d.get("txn") or "").upper(), to_int(d.get("uid")))
+    else:
+        return err("Galat action")
+    return ok(msg=msg) if good else err(msg)
+
+
+@routes.get("/api/admin/tasks")
+async def api_adm_tasks(request):
+    if not adm_only(request):
+        return err("Not allowed")
+    ch, bw = await db.adm_tasks()
+    return ok(channels=[{"id": t["id"], "owner": t["owner_id"], "name": t["username"] or "", "title": t["title"], "target": t["target"], "done": t["joined"]} for t in ch],
+              botworks=[{"id": t["id"], "owner": t["owner_id"], "name": t["username"] or "", "title": t["title"], "target": t["target"], "reward": t["reward"]} for t in bw])
+
+
+@routes.post("/api/admin/task/cancel")
+async def api_adm_task_cancel(request):
+    if not adm_only(request):
+        return err("Not allowed")
+    d = await body(request)
+    kind = "bw" if d.get("kind") == "bw" else "ch"
+    refund = await db.adm_cancel(kind, to_int(d.get("id")))
+    if refund is None:
+        return err("Ye task cancel nahi ho sakta.")
+    extras.feed(f"🛑 Admin ne {'bot work' if kind == 'bw' else 'task'} #{d.get('id')} cancel kiya (refund {refund} coins)")
+    return ok(msg=f"Cancel hua. Owner ko {refund} coins refund.")
 
 
 # ---------------- support (user <-> admin, sab Mini App ke andar) ----------------

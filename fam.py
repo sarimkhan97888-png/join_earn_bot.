@@ -235,6 +235,8 @@ async def run():
 async def claim_alert(cid, user_id, txn, paise):
     """Admin ko claim approve/reject buttons ke saath (backup bot se)."""
     from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as M
-    kb = M([[B("✅ Credit karo", callback_data=f"clm_ok:{cid}"), B("❌ Reject", callback_data=f"clm_no:{cid}")]])
+    import adminops
+    pr = adminops.panel_row()
+    kb = M([[B("✅ Credit karo", callback_data=f"clm_ok:{cid}"), B("❌ Reject", callback_data=f"clm_no:{cid}")]] + ([pr] if pr else []))
     await extras.bk_send(f"🧾 <b>Deposit claim #{cid}</b>\nUser: <code>{user_id}</code>\nAmount: ₹{paise / 100:.2f}\n"
                          f"Txn: <code>{html.escape(txn)}</code>\nFam app me ye payment dekh ke hi Credit dabao.", kb)

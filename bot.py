@@ -11,6 +11,7 @@ from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as M, MenuB
 from telegram.error import TelegramError
 from telegram.ext import CallbackQueryHandler, ChatMemberHandler, CommandHandler, MessageHandler, PreCheckoutQueryHandler, filters
 
+import adminops
 import botwork
 import config
 import db
@@ -86,7 +87,16 @@ async def start(update: Update, ctx):
             f"(ek device = ek account).\nNeeche button dabao, verification page khulega. Pass hone par yahin bot par wapas aa jaoge, phir app khulega.",
             parse_mode="HTML", reply_markup=M([[B("🔐 Verify Device", web_app=WebAppInfo(url=f"{config.BASE_URL}/app?v=1"))]]))
         return
-    await update.message.reply_text(WELCOME, parse_mode="HTML", reply_markup=app_kb())
+    kb = app_kb()
+    if tu.id in config.ADMIN_IDS:
+        kb = M(kb.inline_keyboard + adminops.panel_kb().inline_keyboard)
+    await update.message.reply_text(WELCOME, parse_mode="HTML", reply_markup=kb)
+
+
+async def admin_cmd(update: Update, ctx):
+    if update.effective_user.id not in config.ADMIN_IDS:
+        return
+    await update.message.reply_text("🛠 Admin Panel", reply_markup=adminops.panel_kb())
 
 
 async def bypass_cmd(update: Update, ctx):
@@ -192,62 +202,16 @@ async def on_admin_wd(update: Update, ctx):
     if q.from_user.id not in config.ADMIN_IDS:
         return await q.answer("Not allowed", show_alert=True)
     act, wid = q.data.split(":")
-    wid = int(wid)
-
-    async def ans(text):
-        try:
-            await q.answer(text, show_alert=True)
-        except TelegramError:
-            pass
-
-    tax = config.WITHDRAW_TAX_PERCENT
     main = util.main_bot or ctx.bot  # users ko DM hamesha main bot se (callback backup bot par bhi aa sakta hai)
-
-    async def stale():  # pehle se process ho chuka: ye puraana message bhi hata do
-        await ans("Already processed")
-        try:
-            await q.message.delete()
-        except TelegramError:
-            pass
-
-    keep = False
-    if act == "adm_no":
-        w = await db.wd_move_refund(wid, "pending", "rejected")
-        if not w:
-            return await stale()
-        await ans("Rejected & refunded")
-        extras.feed(f"❌ Withdraw #{wid} <b>rejected</b>, {w['coins']} coins refund (user <code>{w['user_id']}</code>)")
-        await util.notify(main, w["user_id"], f"❌ Withdraw #{wid} reject hua, coins wapas mil gaye.")
-    elif act == "adm_ok":
-        w = await db.wd_move(wid, "pending", "paid")
-        if not w:
-            return await stale()
-        await ans("✅ Approved — UPI par manually pay kar do")
-        await extras.post_payout(w)
-        extras.feed(f"✅ Withdraw #{wid} <b>approved (manual paid)</b> ₹{float(w['amount_inr']):.2f} → <code>{html.escape(w['upi'])}</code> (user <code>{w['user_id']}</code>)")
-        await util.notify(main, w["user_id"],
-                          f"✅ Withdraw #{wid} paid: ₹{float(w['amount_inr']):.2f} → {w['upi']} (tax {tax}% alag se kata)")
-    elif act == "adm_paid":
-        w = await db.wd_move(wid, "sending", "paid")
-        if not w:
-            return await stale()
-        await ans("✅ Paid mark ho gaya")
-        await extras.post_payout(w)
-        extras.feed(f"✅ Withdraw #{wid} <b>paid</b> (manual mark) ₹{float(w['amount_inr']):.2f}")
-        await util.notify(main, w["user_id"], f"✅ Withdraw #{wid} paid: ₹{float(w['amount_inr']):.2f} → {w['upi']}")
-    elif act == "adm_refund":
-        w = await db.wd_move_refund(wid, "sending", "failed")
-        if not w:
-            return await stale()
-        await ans("↩️ User ko refund ho gaya")
-        extras.feed(f"↩️ Withdraw #{wid} <b>failed</b>, user ko refund")
-        await util.notify(main, w["user_id"], f"❌ Withdraw #{wid} fail hua, coins wapas mil gaye.")
-    if not keep:
-        await extras.bk_delete(wid)  # admins ke saare alert copies delete
-        try:
-            await q.message.delete()
-        except TelegramError:
-            pass
+    _, msg = await adminops.wd_act(main, int(wid), act[4:])
+    try:
+        await q.answer(msg, show_alert=True)
+    except TelegramError:
+        pass
+    try:
+        await q.message.delete()  # kaam ho gaya ya pehle ho chuka: ye message hata do
+    except TelegramError:
+        pass
 
 
 # ---------------- admin: deposit claims / unmatched ----------------
@@ -256,18 +220,7 @@ async def on_admin_claim(update: Update, ctx):
     if q.from_user.id not in config.ADMIN_IDS:
         return await q.answer("Not allowed", show_alert=True)
     act, cid = q.data.split(":")
-    main = util.main_bot or ctx.bot
-    if act == "clm_ok":
-        cl = await db.fam_claim_approve(int(cid))
-        msg = "✅ Credit ho gaya" if cl else "Already processed / mail aa chuki"
-        if cl:
-            extras.feed(f"✅ Claim #{cid} approved: ₹{cl['amount_paise'] / 100:.2f} (user <code>{cl['user_id']}</code>)")
-            await util.notify(main, cl["user_id"], f"✅ <b>Deposit successful!</b>\n+{cl['amount_paise']} coins ad balance me add ho gaye.")
-    else:
-        cl = await db.fam_claim_reject(int(cid))
-        msg = "❌ Reject" if cl else "Already processed"
-        if cl:
-            await util.notify(main, cl["user_id"], "❌ Tumhara deposit claim verify nahi ho paya. Galti ho to Support me batao.")
+    _, msg = await adminops.claim_act(util.main_bot or ctx.bot, int(cid), act == "clm_ok")
     try:
         await q.answer(msg, show_alert=True)
         await q.message.delete()
@@ -282,11 +235,8 @@ async def assign_cmd(update: Update, ctx):
     a = ctx.args
     if len(a) != 2 or not a[1].isdigit():
         return await update.message.reply_text("Usage: /assign <txn_id> <user_id>")
-    pay = await db.fam_assign(a[0].upper(), int(a[1]))
-    if not pay:
-        return await update.message.reply_text("Nahi hua: txn unmatched nahi hai ya user nahi mila.")
-    await util.notify(util.main_bot or ctx.bot, int(a[1]), f"✅ <b>Deposit successful!</b>\n+{pay['pay_paise']} coins ad balance me add ho gaye.")
-    await update.message.reply_text(f"✅ ₹{pay['pay_paise'] / 100:.2f} → user {a[1]} ke ad balance me.")
+    _, msg = await adminops.assign(util.main_bot or ctx.bot, a[0].upper(), int(a[1]))
+    await update.message.reply_text(msg)
 
 
 # ---------------- chat member events ----------------
@@ -514,6 +464,7 @@ def register_backup(app):
 def register(app):
     app.add_handler(CommandHandler("start", start, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("gift", gift_cmd, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("admin", admin_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler(["bypass", "unbypass"], bypass_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("allowdev", allowdev_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("ping", ping_cmd, filters=filters.ChatType.PRIVATE))
