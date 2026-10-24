@@ -104,7 +104,7 @@ def plans_json():
 def cfg(request):
     return {"coin_per_inr": config.COIN_PER_INR, "join_reward": config.JOIN_REWARD, "ad_cost": config.AD_COST,
             "min_task_members": config.MIN_TASK_MEMBERS, "max_task_members": config.MAX_TASK_MEMBERS,
-            "min_deposit": config.MIN_DEPOSIT_COINS, "min_withdraw": config.MIN_WITHDRAW_COINS,
+            "min_deposit": config.MIN_DEPOSIT_COINS, "min_withdraw": config.MIN_WITHDRAW_COINS, "gplay_step": config.GPLAY_STEP_INR * config.COIN_PER_INR,
             "hold_hours": config.HOLD_HOURS, "plans": plans_json(),
             "bw_min_reward": config.BW_MIN_REWARD,
             "bw_min_users": config.BW_MIN_USERS, "bw_max_users": config.BW_MAX_USERS,
@@ -319,7 +319,8 @@ async def api_wallet(request):
     orders = [{"id": r["order_id"], "kind": r["kind"], "coins": r["coins"], "amount": r["amount_inr"],
                "status": r["status"], "at": iso(r["created_at"])} for r in oh]
     wds = [{"id": r["id"], "coins": r["coins"], "amount": float(r["amount_inr"]), "fee": r["fee_coins"], "upi": r["upi"],
-            "status": r["status"], "at": iso(r["created_at"])} for r in wh]
+            "status": r["status"], "gp": r["upi"] == db.GPLAY, "code": r["code"] if r["upi"] == db.GPLAY else None,
+            "at": iso(r["created_at"])} for r in wh]
     return ok(orders=orders, withdrawals=wds)
 
 
@@ -491,7 +492,11 @@ async def api_withdraw(request):
         if done < config.MIN_TASKS_FOR_WITHDRAW:
             return err(f"⚠️ Withdraw ke liye kam se kam {config.MIN_TASKS_FOR_WITHDRAW} task complete karo "
                        f"(channel join ya bot work). Abhi complete: {done}.")
-    if coins < config.MIN_WITHDRAW_COINS or coins % config.COIN_PER_INR:
+    step = config.GPLAY_STEP_INR * config.COIN_PER_INR
+    if gplay:
+        if coins < step or coins % step:
+            return err(f"Google Play code ₹{config.GPLAY_STEP_INR} ke multiple me hota hai ({step} coins ke multiple me daalo, jaise {step}, {step * 2}, {step * 5}).")
+    elif coins < config.MIN_WITHDRAW_COINS or coins % config.COIN_PER_INR:
         return err(f"Min {config.MIN_WITHDRAW_COINS} coins aur 100 ke multiple me daalo.")
     pct = pl["fee"]
     need = coins + db.wd_fee(coins, pct)
@@ -510,8 +515,8 @@ async def api_withdraw(request):
     _bg.add(t)
     t.add_done_callback(_bg.discard)
     if gplay:
-        return ok(msg=f"Withdraw request #{wid} bhej di gayi. ₹{net:.2f} ka Google Play code (balance se {coins} + {fee} tax = {coins + fee} coins kate). "
-                      f"Admin approve karega to code bot me mil jayega. {pl['wd_hours']} ghante me process na hua to coins apne aap wapas aa jayenge.")
+        return ok(msg=f"Google Play code request #{wid} bhej di gayi. ₹{net:.2f} ka code (balance se {coins} + {fee} tax = {coins + fee} coins kate). "
+                      f"Admin code bhejega to wo bot me aayega aur Wallet → Google Play Codes me bhi dikhega. {pl['wd_hours']} ghante me process na hua to coins apne aap wapas aa jayenge.")
     return ok(msg=f"Withdraw request #{wid} bhej di gayi. ₹{net:.2f} → {upi} (balance se {coins} + {fee} tax = {coins + fee} coins kate). "
                   f"Admin approve karega to paisa aa jayega. {pl['wd_hours']} ghante me process na hua to coins apne aap wapas aa jayenge.")
 
@@ -525,9 +530,9 @@ async def _after_withdraw(bot, u, wid, coins, fee, net, upi, lvl=0):
             why += "\n⚠️ <b>Suspect:</b> iska device fingerprint kisi aur account se match karta hai. Pehle check karo."
         await payouts.alert(bot, f"💸 <b>{util.tag(lvl)}</b> · Withdraw #{wid}\nUser: <code>{u['id']}</code>\n₹{net:.2f} payable "
                                  f"(user se {coins + fee} coins kate = {coins} + {fee} tax)\n"
-                                 + ("🎁 <b>Google Play redeem code bhejna hai</b> (Approve se pehle user ko code DM/chat se bhejo)" if upi == db.GPLAY
+                                 + (f"🎁 <b>Google Play redeem code bhejna hai</b>\n<code>/gpcode {wid} CODE</code> ya Admin Panel > Withdraws" if upi == db.GPLAY
                                     else f"UPI: <code>{html.escape(upi)}</code>") + why,
-                            payouts.admin_kb(wid), wid=wid)
+                            payouts.admin_kb(wid, upi == db.GPLAY), wid=wid)
     except Exception:
         log.exception("after_withdraw failed for #%s", wid)
 
@@ -545,7 +550,7 @@ def _u_row(r):
 
 def _wd_row(w):
     return {"id": w["id"], "user": w["user_id"], "coins": w["coins"], "fee": w["fee_coins"], "inr": float(w["amount_inr"]),
-            "upi": w["upi"], "status": w["status"], "level": int(w.get("level") or 0), "at": iso(w["created_at"])}
+            "upi": w["upi"], "gp": w["upi"] == db.GPLAY, "status": w["status"], "level": int(w.get("level") or 0), "at": iso(w["created_at"])}
 
 
 @routes.get("/api/admin/stats")
@@ -603,7 +608,7 @@ async def api_adm_wd_act(request):
     act = str(d.get("act"))
     if act not in ("ok", "no", "paid", "refund"):
         return err("Galat action")
-    good, msg = await adminops.wd_act(request.app["bot"], to_int(d.get("id")), act)
+    good, msg = await adminops.wd_act(request.app["bot"], to_int(d.get("id")), act, str(d.get("code") or ""))
     return ok(msg=msg) if good else err(msg)
 
 

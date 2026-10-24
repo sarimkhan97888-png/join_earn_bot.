@@ -9,7 +9,7 @@ import extras
 import util
 
 
-async def wd_act(main, wid, act):
+async def wd_act(main, wid, act, code=None):
     """act: ok (approve=manual paid) | no (reject+refund) | paid (sending->paid) | refund (sending->failed). Return (ok, msg)."""
     tax = config.WITHDRAW_TAX_PERCENT
     if act == "no":
@@ -20,14 +20,29 @@ async def wd_act(main, wid, act):
         await util.notify(main, w["user_id"], f"❌ Withdraw #{wid} reject hua, coins wapas mil gaye.")
         msg = "Rejected & refunded"
     elif act == "ok":
-        w = await db.wd_move(wid, "pending", "paid")
-        if not w:
-            return False, "Already processed"
-        await extras.post_payout(w)
-        extras.feed(f"✅ Withdraw #{wid} <b>approved (manual paid)</b> ₹{float(w['amount_inr']):.2f} → <code>{html.escape(w['upi'])}</code> (user <code>{w['user_id']}</code>)")
-        await util.notify(main, w["user_id"],
-                          f"✅ Withdraw #{wid} paid: ₹{float(w['amount_inr']):.2f} → {w['upi']} (tax {tax}% alag se kata)")
-        msg = "✅ Approved — UPI par manually pay kar do"
+        w0 = await db.wd_get(wid)
+        if w0 and w0["upi"] == db.GPLAY:
+            code = " ".join(str(code or "").split())
+            if not 6 <= len(code) <= 100:
+                return False, "Google Play code do (6-100 chars)"
+            w = await db.wd_pay_code(wid, code)
+            if not w:
+                return False, "Already processed"
+            extras.feed(f"✅ Withdraw #{wid} <b>Google Play code bheja</b> ₹{float(w['amount_inr']):.2f} (user <code>{w['user_id']}</code>)")
+            await util.notify(main, w["user_id"],
+                              f"🎁 <b>Google Play code ready!</b>\nWithdraw #{wid}: ₹{float(w['amount_inr']):.2f}\n"
+                              f"Code: <code>{html.escape(code)}</code>\n"
+                              f"Play Store → Profile → Payments & subscriptions → Redeem gift code me daalo. Ye code Wallet → Google Play Codes me bhi save hai.")
+            msg = "✅ Code user ko bhej diya"
+        else:
+            w = await db.wd_move(wid, "pending", "paid")
+            if not w:
+                return False, "Already processed"
+            await extras.post_payout(w)
+            extras.feed(f"✅ Withdraw #{wid} <b>approved (manual paid)</b> ₹{float(w['amount_inr']):.2f} → <code>{html.escape(w['upi'])}</code> (user <code>{w['user_id']}</code>)")
+            await util.notify(main, w["user_id"],
+                              f"✅ Withdraw #{wid} paid: ₹{float(w['amount_inr']):.2f} → {w['upi']} (tax {tax}% alag se kata)")
+            msg = "✅ Approved — UPI par manually pay kar do"
     elif act == "paid":
         w = await db.wd_move(wid, "sending", "paid")
         if not w:

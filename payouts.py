@@ -32,8 +32,11 @@ async def alert(bot, text, kb=None, wid=None):
             log.exception("wd_touch_alert failed %s", wid)
 
 
-def admin_kb(wid):
-    rows = [[B("✅ Approve", callback_data=f"adm_ok:{wid}"), B("❌ Reject", callback_data=f"adm_no:{wid}")]]
+def admin_kb(wid, gplay=False):
+    if gplay:  # code /gpcode se ya Admin Panel se jata hai, isliye yahan sirf Reject
+        rows = [[B("❌ Reject", callback_data=f"adm_no:{wid}")]]
+    else:
+        rows = [[B("✅ Approve", callback_data=f"adm_ok:{wid}"), B("❌ Reject", callback_data=f"adm_no:{wid}")]]
     pr = adminops.panel_row()
     return M(rows + ([pr] if pr else []))
 

@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS withdrawals(
 );
 ALTER TABLE withdrawals ALTER COLUMN amount_inr TYPE NUMERIC(12,2);
 ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS fee_coins BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS code TEXT;
 CREATE TABLE IF NOT EXISTS gift_codes(
   code TEXT PRIMARY KEY, coins INT NOT NULL, max_uses INT NOT NULL, used INT NOT NULL DEFAULT 0,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -763,6 +764,17 @@ async def request_withdraw(uid, coins, pct=None, level=0, hours=None, max_day=No
         return wid, (GPLAY if gplay else u["upi"]), fee, net_inr
 
 
+async def wd_get(wid):
+    return await pool.fetchrow("SELECT * FROM withdrawals WHERE id=$1", wid)
+
+
+async def wd_pay_code(wid, code):
+    """Google Play withdraw: pending -> paid + code save (ek hi baar)."""
+    return await pool.fetchrow(
+        "UPDATE withdrawals SET status='paid', code=$2, updated_at=now() WHERE id=$1 AND status='pending' AND upi=$3 RETURNING *",
+        wid, code, GPLAY)
+
+
 async def wd_move(wid, frm, to):
     return await pool.fetchrow(
         "UPDATE withdrawals SET status=$3, updated_at=now() WHERE id=$1 AND status=$2 RETURNING *", wid, frm, to)
@@ -1077,8 +1089,8 @@ async def recent_ledger(uid, n=10):
 
 async def wd_history(uid):
     return await pool.fetch(
-        """SELECT id, coins, amount_inr, fee_coins, upi, status, created_at FROM withdrawals
-           WHERE user_id=$1 ORDER BY id DESC LIMIT 10""", uid)
+        """SELECT id, coins, amount_inr, fee_coins, upi, status, code, created_at FROM withdrawals
+           WHERE user_id=$1 ORDER BY id DESC LIMIT 30""", uid)
 
 
 async def order_history(uid):

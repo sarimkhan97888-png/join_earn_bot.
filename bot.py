@@ -259,6 +259,17 @@ async def on_admin_claim(update: Update, ctx):
         pass
 
 
+async def gpcode_cmd(update: Update, ctx):
+    """/gpcode <withdraw_id> <code> : Google Play withdraw ka code user ko bhejo (withdraw paid ho jata hai)."""
+    if update.effective_user.id not in config.ADMIN_IDS:
+        return
+    a = ctx.args
+    if len(a) < 2 or not a[0].isdigit():
+        return await update.message.reply_text("Usage: /gpcode <withdraw_id> <code>")
+    _, msg = await adminops.wd_act(util.main_bot or ctx.bot, int(a[0]), "ok", " ".join(a[1:]))
+    await update.message.reply_text(msg)
+
+
 async def assign_cmd(update: Update, ctx):
     """/assign <txn_id> <user_id>: unmatched payment kisi user ke ad balance me."""
     if update.effective_user.id not in config.ADMIN_IDS:
@@ -466,7 +477,9 @@ async def job_wd_stuck(ctx):
         if w["status"] == "pending":
             txt = (f"⏰ <b>{util.tag(w['level'])} · Withdraw #{w['id']} abhi pending hai</b>\nUser: <code>{w['user_id']}</code>\n"
                    f"₹{float(w['amount_inr']):.2f} → <code>{html.escape(w['upi'])}</code>")
-            kb = payouts.admin_kb(w["id"])
+            kb = payouts.admin_kb(w["id"], w["upi"] == db.GPLAY)
+            if w["upi"] == db.GPLAY:
+                txt += f"\n🎁 Google Play code bhejna hai: <code>/gpcode {w['id']} CODE</code> (ya Admin Panel > Withdraws)"
         else:
             txt = (f"🚨 <b>Withdraw #{w['id']} 'sending' me atka hai</b>\n₹{float(w['amount_inr']):.2f} → "
                    f"<code>{html.escape(w['upi'])}</code>\nPaisa gaya ho to Mark paid, nahi gaya to Refund.")
@@ -490,6 +503,7 @@ def register_backup(app):
     app.add_handler(CallbackQueryHandler(on_admin_wd, pattern=r"^adm_"))
     app.add_handler(CallbackQueryHandler(on_admin_claim, pattern=r"^clm_"))
     app.add_handler(CommandHandler("assign", assign_cmd, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("gpcode", gpcode_cmd, filters=filters.ChatType.PRIVATE))
 
 
 def register(app):
@@ -512,6 +526,7 @@ def register(app):
     app.add_handler(CallbackQueryHandler(on_admin_wd, pattern=r"^adm_"))
     app.add_handler(CallbackQueryHandler(on_admin_claim, pattern=r"^clm_"))
     app.add_handler(CommandHandler("assign", assign_cmd, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("gpcode", gpcode_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CallbackQueryHandler(botwork.on_cb, pattern=r"^(bws_|bwa_)"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, botwork.on_text))
     app.add_handler(ChatMemberHandler(on_chat_member, ChatMemberHandler.CHAT_MEMBER))

@@ -77,3 +77,6 @@ MIN_TASKS_FOR_REFER = _int("MIN_TASKS_FOR_REFER", 2)  # dost itne task kare tab 
 ORDER_EXPIRY_MIN = _int("ORDER_EXPIRY_MIN", 11)  # itne minute baad unpaid deposit/premium order history me Failed dikhta hai
 WITHDRAW_EXPIRE_HOURS = _int("WITHDRAW_EXPIRE_HOURS", 48)  # pending withdraw itne ghante me approve na ho to expire + refund
 BW_MAX_ATTEMPTS = _int("BW_MAX_ATTEMPTS", 2)  # bot work me ek worker ke kitne try (reject ke baad retry), uske baad lock
+
+# Google Play redeem code withdraw: ₹10 ke multiple (unlimited), tax upar se
+GPLAY_STEP_INR = _int("GPLAY_STEP_INR", 10)
