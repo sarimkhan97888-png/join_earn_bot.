@@ -260,12 +260,12 @@ async def on_admin_claim(update: Update, ctx):
 
 
 async def gpcode_cmd(update: Update, ctx):
-    """/gpcode <withdraw_id> <code> : Google Play withdraw ka code user ko bhejo (withdraw paid ho jata hai)."""
+    """/gpcode <id> <code> (Google Play) ya /txid <id> <TxHash> (USDT): user ko bhejo, withdraw paid ho jata hai."""
     if update.effective_user.id not in config.ADMIN_IDS:
         return
     a = ctx.args
     if len(a) < 2 or not a[0].isdigit():
-        return await update.message.reply_text("Usage: /gpcode <withdraw_id> <code>")
+        return await update.message.reply_text("Usage: /gpcode <withdraw_id> <code>  ya  /txid <withdraw_id> <TxHash>")
     _, msg = await adminops.wd_act(util.main_bot or ctx.bot, int(a[0]), "ok", " ".join(a[1:]))
     await update.message.reply_text(msg)
 
@@ -477,8 +477,11 @@ async def job_wd_stuck(ctx):
         if w["status"] == "pending":
             txt = (f"⏰ <b>{util.tag(w['level'])} · Withdraw #{w['id']} abhi pending hai</b>\nUser: <code>{w['user_id']}</code>\n"
                    f"₹{float(w['amount_inr']):.2f} → <code>{html.escape(w['upi'])}</code>")
-            kb = payouts.admin_kb(w["id"], w["upi"] == db.GPLAY)
-            if w["upi"] == db.GPLAY:
+            kb = payouts.admin_kb(w["id"], w["upi"] == db.GPLAY or w["method"] == "usdt")
+            if w["method"] == "usdt":
+                txt = (f"⏰ <b>{util.tag(w['level'])} · USDT Withdraw #{w['id']} pending</b>\nUser: <code>{w['user_id']}</code>\n"
+                       f"{w['usdt']} USDT (BEP20) → <code>{html.escape(w['upi'])}</code>\nBhejne ke baad: <code>/txid {w['id']} TXHASH</code>")
+            elif w["upi"] == db.GPLAY:
                 txt += f"\n🎁 Google Play code bhejna hai: <code>/gpcode {w['id']} CODE</code> (ya Admin Panel > Withdraws)"
         else:
             txt = (f"🚨 <b>Withdraw #{w['id']} 'sending' me atka hai</b>\n₹{float(w['amount_inr']):.2f} → "
@@ -504,6 +507,7 @@ def register_backup(app):
     app.add_handler(CallbackQueryHandler(on_admin_claim, pattern=r"^clm_"))
     app.add_handler(CommandHandler("assign", assign_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("gpcode", gpcode_cmd, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("txid", gpcode_cmd, filters=filters.ChatType.PRIVATE))
 
 
 def register(app):
@@ -527,6 +531,7 @@ def register(app):
     app.add_handler(CallbackQueryHandler(on_admin_claim, pattern=r"^clm_"))
     app.add_handler(CommandHandler("assign", assign_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("gpcode", gpcode_cmd, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("txid", gpcode_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CallbackQueryHandler(botwork.on_cb, pattern=r"^(bws_|bwa_)"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, botwork.on_text))
     app.add_handler(ChatMemberHandler(on_chat_member, ChatMemberHandler.CHAT_MEMBER))

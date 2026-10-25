@@ -69,6 +69,12 @@ CREATE TABLE IF NOT EXISTS withdrawals(
 ALTER TABLE withdrawals ALTER COLUMN amount_inr TYPE NUMERIC(12,2);
 ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS fee_coins BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS code TEXT;
+ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS method TEXT;
+ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS usdt NUMERIC(18,6);
+ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS tx TEXT;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS usdt NUMERIC(18,6);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS pay_amount NUMERIC(18,6);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS pay_address TEXT;
 CREATE TABLE IF NOT EXISTS gift_codes(
   code TEXT PRIMARY KEY, coins INT NOT NULL, max_uses INT NOT NULL, used INT NOT NULL DEFAULT 0,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -545,6 +551,25 @@ async def orders_expire_old():
     await pool.execute("UPDATE orders SET status='failed' WHERE status='pending' AND created_at < now() - interval '24 hours'")
 
 
+async def usdt_order_new(order_id, uid, kind, coins, amount_inr, level, mode, usdt, pay_amount, ref, address):
+    await pool.execute(
+        "INSERT INTO orders(order_id,user_id,kind,coins,amount_inr,gateway_ref,level,mode,method,usdt,pay_amount,pay_address) "
+        "VALUES($1,$2,$3,$4,$5,$6,$7,$8,'usdt',$9,$10,$11)",
+        order_id, uid, kind, coins, amount_inr, str(ref), level, mode, usdt, pay_amount, address)
+
+
+async def usdt_order_counts(uid):
+    r = await pool.fetchrow(
+        """SELECT count(*) FILTER (WHERE status='pending') AS pending, count(*) AS hour FROM orders
+           WHERE user_id=$1 AND method='usdt' AND created_at > now() - interval '1 hour'""", uid)
+    return r["pending"], r["hour"]
+
+
+async def usdt_reopen(order_id):
+    """Der se aaya (24h ke baad failed mark ho chuka) lekin paisa mil gaya: dobara pending karo taaki credit ho sake."""
+    await pool.execute("UPDATE orders SET status='pending' WHERE order_id=$1 AND method='usdt' AND status='failed'", order_id)
+
+
 async def complete_order(order_id, paid_amount):
     async with pool.acquire() as c, c.transaction():
         return await _complete_c(c, order_id, paid_amount)
@@ -801,7 +826,7 @@ def wd_fee(coins, pct=None):
 GPLAY = "Google Play Code"
 
 
-async def request_withdraw(uid, coins, pct=None, level=0, hours=None, max_day=None, gplay=False):
+async def request_withdraw(uid, coins, pct=None, level=0, hours=None, max_day=None, gplay=False, addr=None, usdt=None):
     """coins = jitne ka paisa user ko milega. Tax upar se: balance se coins + tax kat-ta hai.
     Return (wid, upi, fee_coins, net_inr). withdrawals.coins = kul kata hua (coins+fee) taaki refund poora ho."""
     fee = wd_fee(coins, pct)
@@ -817,16 +842,16 @@ async def request_withdraw(uid, coins, pct=None, level=0, hours=None, max_day=No
                 return "limit"
         u = await c.fetchrow(
             """UPDATE users SET balance=balance-$1 WHERE id=$2 AND balance>=$1
-               AND device_ok AND NOT banned AND debt=0 AND upi IS NOT NULL RETURNING upi""", total, uid)
+               AND device_ok AND NOT banned AND debt=0 AND ($3::bool OR upi IS NOT NULL) RETURNING upi""", total, uid, addr is not None)
         if not u:
             return None
         wid = await c.fetchval(
-            "INSERT INTO withdrawals(user_id,coins,amount_inr,fee_coins,upi,level,expire_hours) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id",
-            uid, total, net_inr, fee, GPLAY if gplay else u["upi"], level, hours)
+            "INSERT INTO withdrawals(user_id,coins,amount_inr,fee_coins,upi,level,expire_hours,method,usdt) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id",
+            uid, total, net_inr, fee, addr or (GPLAY if gplay else u["upi"]), level, hours, "usdt" if addr else None, usdt)
         await led(c, uid, "withdraw", -total, wid)
         if fee:
             await led(c, 0, "tax", fee, wid)
-        return wid, (GPLAY if gplay else u["upi"]), fee, net_inr
+        return wid, (addr or (GPLAY if gplay else u["upi"])), fee, net_inr
 
 
 async def wd_get(wid):
@@ -838,6 +863,13 @@ async def wd_pay_code(wid, code):
     return await pool.fetchrow(
         "UPDATE withdrawals SET status='paid', code=$2, updated_at=now() WHERE id=$1 AND status='pending' AND upi=$3 RETURNING *",
         wid, code, GPLAY)
+
+
+async def wd_pay_tx(wid, tx):
+    """USDT withdraw: pending -> paid + blockchain tx hash save (ek hi baar)."""
+    return await pool.fetchrow(
+        "UPDATE withdrawals SET status='paid', tx=$2, updated_at=now() WHERE id=$1 AND status='pending' AND method='usdt' RETURNING *",
+        wid, tx)
 
 
 async def wd_move(wid, frm, to):
@@ -1153,7 +1185,7 @@ async def recent_ledger(uid, n=10):
 
 async def wd_history(uid):
     return await pool.fetch(
-        """SELECT id, coins, amount_inr, fee_coins, upi, status, code, created_at FROM withdrawals
+        """SELECT id, coins, amount_inr, fee_coins, upi, status, code, method, usdt, tx, created_at FROM withdrawals
            WHERE user_id=$1 ORDER BY id DESC LIMIT 30""", uid)
 
 

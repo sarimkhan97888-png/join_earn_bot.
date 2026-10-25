@@ -179,6 +179,13 @@ async def post_payout(w):
     try:
         cid = int(config.PAYOUT_CHANNEL_ID) if config.PAYOUT_CHANNEL_ID.lstrip("-").isdigit() else config.PAYOUT_CHANNEL_ID
         when = datetime.now(timezone(timedelta(hours=5, minutes=30)))
+        if w.get("method") == "usdt":
+            a = w["upi"]
+            await util.main_bot.send_message(
+                cid, f"✅ <b>Payout successful</b>\n💸 Amount: <b>{w['usdt']} USDT</b> (BEP20)\n"
+                     f"👛 Wallet: <code>{html.escape(a[:6] + '…' + a[-4:])}</code>\n🔗 <a href=\"https://bscscan.com/tx/{w['tx']}\">TxID: {w['tx'][:10]}…{w['tx'][-6:]}</a>\n"
+                     f"🆔 Withdraw #{w['id']}\n🕒 {when:%d %b %Y, %H:%M} IST", parse_mode="HTML", disable_web_page_preview=True)
+            return
         await util.main_bot.send_message(
             cid, f"✅ <b>Payout successful</b>\n💸 Amount: <b>₹{float(w['amount_inr']):.2f}</b>\n"
                  f"🏦 UPI: <code>{html.escape(_mask_upi(w['upi']))}</code>\n🆔 Withdraw #{w['id']}\n"

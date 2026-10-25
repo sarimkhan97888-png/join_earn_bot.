@@ -10,7 +10,7 @@ import logging
 import re
 import time
 import types
-from decimal import Decimal
+from decimal import ROUND_CEILING, ROUND_DOWN, Decimal
 from urllib.parse import parse_qsl, quote
 
 import qrcode
@@ -25,6 +25,7 @@ import db
 import extras
 import i18n
 import fam
+import nowpay
 import payouts
 import util
 
@@ -114,7 +115,9 @@ def cfg(request):
             "tasks_daily": None if request["u"]["id"] in config.ADMIN_IDS else util.plan(request["u"])["tasks"],
             "free_wd_hours": config.WITHDRAW_EXPIRE_HOURS, "free_wd": 1, "free_tasks": config.FREE_TASKS_DAILY, "free_members": config.FREE_TASK_MEMBERS, "payout_link": config.PAYOUT_CHANNEL_LINK, "app_name": config.APP_NAME,
             "refer_reward": util.plan(request["u"])["ref"], "min_tasks": config.MIN_TASKS_FOR_WITHDRAW, "min_ref_tasks": config.MIN_TASKS_FOR_REFER, "order_expiry_min": config.ORDER_EXPIRY_MIN,
-            "upi_id": config.FAM_UPI_ID, "max_deposit": config.MAX_DEPOSIT_COINS, "fam_ttl": config.FAM_TTL}
+            "upi_id": config.FAM_UPI_ID, "max_deposit": config.MAX_DEPOSIT_COINS, "fam_ttl": config.FAM_TTL,
+            "usdt_on": config.USDT_ON, "usdt_rate": float(config.USDT_INR_RATE), "usdt_fee": float(config.USDT_FEE_PCT),
+            "usdt_min": float(config.USDT_MIN), "usdt_max": float(config.USDT_MAX)}
 
 
 # ---------------- auth + rate limit + device check ----------------
@@ -370,6 +373,7 @@ async def api_wallet(request):
                "status": r["status"], "at": iso(r["created_at"])} for r in oh]
     wds = [{"id": r["id"], "coins": r["coins"], "amount": float(r["amount_inr"]), "fee": r["fee_coins"], "upi": r["upi"],
             "status": r["status"], "gp": r["upi"] == db.GPLAY, "code": r["code"] if r["upi"] == db.GPLAY else None,
+            "usdt": float(r["usdt"]) if r["method"] == "usdt" else None, "tx": r["tx"],
             "at": iso(r["created_at"])} for r in wh]
     return ok(orders=orders, withdrawals=wds)
 
@@ -402,6 +406,79 @@ async def make_order(request, kind, coins, amount, level=None, mode=None):
     link = f"upi://pay?pa={quote(config.FAM_UPI_ID)}&pn={quote(config.PAYEE_NAME)}&am={amt}&cu=INR&tn={quote(order_id[-8:])}"
     return ok(order_id=order_id, amount=amount, pay_amount=amt, coins=coins, upi_id=config.FAM_UPI_ID,
               pay_url=link, qr=make_qr(link), expires_in=config.FAM_TTL)
+
+
+def _usdt_ceil(inr):
+    return (Decimal(inr) / config.USDT_INR_RATE).quantize(Decimal("0.01"), ROUND_CEILING)
+
+
+def _usdt_total(u):
+    """User jo USDT chunta hai usme fee % add (4 decimal tak upar round)."""
+    return (u * (1 + config.USDT_FEE_PCT / 100)).quantize(Decimal("0.0001"), ROUND_CEILING)
+
+
+@routes.post("/api/usdt/order")
+async def api_usdt_order(request):
+    """USDT BEP20 payment: deposit (ad balance coins) ya premium. Address + exact amount deta hai."""
+    u = request["u"]
+    uid = u["id"]
+    if not config.USDT_ON:
+        return err("❌ USDT payment abhi available nahi. Baad me try karo.")
+    d = await body(request)
+    kind = "premium" if d.get("kind") == "premium" else "deposit"
+    level = mode = None
+    if kind == "premium":
+        level, mode, e = prem_args(u, d)
+        if e:
+            return err(e)
+        inr = config.PLANS[level]["price"]
+        usdt = _usdt_ceil(inr)
+        coins = 0
+    else:
+        try:
+            usdt = Decimal(str(d.get("usdt") or "0")).quantize(Decimal("0.01"), ROUND_DOWN)
+        except Exception:
+            usdt = Decimal(0)
+        if not (config.USDT_MIN <= usdt <= config.USDT_MAX):
+            return err(f"Amount {config.USDT_MIN} se {config.USDT_MAX} USDT ke beech daalo.")
+        coins = int(usdt * config.USDT_INR_RATE * config.COIN_PER_INR)
+        inr = coins // config.COIN_PER_INR
+    if not cooldown(uid, "order", 5):
+        return too_fast()
+    pend, hour = await db.usdt_order_counts(uid)
+    if pend >= 3:
+        return err("Pehle wale USDT orders pure karo ya thodi der ruko, phir naya banao.")
+    if hour >= 10:
+        return err("Bahut saare orders. Thodi der baad try karo.")
+    total = _usdt_total(usdt)
+    order_id = f"U{uid}{int(time.time() * 1000)}"
+    try:
+        p = await nowpay.create_payment(order_id, total, f"{config.APP_NAME} {kind} {uid}")
+    except nowpay.PayError as e:
+        mn = await nowpay.min_amount() if "small" in str(e).lower() or "min" in str(e).lower() else None
+        if mn:
+            return err(f"Is amount par payment nahi ban paya. Minimum {mn} USDT se upar try karo.")
+        return err("❌ USDT payment abhi nahi ban paya. Thodi der baad try karo.")
+    await db.usdt_order_new(order_id, uid, kind, coins, inr, level, mode, usdt, p["pay_amount"], p["payment_id"], p["pay_address"])
+    extras.feed(f"💵 USDT {('Premium L%s' % level) if kind == 'premium' else 'Deposit'} order {usdt} USDT — {extras.uname(u)}")
+    pay_amt = format(p["pay_amount"].normalize(), "f")
+    return ok(order_id=order_id, usdt=float(usdt), coins=coins, pay_amount=pay_amt, address=p["pay_address"],
+              qr=make_qr(p["pay_address"]), expires_in=p["ttl"], network="BEP20")
+
+
+@routes.post("/nowpay/ipn")
+async def nowpay_ipn(request):
+    """NOWPayments webhook. Signature galat/secret set nahi = ignore (API polling se bhi credit ho jata hai)."""
+    raw = await request.read()
+    data = nowpay.verify_sig(raw, request.headers.get("x-nowpayments-sig", ""))
+    if not data:
+        return web.json_response({"ok": False}, status=401)
+    try:
+        await nowpay.process(request.app["bot"], data)
+    except Exception:
+        log.exception("ipn process failed")
+        return web.json_response({"ok": False}, status=500)
+    return web.json_response({"ok": True})
 
 
 @routes.post("/api/deposit/claim")
@@ -510,6 +587,8 @@ async def api_order(request):
     row = await db.order_row(request.query.get("id", ""))
     if not row or row["user_id"] != request["u"]["id"]:
         return ok(status="none")
+    if row["method"] == "usdt" and row["status"] == "pending":
+        return ok(status=await nowpay.sync_order(request.app["bot"], row))
     return ok(status=row["status"])
 
 
@@ -520,13 +599,20 @@ async def api_withdraw(request):
     bd = await body(request)
     coins = to_int(bd.get("coins"))
     gplay = bd.get("method") == "gplay"
+    usdt_wd = bd.get("method") == "usdt"
+    addr = str(bd.get("addr") or "").strip()
     if not u["device_ok"]:
         return err("🔐 Withdraw ke liye pehle device verify karo.")
     if not cooldown(uid, "wd", 8):
         return too_fast()
     if await db.is_blocked(uid):
         return err("🚫 Tum blocked ho. Pehle left channel rejoin karo.")
-    if not u["upi"]:
+    if usdt_wd:
+        if not config.USDT_ON:
+            return err("❌ USDT withdraw abhi available nahi.")
+        if not re.fullmatch(r"0x[a-fA-F0-9]{40}", addr):
+            return err("BEP20 (BSC) wallet address sahi daalo: 0x se shuru, 42 characters.")
+    elif not u["upi"]:
         return err("Pehle Profile me apna UPI ID set karo.")
     if u.get("debt", 0) > 0:
         return err(f"⚠️ Tumne pehle channel leave kiya tha, {u['debt']} coins ka hisaab baaki hai. "
@@ -554,16 +640,20 @@ async def api_withdraw(request):
         mx = u["balance"] * 100 // (100 + pct) // 100 * 100
         return err(f"{coins} coins + {db.wd_fee(coins, pct)} tax = {need} coins chahiye, balance {u['balance']}. "
                    f"Max withdraw: {mx} coins.")
+    usdt_amt = (Decimal(coins) / config.COIN_PER_INR / config.USDT_INR_RATE).quantize(Decimal("0.0001"), ROUND_DOWN) if usdt_wd else None
     r = await db.request_withdraw(uid, coins, pct, pl["level"] if not is_admin_u else 0, pl["wd_hours"],
-                                  None if is_admin_u else pl["wd"], gplay=gplay)
+                                  None if is_admin_u else pl["wd"], gplay=gplay, addr=addr if usdt_wd else None, usdt=usdt_amt)
     if r == "limit":
         return err(f"⚠️ Aaj ke {pl['wd']} withdraw ho chuke. Kal dobara karo.")
     if not r:
         return err("❌ Withdraw nahi ho paya. Balance aur verification check karo.")
     wid, upi, fee, net = r
-    t = asyncio.create_task(_after_withdraw(request.app["bot"], u, wid, coins, fee, net, upi, pl["level"] if not is_admin_u else 0))
+    t = asyncio.create_task(_after_withdraw(request.app["bot"], u, wid, coins, fee, net, upi, pl["level"] if not is_admin_u else 0, usdt_amt))
     _bg.add(t)
     t.add_done_callback(_bg.discard)
+    if usdt_wd:
+        return ok(msg=f"USDT withdraw request #{wid} bhej di gayi. {usdt_amt} USDT (BEP20) → {addr[:8]}…{addr[-6:]} (balance se {coins} + {fee} tax = {coins + fee} coins kate). "
+                      f"Admin bhejega to Transaction ID (TxID) bot me aayegi aur Wallet me bhi dikhegi. {pl['wd_hours']} ghante me process na hua to coins apne aap wapas aa jayenge.")
     if gplay:
         return ok(msg=f"Google Play code request #{wid} bhej di gayi. ₹{net:.2f} ka code (balance se {coins} + {fee} tax = {coins + fee} coins kate). "
                       f"Admin code bhejega to wo bot me aayega aur Wallet → Google Play Codes me bhi dikhega. {pl['wd_hours']} ghante me process na hua to coins apne aap wapas aa jayenge.")
@@ -571,18 +661,19 @@ async def api_withdraw(request):
                   f"Admin approve karega to paisa aa jayega. {pl['wd_hours']} ghante me process na hua to coins apne aap wapas aa jayenge.")
 
 
-async def _after_withdraw(bot, u, wid, coins, fee, net, upi, lvl=0):
+async def _after_withdraw(bot, u, wid, coins, fee, net, upi, lvl=0, usdt=None):
     try:
-        extras.feed(f"💸 <b>Withdraw request</b> [{util.tag(lvl)}] #{wid}: ₹{net:.2f} → <code>{html.escape(upi)}</code>, {coins + fee} coins kate "
+        extras.feed(f"💸 <b>Withdraw request</b> [{util.tag(lvl)}] #{wid}: " + (f"{usdt} USDT" if usdt else f"₹{net:.2f}") + f" → <code>{html.escape(upi)}</code>, {coins + fee} coins kate "
                     f"— {extras.uname(u)}")
         why = ""
         if u["suspect"]:
             why += "\n⚠️ <b>Suspect:</b> iska device fingerprint kisi aur account se match karta hai. Pehle check karo."
         await payouts.alert(bot, f"💸 <b>{util.tag(lvl)}</b> · Withdraw #{wid}\nUser: <code>{u['id']}</code>\n₹{net:.2f} payable "
                                  f"(user se {coins + fee} coins kate = {coins} + {fee} tax)\n"
-                                 + (f"🎁 <b>Google Play redeem code bhejna hai</b>\n<code>/gpcode {wid} CODE</code> ya Admin Panel > Withdraws" if upi == db.GPLAY
+                                 + (f"💵 <b>USDT (BEP20) bhejna hai: {usdt} USDT</b>\nAddress: <code>{html.escape(upi)}</code>\nBhejne ke baad: <code>/txid {wid} TXHASH</code> ya Admin Panel > Withdraws" if usdt
+                                    else f"🎁 <b>Google Play redeem code bhejna hai</b>\n<code>/gpcode {wid} CODE</code> ya Admin Panel > Withdraws" if upi == db.GPLAY
                                     else f"UPI: <code>{html.escape(upi)}</code>") + why,
-                            payouts.admin_kb(wid, upi == db.GPLAY), wid=wid)
+                            payouts.admin_kb(wid, upi == db.GPLAY or bool(usdt)), wid=wid)
     except Exception:
         log.exception("after_withdraw failed for #%s", wid)
 
@@ -600,7 +691,7 @@ def _u_row(r):
 
 def _wd_row(w):
     return {"id": w["id"], "user": w["user_id"], "coins": w["coins"], "fee": w["fee_coins"], "inr": float(w["amount_inr"]),
-            "upi": w["upi"], "gp": w["upi"] == db.GPLAY, "status": w["status"], "level": int(w.get("level") or 0), "at": iso(w["created_at"])}
+            "upi": w["upi"], "gp": w["upi"] == db.GPLAY, "usdt": float(w["usdt"]) if w["method"] == "usdt" else None, "status": w["status"], "level": int(w.get("level") or 0), "at": iso(w["created_at"])}
 
 
 @routes.get("/api/admin/stats")

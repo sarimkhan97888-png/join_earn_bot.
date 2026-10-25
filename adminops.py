@@ -1,5 +1,6 @@
 """Admin ke kaam (bot buttons aur Admin Panel dono yahi use karte hain, ek hi logic)."""
 import html
+import re
 
 from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as M, WebAppInfo
 
@@ -21,7 +22,21 @@ async def wd_act(main, wid, act, code=None):
         msg = "Rejected & refunded"
     elif act == "ok":
         w0 = await db.wd_get(wid)
-        if w0 and w0["upi"] == db.GPLAY:
+        if w0 and w0["method"] == "usdt":
+            m = re.search(r"0x[a-fA-F0-9]{64}", str(code or ""))
+            if not m:
+                return False, "Sahi TxID do (0x se shuru, 66 characters) ya BscScan link"
+            w = await db.wd_pay_tx(wid, m.group(0).lower())
+            if not w:
+                return False, "Already processed"
+            await extras.post_payout(w)
+            extras.feed(f"✅ Withdraw #{wid} <b>USDT paid</b> {w['usdt']} USDT (user <code>{w['user_id']}</code>) tx <code>{w['tx']}</code>")
+            await util.notify(main, w["user_id"],
+                              f"✅ <b>USDT withdraw paid!</b>\nWithdraw #{wid}: <b>{w['usdt']} USDT</b> (BEP20) → <code>{html.escape(w['upi'])}</code>\n"
+                              f"TxID: <code>{w['tx']}</code>\n<a href=\"https://bscscan.com/tx/{w['tx']}\">BscScan par dekho</a>\n"
+                              f"Ye TxID Wallet → History me bhi save hai.")
+            msg = "✅ TxID user ko bhej diya"
+        elif w0 and w0["upi"] == db.GPLAY:
             code = " ".join(str(code or "").split())
             if not 6 <= len(code) <= 100:
                 return False, "Google Play code do (6-100 chars)"

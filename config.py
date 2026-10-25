@@ -97,3 +97,16 @@ FORCE_LINK = os.getenv("FORCE_LINK", "https://t.me/ProfitEarningOfficial").strip
 # Daily streak: roz kam se kam 1 task => Day N par N*STREAK_STEP coins, STREAK_DAYS ke baad reset
 STREAK_STEP = _int("STREAK_STEP", 10)
 STREAK_DAYS = _int("STREAK_DAYS", 7)
+
+# ---- USDT (BEP20) via NOWPayments. Keys sirf Render env me ----
+from decimal import Decimal as _D
+NOWPAY_KEY = os.getenv("NOWPAYMENTS_API_KEY", "").strip()
+NOWPAY_IPN_SECRET = os.getenv("NOWPAYMENTS_IPN_SECRET", "").strip()
+USDT_ON = bool(NOWPAY_KEY)
+USDT_INR_RATE = _D(os.getenv("USDT_INR_RATE", "90") or "90")      # 1 USDT = kitne rupaye
+USDT_FEE_PCT = _D(os.getenv("USDT_FEE_PCT", "0.5") or "0.5")      # deposit/premium par extra (network/service) %
+USDT_MIN = _D(os.getenv("USDT_MIN", "0.10") or "0.10")
+USDT_MAX = _D(os.getenv("USDT_MAX", "10000") or "10000")
+USDT_CCY = os.getenv("USDT_CCY", "usdtbsc").strip()               # BEP20 USDT
+USDT_PRICE_CCY = os.getenv("USDT_PRICE_CCY", "usdtbsc").strip()
+USDT_TTL = _int("USDT_TTL", 3600)
