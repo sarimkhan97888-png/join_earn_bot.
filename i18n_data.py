@@ -259,4 +259,7 @@ _add({
     "🎁 <b>Google Play code ready!</b>\nWithdraw #{}: ₹{}\nCode: <code>{}</code>\nPlay Store → Profile → Payments & subscriptions → Redeem gift code me daalo. Ye code Wallet → Google Play Codes me bhi save hai.": ("🎁 <b>Google Play कोड तैयार!</b>\nविड्रॉ #{}: ₹{}\nकोड: <code>{}</code>\nPlay Store → Profile → Payments & subscriptions → Redeem gift code में डालो। ये कोड वॉलेट → Google Play कोड में भी सेव है।", "🎁 <b>Your Google Play code is ready!</b>\nWithdraw #{}: ₹{}\nCode: <code>{}</code>\nEnter it in Play Store → Profile → Payments & subscriptions → Redeem gift code. This code is also saved under Wallet → Google Play Codes."),
     "Google Play code ₹{} ke multiple me hota hai ({} coins ke multiple me daalo, jaise {}, {}, {}).": ("Google Play कोड ₹{} के मल्टीपल में होता है ({} कॉइन के मल्टीपल में डालो, जैसे {}, {}, {})।", "Google Play codes come in multiples of ₹{} (enter a multiple of {} coins, e.g. {}, {}, {})."),
     "Bot Work banana Premium Level 1 se khulta hai. Premium lo.": ("बॉट वर्क बनाना प्रीमियम लेवल 1 से खुलता है। प्रीमियम लो।", "Creating Bot Work unlocks with Premium Level 1. Get Premium."),
+    "📢 Pehle hamara channel join karo.": ("📢 पहले हमारा चैनल जॉइन करो।", "📢 Please join our channel first."),
+    "✅ Verify ho gaya! Welcome.": ("✅ वेरिफाई हो गया! वेलकम।", "✅ Verified! Welcome."),
+    "❌ Abhi channel join nahi dikha. Join karke thodi der baad Verify dabao.": ("❌ अभी चैनल जॉइन नहीं दिखा। जॉइन करके थोड़ी देर बाद वेरिफाई दबाओ।", "❌ We can't see you in the channel yet. Join it, then tap Verify again in a moment."),
 })

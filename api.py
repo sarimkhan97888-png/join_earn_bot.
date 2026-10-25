@@ -91,7 +91,7 @@ def pub(u):
             "ad_balance": u["ad_balance"], "premium": util.is_prem(u), "premium_until": iso(u["premium_until"]),
             "level": util.level(u), "real_level": util.real_level(u),
             "gmail": u["gmail"], "upi": u["upi"], "device_ok": u["device_ok"],
-            "device_state": u.get("device_state", "ok"), "admin": u["id"] in config.ADMIN_IDS, "debt": u.get("debt", 0), "notify": bool(u.get("notify", True)),
+            "device_state": u.get("device_state", "ok"), "admin": u["id"] in config.ADMIN_IDS, "support": u["id"] in config.SUPPORT_IDS, "debt": u.get("debt", 0), "notify": bool(u.get("notify", True)),
             "lang": u.get("lang") or "en", "lang_set": bool(u.get("lang"))}
 
 
@@ -203,6 +203,31 @@ async def with_device(u, dev, fp):
     return u
 
 
+_fj = {}          # uid -> (member?, time)
+_fj_warn = [-1e9]
+FORCE_OPEN = {"/api/me", "/api/verify", "/api/lang", "/api/force/check"}
+
+
+async def force_ok(bot, uid, fresh=False):
+    """True = force-join channel ka member (ya check band/ho nahi paya: tab user ko rokte nahi). Member 2 min cache, non-member 4 sec."""
+    if not config.FORCE_CHANNEL or uid in config.ADMIN_IDS:
+        return True
+    t = time.monotonic()
+    v = _fj.get(uid)
+    if not fresh and v and t - v[1] < (120 if v[0] else 4):
+        return v[0]
+    st = await util.member_status(bot, config.FORCE_CHANNEL, uid)
+    if st is None:  # bot channel me admin nahi / Telegram error: user ko mat roko, admin ko batao
+        if t - _fj_warn[0] > 3600:
+            _fj_warn[0] = t
+            extras.feed("🚨 Force-join check nahi ho pa raha: bot ko " + html.escape(config.FORCE_CHANNEL) + " me <b>Admin</b> banao. Tab tak sabko andar jaane de raha hu.")
+        return True
+    if len(_fj) > 100000:
+        _fj.clear()
+    _fj[uid] = (st, t)
+    return st
+
+
 @web.middleware
 async def auth_mw(request, handler):
     if not request.path.startswith("/api/"):
@@ -223,6 +248,11 @@ async def auth_mw(request, handler):
         if not u["device_ok"] and u["id"] not in config.ADMIN_IDS and request.path not in OPEN_PATHS:
             return web.json_response({"ok": False, "code": "need_verify",
                                       "msg": i18n.tr("🔐 Pehle device verify karo.")})
+        need_join = not await force_ok(request.app["bot"], u["id"])
+        if need_join and request.path not in FORCE_OPEN:
+            return web.json_response({"ok": False, "code": "need_join", "link": config.FORCE_LINK,
+                                      "msg": i18n.tr("📢 Pehle hamara channel join karo.")})
+        u["need_join"] = need_join
         request["u"] = u
         request["tg"] = user
         return await handler(request)
@@ -238,6 +268,16 @@ def client_ip(request):
     return (xf.split(",")[0].strip() if xf else (request.remote or ""))[:64]
 
 
+@routes.post("/api/force/check")
+async def api_force_check(request):
+    u = request["u"]
+    if not cooldown(u["id"], "force", 2):
+        return too_fast()
+    if await force_ok(request.app["bot"], u["id"], fresh=True):
+        return ok(joined=True, msg="✅ Verify ho gaya! Welcome.")
+    return err("❌ Abhi channel join nahi dikha. Join karke thodi der baad Verify dabao.")
+
+
 # ---------------- me / home ----------------
 @routes.get("/api/me")
 async def api_me(request):
@@ -247,6 +287,7 @@ async def api_me(request):
     blocked = [{"chat_id": r["chat_id"], "title": r["title"], "link": r["link"]} for r in left]
     hist = [{"kind": r["kind"], "amount": r["amount"], "at": iso(r["created_at"])} for r in led]
     me = pub(u)
+    me.update(need_join=bool(u.get("need_join")), join_link=config.FORCE_LINK)
     me.update(tasks_today=tdone, wd_today=wdone, queued=[{"level": r["level"], "days": r["days"]} for r in queued])
     return ok(me=me, blocked=blocked, history=hist, cfg=cfg(request))
 
@@ -663,6 +704,11 @@ def is_admin(request):
     return request["u"]["id"] in config.ADMIN_IDS
 
 
+def is_support(request):
+    """Support inbox: admin ya support agent."""
+    return request["u"]["id"] in config.ADMIN_IDS or request["u"]["id"] in config.SUPPORT_IDS
+
+
 def sniff_mime(b):
     if b[:4] == b"\x1a\x45\xdf\xa3":
         return "audio/webm"
@@ -727,7 +773,7 @@ async def api_support(request):
 @routes.get("/api/support/photo")
 async def api_support_photo(request):
     row = await db.sup_file(to_int(request.query.get("id")))
-    if not row or (row["user_id"] != request["u"]["id"] and not is_admin(request)):
+    if not row or (row["user_id"] != request["u"]["id"] and not is_support(request)):
         return web.Response(status=404, text="gone")
     data = bytes(row["data"])
     return web.Response(body=data, content_type=sniff_mime(data), headers={"Cache-Control": "private, max-age=86400"})
@@ -759,7 +805,7 @@ async def api_support_send(request):
         tg = request["tg"]
         name = f"@{tg['username']}" if tg.get("username") else (tg.get("first_name") or str(uid))
         kb = M([[B("💬 Open chat", web_app=WebAppInfo(url=f"{config.BASE_URL}/app?support={uid}"))]])
-        for a in config.ADMIN_IDS:
+        for a in dict.fromkeys(list(config.ADMIN_IDS) + list(config.SUPPORT_IDS)):
             try:
                 m = await request.app["bot"].send_message(
                     a, f"🎧 <b>Naya support message</b> [{util.tag(util.real_level(request['u']))}]\nFrom: {html.escape(name)} (<code>{uid}</code>)\n"
@@ -772,7 +818,7 @@ async def api_support_send(request):
 
 @routes.get("/api/admin/support")
 async def api_admin_threads(request):
-    if not is_admin(request):
+    if not is_support(request):
         return err("Not allowed")
     rows = await db.sup_threads()
     return ok(threads=[{"uid": r["user_id"], "name": ("@" + r["username"]) if r["username"] else (r["first_name"] or str(r["user_id"])),
@@ -781,7 +827,7 @@ async def api_admin_threads(request):
 
 @routes.get("/api/admin/support/chat")
 async def api_admin_chat(request):
-    if not is_admin(request):
+    if not is_support(request):
         return err("Not allowed")
     uid = to_int(request.query.get("uid"))
     u = await db.get_user(uid)
@@ -793,7 +839,7 @@ async def api_admin_chat(request):
 
 @routes.post("/api/admin/support/reply")
 async def api_admin_reply(request):
-    if not is_admin(request):
+    if not is_support(request):
         return err("Not allowed")
     fields, photo, voice = await read_text_photo(request)
     if fields is None:

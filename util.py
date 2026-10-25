@@ -52,7 +52,7 @@ def level(u):
     """0 = free, 1..3 = premium level. Admin hamesha top level."""
     if not u:
         return 0
-    if u["id"] in config.ADMIN_IDS:
+    if u["id"] in config.ADMIN_IDS or u["id"] in config.SUPPORT_IDS:
         return max(config.PLANS)
     return real_level(u)
 

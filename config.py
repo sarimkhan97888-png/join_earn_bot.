@@ -23,6 +23,8 @@ ADMIN_FEED = _int("ADMIN_FEED", 1)  # 1 = main bot par har event ki khabar admin
 LEDGER_KEEP = 10            # har user ki transaction history me itni hi entries rakhte hain
 SUPPORT_KEEP_HOURS = 24     # support text/photo/voice itne ghante baad delete
 ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()]
+# Support agents: sirf Support inbox + support notifications + Premium Level 3 perks (withdraw/deposit/admin panel nahi)
+SUPPORT_IDS = [int(x) for x in os.getenv("SUPPORT_IDS", "").split(",") if x.strip().lstrip("-").isdigit() and int(x) not in ADMIN_IDS]
 SUPPORT_URL = os.getenv("SUPPORT_URL", "https://t.me/telegram")
 
 # Deposit: FamPay UPI + Gmail IMAP se mail padhke auto-confirm (fam.py)
@@ -85,3 +87,9 @@ GPLAY_STEP_INR = _int("GPLAY_STEP_INR", 10)
 # Free user roz itne channel task bana sakta hai (Bot Work Premium Level 1+ se)
 FREE_TASKS_DAILY = _int("FREE_TASKS_DAILY", 2)
 FREE_TASK_MEMBERS = _int("FREE_TASK_MEMBERS", 10)   # free user ek task me max itne members
+
+# Force join: app kholne se pehle ye channel join hona zaroori (bot is channel ka ADMIN ho). "off" likho to band.
+FORCE_CHANNEL = os.getenv("FORCE_CHANNEL", "@ProfitEarningOfficial").strip()
+if FORCE_CHANNEL.lower() in ("off", "none", "0", "false"):
+    FORCE_CHANNEL = ""
+FORCE_LINK = os.getenv("FORCE_LINK", "https://t.me/ProfitEarningOfficial").strip()
