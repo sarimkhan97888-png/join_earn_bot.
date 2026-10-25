@@ -44,7 +44,8 @@ MAX_CLAIMS_PER_HOUR = 5
 # Economy
 COIN_PER_INR = 100          # 100 coin = Rs 1
 JOIN_REWARD = 50            # joiner ko per channel join
-AD_COST = 110               # advertiser ko per member (10 coin = platform fee)
+AD_COST = 60                # advertiser ka MINIMUM per-member price (isse zyada kuch bhi rakh sakta hai)
+TASK_FEE = 10               # har join par platform fee: joiner ko price - TASK_FEE milta hai
 REFER_REWARD = 100          # refer complete (dost ka pehla withdraw paid) par referrer ko
 MIN_TASK_MEMBERS = 10
 MAX_TASK_MEMBERS = 100000
@@ -58,9 +59,9 @@ MAX_DEVICE_CHANGES = 3     # device badalne par re-verify kitni baar allowed
 # Premium levels. None = unlimited. fee None = normal WITHDRAW_TAX_PERCENT. wd_hours = pending withdraw itne ghante me admin ne
 # na kiya to expire+refund (kam = tez). tasks = roz kitne task (channel+group+bot work milake) bana sakte hain. ref = refer reward.
 PLANS = {
-    1: dict(price=19, days=7, tasks=2, wd=2, fee=None, wd_hours=24, ref=100, top=False),
-    2: dict(price=39, days=15, tasks=5, wd=5, fee=None, wd_hours=12, ref=100, top=False),
-    3: dict(price=69, days=30, tasks=None, wd=None, fee=0, wd_hours=5, ref=200, top=True),
+    1: dict(members=50, price=19, days=7, tasks=2, wd=2, fee=None, wd_hours=24, ref=100, top=False),
+    2: dict(members=100, price=39, days=15, tasks=5, wd=5, fee=None, wd_hours=12, ref=100, top=False),
+    3: dict(members=None, price=69, days=30, tasks=None, wd=None, fee=0, wd_hours=5, ref=200, top=True),
 }
 TOP_LEVEL = 3               # is level ke users ke task list me sabse upar dikhte hain
 
@@ -80,3 +81,7 @@ BW_MAX_ATTEMPTS = _int("BW_MAX_ATTEMPTS", 2)  # bot work me ek worker ke kitne t
 
 # Google Play redeem code withdraw: ₹10 ke multiple (unlimited), tax upar se
 GPLAY_STEP_INR = _int("GPLAY_STEP_INR", 10)
+
+# Free user roz itne channel task bana sakta hai (Bot Work Premium Level 1+ se)
+FREE_TASKS_DAILY = _int("FREE_TASKS_DAILY", 2)
+FREE_TASK_MEMBERS = _int("FREE_TASK_MEMBERS", 10)   # free user ek task me max itne members

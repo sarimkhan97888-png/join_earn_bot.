@@ -98,11 +98,11 @@ def pub(u):
 def plans_json():
     return [{"level": k, "price": p["price"], "days": p["days"], "tasks": p["tasks"], "wd": p["wd"],
              "fee": config.WITHDRAW_TAX_PERCENT if p["fee"] is None else p["fee"], "wd_hours": p["wd_hours"],
-             "ref": p["ref"], "top": p["top"]} for k, p in sorted(config.PLANS.items())]
+             "ref": p["ref"], "top": p["top"], "members": p.get("members")} for k, p in sorted(config.PLANS.items())]
 
 
 def cfg(request):
-    return {"coin_per_inr": config.COIN_PER_INR, "join_reward": config.JOIN_REWARD, "ad_cost": config.AD_COST,
+    return {"coin_per_inr": config.COIN_PER_INR, "join_reward": config.JOIN_REWARD, "ad_cost": config.AD_COST, "task_fee": config.TASK_FEE, "max_members": (None if request["u"]["id"] in config.ADMIN_IDS else util.plan(request["u"])["members"]),
             "min_task_members": config.MIN_TASK_MEMBERS, "max_task_members": config.MAX_TASK_MEMBERS,
             "min_deposit": config.MIN_DEPOSIT_COINS, "min_withdraw": config.MIN_WITHDRAW_COINS, "gplay_step": config.GPLAY_STEP_INR * config.COIN_PER_INR,
             "hold_hours": config.HOLD_HOURS, "plans": plans_json(),
@@ -112,7 +112,7 @@ def cfg(request):
             "withdraw_tax": util.plan(request["u"])["fee"], "wd_hours": util.plan(request["u"])["wd_hours"],
             "wd_daily": None if request["u"]["id"] in config.ADMIN_IDS else util.plan(request["u"])["wd"],
             "tasks_daily": None if request["u"]["id"] in config.ADMIN_IDS else util.plan(request["u"])["tasks"],
-            "free_wd_hours": config.WITHDRAW_EXPIRE_HOURS, "free_wd": 1, "payout_link": config.PAYOUT_CHANNEL_LINK, "app_name": config.APP_NAME,
+            "free_wd_hours": config.WITHDRAW_EXPIRE_HOURS, "free_wd": 1, "free_tasks": config.FREE_TASKS_DAILY, "free_members": config.FREE_TASK_MEMBERS, "payout_link": config.PAYOUT_CHANNEL_LINK, "app_name": config.APP_NAME,
             "refer_reward": util.plan(request["u"])["ref"], "min_tasks": config.MIN_TASKS_FOR_WITHDRAW, "min_ref_tasks": config.MIN_TASKS_FOR_REFER, "order_expiry_min": config.ORDER_EXPIRY_MIN,
             "upi_id": config.FAM_UPI_ID, "max_deposit": config.MAX_DEPOSIT_COINS, "fam_ttl": config.FAM_TTL}
 
@@ -256,7 +256,7 @@ async def api_me(request):
 async def api_tasks(request):
     uid = request["u"]["id"]
     ot, bo, bm = await asyncio.gather(db.open_tasks(uid), db.bw_open(uid), db.bw_mine(uid))
-    ch = [{"id": t["id"], "title": t["title"], "link": t["link"], "reward": config.JOIN_REWARD} for t in ot]
+    ch = [{"id": t["id"], "title": t["title"], "link": t["link"], "reward": t["reward"]} for t in ot]
     bw = [{"id": b["id"], "title": b["title"], "link": b["link"], "reward": b["reward"],
            "instructions": b["instructions"], "needs_dev": b["needs_dev"],
            "retry": b["my_attempts"] > 0, "my_reason": b["my_reason"]} for b in bo]
@@ -291,7 +291,7 @@ async def api_check(request):
     res = await db.claim(tid, uid)
     if res == "ok":
         extras.feed(f"✅ Task #{tid} join verified — {extras.uname(request['u'])}")
-        return ok(msg=f"Join verified! +{config.JOIN_REWARD} coins ({config.HOLD_HOURS}h hold me)")
+        return ok(msg=f"Join verified! +{t['reward']} coins ({config.HOLD_HOURS}h hold me)")
     return err({"dup": "Ye task tum pehle kar chuke ho.", "own": "Apne channel se coin nahi mil sakta.",
                 "closed": "Task full ho gaya."}[res])
 
@@ -941,8 +941,6 @@ async def task_limit_err(u):
     if u["id"] in config.ADMIN_IDS:
         return None
     pl = util.plan(u)
-    if pl["level"] == 0:
-        return "Pehle Premium lo."
     if pl["tasks"] is not None and await db.created_today(u["id"]) >= pl["tasks"]:
         if pl["level"] < max(config.PLANS):
             return f"Aaj ki task limit ({pl['tasks']}) poori ho gayi. Level upgrade karo ya kal dobara banao."
@@ -952,8 +950,6 @@ async def task_limit_err(u):
 
 @routes.post("/api/task/preview")
 async def api_task_preview(request):
-    if not util.is_prem(request["u"]):
-        return err("Pehle Premium lo.")
     r = await resolve_chat(request, (await body(request)).get("chat"), False)
     if isinstance(r, str):
         return err(r)
@@ -964,27 +960,31 @@ async def api_task_preview(request):
 async def api_task_create(request):
     u = request["u"]
     d = await body(request)
-    if not util.is_prem(u):
-        return err("Pehle Premium lo.")
     e = await task_limit_err(u)
     if e:
         return err(e)
     n = to_int(d.get("count"))
+    admin = u["id"] in config.ADMIN_IDS  # admin ke liye task free (coins nahi katte)
+    cap = config.MAX_TASK_MEMBERS if admin else (util.plan(u)["members"] or config.MAX_TASK_MEMBERS)
     if not (config.MIN_TASK_MEMBERS <= n <= config.MAX_TASK_MEMBERS):
         return err(f"Members {config.MIN_TASK_MEMBERS} se {config.MAX_TASK_MEMBERS} ke beech rakho.")
-    cost = n * config.AD_COST
-    admin = u["id"] in config.ADMIN_IDS  # admin ke liye task free (coins nahi katte)
+    if n > cap:
+        return err(f"Tumhare level me ek task me max {cap} members. Zyada ke liye Premium upgrade karo.")
+    price = to_int(d.get("price")) or config.AD_COST
+    if price < config.AD_COST or price > 100000:
+        return err(f"Per member price kam se kam {config.AD_COST} coins rakho.")
+    cost = n * price
     if not admin and u["ad_balance"] < cost:
         return err(f"Coins kam hain. Chahiye {cost}, ad balance {u['ad_balance']}. Wallet se deposit karo.")
     r = await resolve_chat(request, d.get("chat"), True)
     if isinstance(r, str):
         return err(r)
-    tid = await db.create_task(u["id"], r["chat_id"], r["title"], r["link"], n, free=admin)
+    tid = await db.create_task(u["id"], r["chat_id"], r["title"], r["link"], n, free=admin, price=price)
     if not tid:
         return err("Ad balance kam hai. Pehle deposit karo.")
     extras.feed(f"📢 <b>Naya channel task</b> #{tid}: {html.escape(r['title'] or '')} — {n} members, by {extras.uname(u)}")
     asyncio.create_task(util.notify(request.app["bot"], u["id"], f"✅ Tumhara task #{tid} live ho gaya: {html.escape(r['title'] or '')} ({n} members)."))
-    return ok(msg=f"Task #{tid} live ho gaya! {r['title']} ke liye {n} members.")
+    return ok(msg=f"Task #{tid} live ho gaya! {r['title']} ke liye {n} members. Har joiner ko {price - config.TASK_FEE} coins milenge.")
 
 
 @routes.post("/api/notify")
@@ -1015,7 +1015,7 @@ async def api_bw_create(request):
     u = request["u"]
     d = await body(request)
     if not util.is_prem(u):
-        return err("Pehle Premium lo.")
+        return err("Bot Work banana Premium Level 1 se khulta hai. Premium lo.")
     e = await task_limit_err(u)
     if e:
         return err(e)

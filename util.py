@@ -58,11 +58,11 @@ def level(u):
 
 
 def plan_of(lvl):
-    """Is level ke limits/fees. Free ke liye bhi poora dict (tasks 0 = task create nahi)."""
+    """Is level ke limits/fees. Free ke liye bhi poora dict (free: roz FREE_TASKS_DAILY channel task, bot work nahi)."""
     if lvl in config.PLANS:
         p = dict(config.PLANS[lvl])
     else:
-        p = dict(price=0, days=0, tasks=0, wd=1, fee=None, wd_hours=config.WITHDRAW_EXPIRE_HOURS, ref=config.REFER_REWARD, top=False)
+        p = dict(members=config.FREE_TASK_MEMBERS, price=0, days=0, tasks=config.FREE_TASKS_DAILY, wd=1, fee=None, wd_hours=config.WITHDRAW_EXPIRE_HOURS, ref=config.REFER_REWARD, top=False)
     if p["fee"] is None:
         p["fee"] = config.WITHDRAW_TAX_PERCENT
     p["level"] = lvl

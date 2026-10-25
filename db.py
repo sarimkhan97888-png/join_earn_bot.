@@ -27,6 +27,8 @@ CREATE TABLE IF NOT EXISTS tasks(
   title TEXT, link TEXT, target INT NOT NULL, joined INT NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'active', created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS cost_per INT NOT NULL DEFAULT 110;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS reward INT NOT NULL DEFAULT 50;
 CREATE TABLE IF NOT EXISTS completions(
   id SERIAL PRIMARY KEY, task_id INT REFERENCES tasks(id), user_id BIGINT NOT NULL,
   chat_id BIGINT NOT NULL, reward INT NOT NULL, status TEXT NOT NULL DEFAULT 'hold',
@@ -278,9 +280,11 @@ async def set_upi(uid, upi):
 
 
 # ---------- tasks ----------
-async def create_task(owner, chat_id, title, link, target, free=False):
-    """free=True (sirf admin): ad balance se coin nahi katta, aur cancel par refund bhi nahi milta."""
-    cost = target * config.AD_COST
+async def create_task(owner, chat_id, title, link, target, free=False, price=None):
+    """price = advertiser ka per-member price (min AD_COST); joiner ko price - TASK_FEE milta hai.
+    free=True (sirf admin): ad balance se coin nahi katta, aur cancel par refund bhi nahi milta."""
+    price = max(int(price or config.AD_COST), config.AD_COST)
+    cost = target * price
     async with pool.acquire() as c, c.transaction():
         if not free:
             ok = await c.fetchval(
@@ -288,8 +292,8 @@ async def create_task(owner, chat_id, title, link, target, free=False):
             if not ok:
                 return None
         tid = await c.fetchval(
-            "INSERT INTO tasks(owner_id,chat_id,title,link,target,free) VALUES($1,$2,$3,$4,$5,$6) RETURNING id",
-            owner, chat_id, title, link, target, free)
+            "INSERT INTO tasks(owner_id,chat_id,title,link,target,free,cost_per,reward) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id",
+            owner, chat_id, title, link, target, free, price, price - config.TASK_FEE)
         if not free:
             await led(c, owner, "task_escrow", -cost, tid)
         return tid
@@ -300,7 +304,7 @@ async def cancel_task(tid, owner):
         t = await c.fetchrow("SELECT * FROM tasks WHERE id=$1 AND owner_id=$2 FOR UPDATE", tid, owner)
         if not t or t["status"] != "active":
             return None
-        refund = 0 if t["free"] else (t["target"] - t["joined"]) * config.AD_COST
+        refund = 0 if t["free"] else (t["target"] - t["joined"]) * t["cost_per"]
         await c.execute("UPDATE tasks SET status='cancelled' WHERE id=$1", tid)
         if refund:
             await c.execute("UPDATE users SET ad_balance=ad_balance+$1 WHERE id=$2", refund, owner)
@@ -336,16 +340,16 @@ async def claim(task_id, uid):
             """INSERT INTO completions(task_id,user_id,chat_id,reward,release_at)
                VALUES($1,$2,$3,$4, now() + make_interval(hours => $5))
                ON CONFLICT(chat_id,user_id) DO NOTHING RETURNING id""",
-            task_id, uid, t["chat_id"], config.JOIN_REWARD, config.HOLD_HOURS)
+            task_id, uid, t["chat_id"], t["reward"], config.HOLD_HOURS)
         if cid is None:
             return "dup"
         new_joined = t["joined"] + 1
         await c.execute("UPDATE tasks SET joined=$1, status=$2 WHERE id=$3",
                         new_joined, "done" if new_joined >= t["target"] else "active", task_id)
-        await c.execute("UPDATE users SET hold=hold+$1 WHERE id=$2", config.JOIN_REWARD, uid)
-        await led(c, uid, "hold", config.JOIN_REWARD, cid)
+        await c.execute("UPDATE users SET hold=hold+$1 WHERE id=$2", t["reward"], uid)
+        await led(c, uid, "hold", t["reward"], cid)
         if not t["free"]:
-            await led(c, 0, "fee", config.AD_COST - config.JOIN_REWARD, cid)
+            await led(c, 0, "fee", t["cost_per"] - t["reward"], cid)
         return "ok"
 
 
@@ -1354,7 +1358,7 @@ async def sup_notif_pop(uid):
 async def bc_enqueue():
     """Naye (notified=false) tasks / bot works ko EK broadcast me jodo. Return broadcast id ya None."""
     async with pool.acquire() as c, c.transaction():
-        t = await c.fetch("UPDATE tasks SET notified=TRUE WHERE NOT notified RETURNING id, title, status")
+        t = await c.fetch("UPDATE tasks SET notified=TRUE WHERE NOT notified RETURNING id, title, status, reward")
         b = await c.fetch("UPDATE botworks SET notified=TRUE WHERE NOT notified RETURNING id, title, reward, status")
         t = [x for x in t if x["status"] == "active"]
         b = [x for x in b if x["status"] == "active"]
@@ -1363,7 +1367,7 @@ async def bc_enqueue():
         parts = []
         if t:
             parts.append(f"📢 <b>{len(t)} naya channel task</b>: join karo aur coins kamao!" if len(t) > 1 else
-                         f"📢 <b>Naya channel task</b>: {_esc(t[0]['title'])}\nJoin karo, {config.JOIN_REWARD} coins kamao!")
+                         f"📢 <b>Naya channel task</b>: {_esc(t[0]['title'])}\nJoin karo, {t[0]['reward']} coins kamao!")
         if b:
             parts.append(f"🤖 <b>{len(b)} naya Bot Work</b> add hua!" if len(b) > 1 else
                          f"🤖 <b>Naya Bot Work</b>: {_esc(b[0]['title'])}\nReward: {b[0]['reward']} coins")
