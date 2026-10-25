@@ -271,6 +271,36 @@ def client_ip(request):
     return (xf.split(",")[0].strip() if xf else (request.remote or ""))[:64]
 
 
+@routes.get("/api/news")
+async def api_news(request):
+    rows = await db.news_list()
+    await db.news_mark_seen(request["u"]["id"])
+    return ok(items=[{"id": r["id"], "text": r["text"], "photo": r["has_photo"], "at": iso(r["created_at"])} for r in rows])
+
+
+_news_img = {}
+
+
+@routes.get("/news/photo/{nid}")
+async def news_photo(request):
+    """Broadcast ki photo (Telegram se laake cache). Public: announcement sabke liye hai."""
+    nid = to_int(request.match_info["nid"])
+    data = _news_img.get(nid)
+    if data is None:
+        fid = await db.news_photo(nid)
+        if not fid:
+            raise web.HTTPNotFound()
+        try:
+            f = await request.app["bot"].get_file(fid)
+            data = bytes(await f.download_as_bytearray())
+        except TelegramError:
+            raise web.HTTPNotFound()
+        if len(_news_img) > 30:
+            _news_img.clear()
+        _news_img[nid] = data
+    return web.Response(body=data, content_type="image/jpeg", headers={"Cache-Control": "public, max-age=86400"})
+
+
 @routes.post("/api/streak/seen")
 async def api_streak_seen(request):
     await db.streak_seen(request["u"]["id"])
@@ -297,6 +327,7 @@ async def api_me(request):
     hist = [{"kind": r["kind"], "amount": r["amount"], "at": iso(r["created_at"])} for r in led]
     me = pub(u)
     me["streak"] = await db.streak_info(u["id"])
+    me["news_unread"] = int(await db.news_unread(u["id"]) or 0)
     me.update(need_join=bool(u.get("need_join")), join_link=config.FORCE_LINK)
     me.update(tasks_today=tdone, wd_today=wdone, queued=[{"level": r["level"], "days": r["days"]} for r in queued])
     return ok(me=me, blocked=blocked, history=hist, cfg=cfg(request))
@@ -770,6 +801,8 @@ async def api_adm_dep_act(request):
     k, bot = str(d.get("kind")), request.app["bot"]
     if k in ("claim_ok", "claim_no"):
         good, msg = await adminops.claim_act(bot, to_int(d.get("id")), k == "claim_ok")
+    elif k == "ignore":
+        good, msg = await adminops.ignore_pay(str(d.get("txn") or "").upper())
     elif k == "assign":
         good, msg = await adminops.assign(bot, str(d.get("txn") or "").upper(), to_int(d.get("uid")))
     else:

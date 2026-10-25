@@ -179,6 +179,8 @@ ALTER TABLE botworks ALTER COLUMN notified SET DEFAULT FALSE;
 CREATE TABLE IF NOT EXISTS bcast(
   id BIGSERIAL PRIMARY KEY, kind TEXT NOT NULL, text TEXT NOT NULL, last_uid BIGINT NOT NULL DEFAULT 0,
   sent INT NOT NULL DEFAULT 0, done BOOLEAN NOT NULL DEFAULT FALSE, created_at TIMESTAMPTZ NOT NULL DEFAULT now());
+ALTER TABLE bcast ADD COLUMN IF NOT EXISTS photo TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS news_seen BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE support_notifs ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();
 CREATE TABLE IF NOT EXISTS support_files(msg_id BIGINT PRIMARY KEY, data BYTEA NOT NULL);
 CREATE TABLE IF NOT EXISTS support_threads(
@@ -1465,6 +1467,37 @@ async def bc_enqueue():
             parts.append(f"🤖 <b>{len(b)} naya Bot Work</b> add hua!" if len(b) > 1 else
                          f"🤖 <b>Naya Bot Work</b>: {_esc(b[0]['title'])}\nReward: {b[0]['reward']} coins")
         return await c.fetchval("INSERT INTO bcast(kind,text) VALUES('task',$1) RETURNING id", "\n\n".join(parts) + "\n\n👇 App kholo")
+
+
+async def news_add(text, photo=None):
+    """Admin announcement: sab users ko DM (queue) + app ke Notifications page me. Return (id, users_count)."""
+    nid = await pool.fetchval("INSERT INTO bcast(kind,text,photo) VALUES('news',$1,$2) RETURNING id", text, photo)
+    n = await pool.fetchval("SELECT count(*) FROM users WHERE notify AND NOT banned")
+    return nid, n
+
+
+async def news_list(limit=30):
+    return await pool.fetch(
+        "SELECT id, text, (photo IS NOT NULL) AS has_photo, created_at FROM bcast WHERE kind='news' ORDER BY id DESC LIMIT $1", limit)
+
+
+async def news_photo(nid):
+    return await pool.fetchval("SELECT photo FROM bcast WHERE id=$1 AND kind='news'", nid)
+
+
+async def news_unread(uid):
+    return await pool.fetchval(
+        "SELECT count(*) FROM bcast WHERE kind='news' AND created_at > now() - interval '30 days' "
+        "AND id > (SELECT news_seen FROM users WHERE id=$1)", uid)
+
+
+async def news_mark_seen(uid):
+    await pool.execute("UPDATE users SET news_seen=COALESCE((SELECT max(id) FROM bcast WHERE kind='news'),0) WHERE id=$1", uid)
+
+
+async def fam_ignore(txn):
+    """Admin: unmatched payment 'mera apna paisa' - list se hata do (credit nahi hota)."""
+    return await pool.fetchrow("UPDATE fam_payments SET status='ignored' WHERE txn_id=$1 AND status='unmatched' RETURNING *", txn)
 
 
 def _esc(x):

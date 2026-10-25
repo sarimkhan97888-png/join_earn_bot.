@@ -259,6 +259,32 @@ async def on_admin_claim(update: Update, ctx):
         pass
 
 
+async def on_ignore(update: Update, ctx):
+    q = update.callback_query
+    if q.from_user.id not in config.ADMIN_IDS:
+        return await q.answer("Not allowed", show_alert=True)
+    _, msg = await adminops.ignore_pay(q.data.split(":", 1)[1])
+    try:
+        await q.answer(msg, show_alert=True)
+        await q.message.delete()
+    except TelegramError:
+        pass
+
+
+async def bc_cmd(update: Update, ctx):
+    """Admin: /bc <text> ya photo bhejo jiske caption me /bc <text>. Sab users ko jata hai + app ke Notifications page me dikhta hai."""
+    m = update.effective_message
+    if update.effective_user.id not in config.ADMIN_IDS or not m:
+        return
+    raw = (m.caption_html if m.photo else m.text_html) or ""
+    text = re.sub(r"^/bc(@\w+)?\s*", "", raw.strip()).strip()
+    photo = m.photo[-1].file_id if m.photo else None
+    if not text and not photo:
+        return await m.reply_text("Usage: <code>/bc aapka message</code>\nPhoto ke saath: photo bhejo aur caption me <code>/bc message</code> likho.", parse_mode="HTML")
+    nid, n = await db.news_add(text, photo)
+    await m.reply_text(f"✅ Broadcast #{nid} queue me hai. ~{n} users ko jayega (thoda time lagta hai) aur app ke 🔔 Notifications me dikhega.")
+
+
 async def gpcode_cmd(update: Update, ctx):
     """/gpcode <id> <code> (Google Play) ya /txid <id> <TxHash> (USDT): user ko bhejo, withdraw paid ho jata hai."""
     if update.effective_user.id not in config.ADMIN_IDS:
@@ -505,6 +531,7 @@ def register_backup(app):
     app.add_handler(CommandHandler("pending", pending_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CallbackQueryHandler(on_admin_wd, pattern=r"^adm_"))
     app.add_handler(CallbackQueryHandler(on_admin_claim, pattern=r"^clm_"))
+    app.add_handler(CallbackQueryHandler(on_ignore, pattern=r"^ign:"))
     app.add_handler(CommandHandler("assign", assign_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("gpcode", gpcode_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("txid", gpcode_cmd, filters=filters.ChatType.PRIVATE))
@@ -529,6 +556,9 @@ def register(app):
     app.add_handler(CommandHandler(["ban", "unban"], ban_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CallbackQueryHandler(on_admin_wd, pattern=r"^adm_"))
     app.add_handler(CallbackQueryHandler(on_admin_claim, pattern=r"^clm_"))
+    app.add_handler(CallbackQueryHandler(on_ignore, pattern=r"^ign:"))
+    app.add_handler(CommandHandler("bc", bc_cmd, filters=filters.ChatType.PRIVATE))
+    app.add_handler(MessageHandler(filters.PHOTO & filters.CaptionRegex(r"^/bc") & filters.ChatType.PRIVATE, bc_cmd))
     app.add_handler(CommandHandler("assign", assign_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("gpcode", gpcode_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("txid", gpcode_cmd, filters=filters.ChatType.PRIVATE))

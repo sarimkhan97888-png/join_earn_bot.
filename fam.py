@@ -10,6 +10,8 @@ Safety:
 import asyncio
 import email
 import html
+
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 import imaplib
 import logging
 import re
@@ -197,8 +199,11 @@ async def handle_raw(raw):
             await util.notify(bot, res["claim_user"], f"✅ <b>Deposit successful!</b>\n+{res['claim_coins']} coins ad balance me add ho gaye.")
         extras.feed(f"💰 Claim auto-credit {rupees} (user <code>{res['claim_user']}</code>)")
     elif res["unmatched"]:
-        extras.feed(f"❓ <b>Unmatched payment</b> {rupees} from {html.escape(p['sender'])} txn <code>{p['txn']}</code> "
-                    f"— Admin Panel > Deposits se user ko assign karo.")
+        if bot:
+            kb = InlineKeyboardMarkup([[InlineKeyboardButton("🙈 Ignore (mera paisa)", callback_data=f"ign:{p['txn']}")]])
+            for a in config.ADMIN_IDS:
+                await util.notify(bot, a, f"❓ <b>Unmatched payment</b> {rupees}\nFrom: {html.escape(p['sender'])}\nTxn: <code>{p['txn']}</code>\n\n"
+                                          f"Kisi user ka deposit hai to <code>/assign {p['txn']} USER_ID</code>. Tumhara apna paisa hai to Ignore dabao.", reply_markup=kb)
     if res["gap"]:
         extras.feed(f"⚠️ Fam balance mismatch: expected ₹{res['gap'][0] / 100:.2f}, mail me ₹{res['gap'][1] / 100:.2f}. "
                     f"Koi mail miss hui ya Fam se paise kharch hue.")

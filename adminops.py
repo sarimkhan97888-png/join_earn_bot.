@@ -103,6 +103,14 @@ async def assign(main, txn, uid):
     return True, f"✅ ₹{pay['pay_paise'] / 100:.2f} → user {uid} ke ad balance me."
 
 
+async def ignore_pay(txn):
+    pay = await db.fam_ignore(txn)
+    if not pay:
+        return False, "Already processed / txn nahi mila"
+    extras.feed(f"🙈 Unmatched ₹{pay['pay_paise'] / 100:.2f} ignore kiya (txn <code>{txn}</code>)")
+    return True, f"🙈 ₹{pay['pay_paise'] / 100:.2f} ignore ho gaya (list se hat gaya)"
+
+
 async def user_act(main, uid, act, amount=0):
     """ban | unban | resetdev | addbal | addad. Admin accounts par ban/reset nahi."""
     if act in ("ban", "unban"):

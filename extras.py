@@ -39,7 +39,14 @@ async def job_bcast(ctx):
             return
         for r in users:
             try:
-                await ctx.bot.send_message(r["id"], i18n.tr(b["text"], r["lang"] or "en"), parse_mode="HTML", disable_notification=False)
+                txt = i18n.tr(b["text"], r["lang"] or "en")
+                if b["photo"]:
+                    short = len(txt) <= 1000
+                    await ctx.bot.send_photo(r["id"], b["photo"], caption=txt if short else None, parse_mode="HTML")
+                    if not short:
+                        await ctx.bot.send_message(r["id"], txt, parse_mode="HTML")
+                else:
+                    await ctx.bot.send_message(r["id"], txt, parse_mode="HTML", disable_notification=False)
                 sent += 1
             except Forbidden:
                 await db.set_notify(r["id"], False)  # bot block kiya: dobara try nahi
