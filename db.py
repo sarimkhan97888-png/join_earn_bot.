@@ -75,6 +75,9 @@ ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS tx TEXT;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS usdt NUMERIC(18,6);
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS pay_amount NUMERIC(18,6);
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS pay_address TEXT;
+CREATE TABLE IF NOT EXISTS usdt_txs(
+  tx TEXT NOT NULL, idx INT NOT NULL, amount NUMERIC(18,6) NOT NULL, sender TEXT, block BIGINT, status TEXT NOT NULL DEFAULT 'unmatched',
+  order_id TEXT, user_id BIGINT, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY(tx, idx));
 CREATE TABLE IF NOT EXISTS gift_codes(
   code TEXT PRIMARY KEY, coins INT NOT NULL, max_uses INT NOT NULL, used INT NOT NULL DEFAULT 0,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -141,6 +144,7 @@ ALTER TABLE orders ADD COLUMN IF NOT EXISTS method TEXT;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS charge_id TEXT;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS pay_paise INT;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_fam_pending ON orders(pay_paise) WHERE status='pending' AND method='fam';
+CREATE UNIQUE INDEX IF NOT EXISTS uq_usdt_pending ON orders(pay_amount) WHERE status='pending' AND method='usdt';
 CREATE TABLE IF NOT EXISTS fam_payments(
   txn_id TEXT PRIMARY KEY, pay_paise INT NOT NULL, sender TEXT, email_ts TIMESTAMPTZ, balance_paise BIGINT,
   status TEXT NOT NULL, order_id TEXT, user_id BIGINT, created_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -553,11 +557,32 @@ async def orders_expire_old():
     await pool.execute("UPDATE orders SET status='failed' WHERE status='pending' AND created_at < now() - interval '24 hours'")
 
 
-async def usdt_order_new(order_id, uid, kind, coins, amount_inr, level, mode, usdt, pay_amount, ref, address):
-    await pool.execute(
-        "INSERT INTO orders(order_id,user_id,kind,coins,amount_inr,gateway_ref,level,mode,method,usdt,pay_amount,pay_address) "
-        "VALUES($1,$2,$3,$4,$5,$6,$7,$8,'usdt',$9,$10,$11)",
-        order_id, uid, kind, coins, amount_inr, str(ref), level, mode, usdt, pay_amount, address)
+async def usdt_order_new(order_id, uid, kind, coins, amount_inr, level, mode, usdt, base_amount, address):
+    """Unique pay_amount (base + 0.0001..0.0099): wahi amount aane par order match hota hai. Return pay_amount ya None (busy)."""
+    await usdt_expire_old()
+    for _ in range(5):
+        used = {r["pay_amount"] for r in await pool.fetch(
+            "SELECT pay_amount FROM orders WHERE method='usdt' AND status='pending' AND pay_amount BETWEEN $1 AND $2",
+            base_amount, base_amount + Decimal("0.0099"))}
+        free = [base_amount + Decimal(k) / 10000 for k in range(1, 100) if base_amount + Decimal(k) / 10000 not in used]
+        if not free:
+            return None
+        pay = random.choice(free)
+        try:
+            await pool.execute(
+                "INSERT INTO orders(order_id,user_id,kind,coins,amount_inr,level,mode,method,usdt,pay_amount,pay_address) "
+                "VALUES($1,$2,$3,$4,$5,$6,$7,'usdt',$8,$9,$10)",
+                order_id, uid, kind, coins, amount_inr, level, mode, usdt, pay, address)
+            return pay
+        except asyncpg.UniqueViolationError:
+            continue
+    return None
+
+
+async def usdt_expire_old():
+    """TTL + 10 min ke baad pending USDT order 'failed' (amount slot khali). Der se payment aaye to scanner dobara khol dega."""
+    await pool.execute("UPDATE orders SET status='failed' WHERE method='usdt' AND status='pending' "
+                       "AND created_at < now() - make_interval(secs => $1)", config.USDT_TTL + 600)
 
 
 async def usdt_order_counts(uid):
@@ -567,9 +592,56 @@ async def usdt_order_counts(uid):
     return r["pending"], r["hour"]
 
 
-async def usdt_reopen(order_id):
-    """Der se aaya (24h ke baad failed mark ho chuka) lekin paisa mil gaya: dobara pending karo taaki credit ho sake."""
-    await pool.execute("UPDATE orders SET status='pending' WHERE order_id=$1 AND method='usdt' AND status='failed'", order_id)
+async def usdt_meta_get(k):
+    return await pool.fetchval("SELECT v FROM fam_meta WHERE k=$1", k)
+
+
+async def usdt_meta_set(k, v):
+    await pool.execute("INSERT INTO fam_meta(k,v) VALUES($1,$2) ON CONFLICT(k) DO UPDATE SET v=EXCLUDED.v", k, str(v))
+
+
+async def usdt_process(tx, idx, amount, sender, block):
+    """Wallet me aaya ek USDT transfer. Order match -> credit. Return None (pehle dekha) ya dict(done|None, unmatched)."""
+    async with pool.acquire() as c, c.transaction():
+        got = await c.fetchval(
+            "INSERT INTO usdt_txs(tx,idx,amount,sender,block) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING RETURNING tx",
+            tx, idx, amount, sender, block)
+        if not got:
+            return None
+        o = await c.fetchrow(
+            """SELECT order_id, status FROM orders WHERE method='usdt' AND pay_amount=$1 AND (status='pending'
+               OR (status='failed' AND created_at > now() - interval '24 hours'))
+               ORDER BY (status='pending') DESC, created_at DESC LIMIT 1 FOR UPDATE""", amount)
+        if o:
+            if o["status"] == "failed":
+                await c.execute("UPDATE orders SET status='pending' WHERE order_id=$1", o["order_id"])
+            done = await _complete_c(c, o["order_id"], None)
+            if done:
+                await c.execute("UPDATE usdt_txs SET status='credited', order_id=$2, user_id=$3 WHERE tx=$1 AND idx=$4",
+                                tx, o["order_id"], done["user_id"], idx)
+                return {"done": done, "unmatched": False}
+        return {"done": None, "unmatched": True}
+
+
+async def usdt_assign(tx, uid):
+    """Admin: unmatched USDT transfer kisi user ke ad balance me (rate se coins). Return (txrow, coins) ya None."""
+    async with pool.acquire() as c, c.transaction():
+        t = await c.fetchrow("SELECT * FROM usdt_txs WHERE tx=$1 AND status='unmatched' FOR UPDATE", tx)
+        if not t or not await c.fetchval("SELECT 1 FROM users WHERE id=$1", uid):
+            return None
+        coins = int(t["amount"] * config.USDT_INR_RATE * config.COIN_PER_INR)
+        await c.execute("UPDATE usdt_txs SET status='claimed', user_id=$2 WHERE tx=$1", tx, uid)
+        await c.execute("UPDATE users SET ad_balance=ad_balance+$1 WHERE id=$2", coins, uid)
+        await led(c, uid, "deposit", coins, tx)
+        return t, coins
+
+
+async def usdt_ignore(tx):
+    return await pool.fetchrow("UPDATE usdt_txs SET status='ignored' WHERE tx=$1 AND status='unmatched' RETURNING *", tx)
+
+
+async def usdt_unmatched():
+    return await pool.fetch("SELECT * FROM usdt_txs WHERE status='unmatched' ORDER BY created_at DESC LIMIT 50")
 
 
 async def complete_order(order_id, paid_amount):

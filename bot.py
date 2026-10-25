@@ -271,6 +271,31 @@ async def on_ignore(update: Update, ctx):
         pass
 
 
+async def on_usdt_ignore(update: Update, ctx):
+    q = update.callback_query
+    if q.from_user.id not in config.ADMIN_IDS:
+        return await q.answer("Not allowed", show_alert=True)
+    prefix = q.data.split(":", 1)[1]
+    row = await db.pool.fetchrow("SELECT tx FROM usdt_txs WHERE tx LIKE $1 AND status='unmatched' LIMIT 1", prefix + "%")
+    _, msg = await adminops.usdt_ignore(row["tx"]) if row else (False, "Already processed")
+    try:
+        await q.answer(msg, show_alert=True)
+        await q.message.delete()
+    except TelegramError:
+        pass
+
+
+async def uassign_cmd(update: Update, ctx):
+    """/uassign <tx_hash> <user_id>: unmatched USDT transfer kisi user ke ad balance me."""
+    if update.effective_user.id not in config.ADMIN_IDS:
+        return
+    a = ctx.args
+    if len(a) != 2 or not a[1].isdigit():
+        return await update.message.reply_text("Usage: /uassign <tx_hash> <user_id>")
+    _, msg = await adminops.usdt_assign(util.main_bot or ctx.bot, a[0].lower(), int(a[1]))
+    await update.message.reply_text(msg)
+
+
 async def bc_cmd(update: Update, ctx):
     """Admin: /bc <text> ya photo bhejo jiske caption me /bc <text>. Sab users ko jata hai + app ke Notifications page me dikhta hai."""
     m = update.effective_message
@@ -557,6 +582,8 @@ def register(app):
     app.add_handler(CallbackQueryHandler(on_admin_wd, pattern=r"^adm_"))
     app.add_handler(CallbackQueryHandler(on_admin_claim, pattern=r"^clm_"))
     app.add_handler(CallbackQueryHandler(on_ignore, pattern=r"^ign:"))
+    app.add_handler(CallbackQueryHandler(on_usdt_ignore, pattern=r"^uign:"))
+    app.add_handler(CommandHandler("uassign", uassign_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("bc", bc_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(MessageHandler(filters.PHOTO & filters.CaptionRegex(r"^/bc") & filters.ChatType.PRIVATE, bc_cmd))
     app.add_handler(CommandHandler("assign", assign_cmd, filters=filters.ChatType.PRIVATE))

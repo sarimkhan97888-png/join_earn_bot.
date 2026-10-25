@@ -111,6 +111,23 @@ async def ignore_pay(txn):
     return True, f"🙈 ₹{pay['pay_paise'] / 100:.2f} ignore ho gaya (list se hat gaya)"
 
 
+async def usdt_assign(main, tx, uid):
+    r = await db.usdt_assign(tx, uid)
+    if not r:
+        return False, "Nahi hua: tx unmatched nahi hai ya user nahi mila."
+    t, coins = r
+    await util.notify(main, uid, f"✅ <b>Deposit successful!</b>\n+{coins} coins ad balance me add ho gaye.")
+    extras.feed(f"✅ Unmatched USDT {t['amount']} assign hua (user <code>{uid}</code>, +{coins} coins)")
+    return True, f"✅ {t['amount']} USDT → user {uid} ke ad balance me (+{coins} coins)."
+
+
+async def usdt_ignore(tx):
+    t = await db.usdt_ignore(tx)
+    if not t:
+        return False, "Already processed / tx nahi mila"
+    return True, f"🙈 {t['amount']} USDT ignore ho gaya"
+
+
 async def user_act(main, uid, act, amount=0):
     """ban | unban | resetdev | addbal | addad. Admin accounts par ban/reset nahi."""
     if act in ("ban", "unban"):

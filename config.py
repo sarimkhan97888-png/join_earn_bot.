@@ -98,15 +98,16 @@ FORCE_LINK = os.getenv("FORCE_LINK", "https://t.me/ProfitEarningOfficial").strip
 STREAK_STEP = _int("STREAK_STEP", 10)
 STREAK_DAYS = _int("STREAK_DAYS", 7)
 
-# ---- USDT (BEP20) via NOWPayments. Keys sirf Render env me ----
+# ---- USDT (BEP20): seedha tumhare wallet me. Bot blockchain scan karke amount match se auto credit karta hai ----
 from decimal import Decimal as _D
-NOWPAY_KEY = os.getenv("NOWPAYMENTS_API_KEY", "").strip()
-NOWPAY_IPN_SECRET = os.getenv("NOWPAYMENTS_IPN_SECRET", "").strip()
-USDT_ON = bool(NOWPAY_KEY)
+USDT_WALLET = os.getenv("USDT_WALLET", "").strip()                 # tumhara Trust Wallet BEP20 (0x...) address
+USDT_ON = len(USDT_WALLET) == 42 and USDT_WALLET.startswith("0x")
 USDT_INR_RATE = _D(os.getenv("USDT_INR_RATE", "90") or "90")      # 1 USDT = kitne rupaye
-USDT_FEE_PCT = _D(os.getenv("USDT_FEE_PCT", "0.5") or "0.5")      # deposit/premium par extra (network/service) %
+USDT_FEE_PCT = _D(os.getenv("USDT_FEE_PCT", "0.5") or "0.5")      # deposit/premium par extra %
 USDT_MIN = _D(os.getenv("USDT_MIN", "0.10") or "0.10")
 USDT_MAX = _D(os.getenv("USDT_MAX", "10000") or "10000")
-USDT_CCY = os.getenv("USDT_CCY", "usdtbsc").strip()               # BEP20 USDT
-USDT_PRICE_CCY = os.getenv("USDT_PRICE_CCY", "usdtbsc").strip()
-USDT_TTL = _int("USDT_TTL", 3600)
+USDT_CONTRACT = os.getenv("USDT_CONTRACT", "0x55d398326f99059fF775485246999027B3197955").strip()  # BSC-USD (USDT BEP20)
+USDT_RPCS = [x.strip() for x in os.getenv("USDT_RPCS", "https://bsc-dataseed.binance.org,https://bsc-dataseed1.defibit.io,"
+                                          "https://bsc-dataseed1.ninicoin.io,https://bsc-rpc.publicnode.com").split(",") if x.strip()]
+USDT_CONFIRMS = _int("USDT_CONFIRMS", 3)                           # itne blocks baad payment final maano
+USDT_TTL = _int("USDT_TTL", 3600)                                  # order ka payment time (sec)

@@ -25,7 +25,6 @@ import db
 import extras
 import i18n
 import fam
-import nowpay
 import payouts
 import util
 
@@ -481,35 +480,15 @@ async def api_usdt_order(request):
         return err("Pehle wale USDT orders pure karo ya thodi der ruko, phir naya banao.")
     if hour >= 10:
         return err("Bahut saare orders. Thodi der baad try karo.")
-    total = _usdt_total(usdt)
+    base = _usdt_total(usdt).quantize(Decimal("0.01"), ROUND_CEILING)   # fee ke saath, 2 decimal; upar random 0.0001-0.0099 judta hai
     order_id = f"U{uid}{int(time.time() * 1000)}"
-    try:
-        p = await nowpay.create_payment(order_id, total, f"{config.APP_NAME} {kind} {uid}")
-    except nowpay.PayError as e:
-        mn = await nowpay.min_amount() if "small" in str(e).lower() or "min" in str(e).lower() else None
-        if mn:
-            return err(f"Is amount par payment nahi ban paya. Minimum {mn} USDT se upar try karo.")
-        return err("❌ USDT payment abhi nahi ban paya. Thodi der baad try karo.")
-    await db.usdt_order_new(order_id, uid, kind, coins, inr, level, mode, usdt, p["pay_amount"], p["payment_id"], p["pay_address"])
-    extras.feed(f"💵 USDT {('Premium L%s' % level) if kind == 'premium' else 'Deposit'} order {usdt} USDT — {extras.uname(u)}")
-    pay_amt = format(p["pay_amount"].normalize(), "f")
-    return ok(order_id=order_id, usdt=float(usdt), coins=coins, pay_amount=pay_amt, address=p["pay_address"],
-              qr=make_qr(p["pay_address"]), expires_in=p["ttl"], network="BEP20")
-
-
-@routes.post("/nowpay/ipn")
-async def nowpay_ipn(request):
-    """NOWPayments webhook. Signature galat/secret set nahi = ignore (API polling se bhi credit ho jata hai)."""
-    raw = await request.read()
-    data = nowpay.verify_sig(raw, request.headers.get("x-nowpayments-sig", ""))
-    if not data:
-        return web.json_response({"ok": False}, status=401)
-    try:
-        await nowpay.process(request.app["bot"], data)
-    except Exception:
-        log.exception("ipn process failed")
-        return web.json_response({"ok": False}, status=500)
-    return web.json_response({"ok": True})
+    pay = await db.usdt_order_new(order_id, uid, kind, coins, inr, level, mode, usdt, base, config.USDT_WALLET)
+    if not pay:
+        return err("Abhi bahut log payment kar rahe hain. 1 minute baad try karo.")
+    extras.feed(f"💵 USDT {('Premium L%s' % level) if kind == 'premium' else 'Deposit'} order {pay} USDT — {extras.uname(u)}")
+    return ok(order_id=order_id, usdt=float(usdt), coins=coins, pay_amount=format(pay, "f"), address=config.USDT_WALLET,
+              qr=make_qr(f"ethereum:{config.USDT_CONTRACT}@56/transfer?address={config.USDT_WALLET}&uint256={int(pay * 10 ** 18)}"),
+              expires_in=config.USDT_TTL, network="BEP20")
 
 
 @routes.post("/api/deposit/claim")
@@ -618,8 +597,6 @@ async def api_order(request):
     row = await db.order_row(request.query.get("id", ""))
     if not row or row["user_id"] != request["u"]["id"]:
         return ok(status="none")
-    if row["method"] == "usdt" and row["status"] == "pending":
-        return ok(status=await nowpay.sync_order(request.app["bot"], row))
     return ok(status=row["status"])
 
 
