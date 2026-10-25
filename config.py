@@ -93,3 +93,7 @@ FORCE_CHANNEL = os.getenv("FORCE_CHANNEL", "@ProfitEarningOfficial").strip()
 if FORCE_CHANNEL.lower() in ("off", "none", "0", "false"):
     FORCE_CHANNEL = ""
 FORCE_LINK = os.getenv("FORCE_LINK", "https://t.me/ProfitEarningOfficial").strip()
+
+# Daily streak: roz kam se kam 1 task => Day N par N*STREAK_STEP coins, STREAK_DAYS ke baad reset
+STREAK_STEP = _int("STREAK_STEP", 10)
+STREAK_DAYS = _int("STREAK_DAYS", 7)

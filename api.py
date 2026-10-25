@@ -205,7 +205,7 @@ async def with_device(u, dev, fp):
 
 _fj = {}          # uid -> (member?, time)
 _fj_warn = [-1e9]
-FORCE_OPEN = {"/api/me", "/api/verify", "/api/lang", "/api/force/check"}
+FORCE_OPEN = {"/api/me", "/api/verify", "/api/lang", "/api/force/check", "/api/streak/seen"}
 
 
 async def force_ok(bot, uid, fresh=False):
@@ -268,6 +268,12 @@ def client_ip(request):
     return (xf.split(",")[0].strip() if xf else (request.remote or ""))[:64]
 
 
+@routes.post("/api/streak/seen")
+async def api_streak_seen(request):
+    await db.streak_seen(request["u"]["id"])
+    return ok()
+
+
 @routes.post("/api/force/check")
 async def api_force_check(request):
     u = request["u"]
@@ -287,6 +293,7 @@ async def api_me(request):
     blocked = [{"chat_id": r["chat_id"], "title": r["title"], "link": r["link"]} for r in left]
     hist = [{"kind": r["kind"], "amount": r["amount"], "at": iso(r["created_at"])} for r in led]
     me = pub(u)
+    me["streak"] = await db.streak_info(u["id"])
     me.update(need_join=bool(u.get("need_join")), join_link=config.FORCE_LINK)
     me.update(tasks_today=tdone, wd_today=wdone, queued=[{"level": r["level"], "days": r["days"]} for r in queued])
     return ok(me=me, blocked=blocked, history=hist, cfg=cfg(request))
@@ -332,7 +339,9 @@ async def api_check(request):
     res = await db.claim(tid, uid)
     if res == "ok":
         extras.feed(f"✅ Task #{tid} join verified — {extras.uname(request['u'])}")
-        return ok(msg=f"Join verified! +{t['reward']} coins ({config.HOLD_HOURS}h hold me)")
+        st = db.pop_streak(uid)
+        return ok(msg=f"Join verified! +{t['reward']} coins ({config.HOLD_HOURS}h hold me)",
+                  streak=({"day": st[0], "reward": st[1]} if st else None))
     return err({"dup": "Ye task tum pehle kar chuke ho.", "own": "Apne channel se coin nahi mil sakta.",
                 "closed": "Task full ho gaya."}[res])
 
@@ -1020,8 +1029,8 @@ async def api_task_create(request):
     if price < config.AD_COST or price > 100000:
         return err(f"Per member price kam se kam {config.AD_COST} coins rakho.")
     cost = n * price
-    if not admin and u["ad_balance"] < cost:
-        return err(f"Coins kam hain. Chahiye {cost}, ad balance {u['ad_balance']}. Wallet se deposit karo.")
+    if not admin and u["ad_balance"] + u["balance"] < cost:
+        return err(f"Coins kam hain. Chahiye {cost}, tumhare paas {u['ad_balance'] + u['balance']} (ad balance + earnings). Wallet se deposit karo ya aur kamao.")
     r = await resolve_chat(request, d.get("chat"), True)
     if isinstance(r, str):
         return err(r)
@@ -1082,7 +1091,7 @@ async def api_bw_create(request):
     bid = await db.bw_create(u["id"], title, link, reward, n, free=u["id"] in config.ADMIN_IDS,
                              instructions=instr, needs_dev=needs_dev)
     if not bid:
-        return err(f"Ad balance kam hai. Chahiye {reward * n} coins. Wallet se deposit karo.")
+        return err(f"Coins kam hain. Chahiye {reward * n} coins (ad balance + earnings). Wallet se deposit karo ya aur kamao.")
     extras.feed(f"🤖 <b>Naya bot work</b> #{bid}: {html.escape(title)} — {n} users x {reward} coins, by {extras.uname(u)}")
     asyncio.create_task(util.notify(request.app["bot"], u["id"], f"✅ Tumhara Bot Work #{bid} live ho gaya: {html.escape(title)}."))
     return ok(msg=f"Bot work #{bid} live ho gaya!")

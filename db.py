@@ -92,6 +92,9 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS dev_ver INT NOT NULL DEFAULT 1;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS device_changes INT NOT NULL DEFAULT 0;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS suspect BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS lang TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS streak INT NOT NULL DEFAULT 0;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS streak_day DATE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS streak_seen DATE;
 UPDATE users SET fp=device_hash WHERE fp IS NULL AND device_hash IS NOT NULL;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS free BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE botworks ADD COLUMN IF NOT EXISTS free BOOLEAN NOT NULL DEFAULT FALSE;
@@ -280,6 +283,65 @@ async def set_upi(uid, upi):
 
 
 # ---------- tasks ----------
+# ---------- daily streak ----------
+_streak_mem = {}   # uid -> (day, reward): abhi mile streak ka notification (api/bot ek baar padhke hata dete hain)
+
+
+def pop_streak(uid):
+    return _streak_mem.pop(uid, None)
+
+
+async def streak_tick(c, uid):
+    """Task complete hone par (transaction ke andar). Aaj ka pehla task => streak badhao + coins. (day, reward) ya None."""
+    r = await c.fetchrow(
+        """SELECT streak, (streak_day = d) AS done, (streak_day = d - 1) AS cont
+           FROM users, (SELECT (now() AT TIME ZONE 'Asia/Kolkata')::date AS d) t WHERE id=$1 FOR UPDATE OF users""", uid)
+    if not r or r["done"]:
+        return None
+    day = r["streak"] + 1 if (r["cont"] and r["streak"] < config.STREAK_DAYS) else 1
+    reward = day * config.STREAK_STEP
+    await c.execute(
+        """UPDATE users SET streak=$1, streak_day=(now() AT TIME ZONE 'Asia/Kolkata')::date,
+                  balance=balance+$2, total_earned=total_earned+$2 WHERE id=$3""", day, reward, uid)
+    await led(c, uid, "streak", reward, day)
+    if len(_streak_mem) > 5000:
+        _streak_mem.clear()
+    _streak_mem[uid] = (day, reward)
+    return day, reward
+
+
+async def streak_info(uid):
+    """App ke liye: abhi streak kya hai + aaj ka popup dikhana hai ya nahi."""
+    r = await pool.fetchrow(
+        """SELECT streak, (streak_day = d) AS done, (streak_day = d - 1) AS cont, (streak_seen IS DISTINCT FROM d) AS unseen
+           FROM users, (SELECT (now() AT TIME ZONE 'Asia/Kolkata')::date AS d) t WHERE id=$1""", uid)
+    if not r:
+        return None
+    n, days = r["streak"], config.STREAK_DAYS
+    if r["done"]:
+        cur, nxt = n, (n + 1 if n < days else 1)
+    elif r["cont"]:
+        cur, nxt = n, (n + 1 if n < days else 1)
+    else:
+        cur, nxt = 0, 1
+    return {"day": cur, "done": bool(r["done"]), "next": nxt, "next_reward": nxt * config.STREAK_STEP, "show": bool(r["unseen"]),
+            "days": days, "step": config.STREAK_STEP}
+
+
+async def streak_seen(uid):
+    await pool.execute("UPDATE users SET streak_seen=(now() AT TIME ZONE 'Asia/Kolkata')::date WHERE id=$1", uid)
+
+
+async def spend_for_ads(c, uid, cost):
+    """Task/Bot Work ka kharcha: pehle ad_balance, kam pade to kamaye hue (available) coins se. Transaction ke andar. True/False."""
+    r = await c.fetchrow("SELECT ad_balance, balance FROM users WHERE id=$1 FOR UPDATE", uid)
+    if not r or r["ad_balance"] + r["balance"] < cost:
+        return False
+    from_ad = min(r["ad_balance"], cost)
+    await c.execute("UPDATE users SET ad_balance=ad_balance-$1, balance=balance-$2 WHERE id=$3", from_ad, cost - from_ad, uid)
+    return True
+
+
 async def create_task(owner, chat_id, title, link, target, free=False, price=None):
     """price = advertiser ka per-member price (min AD_COST); joiner ko price - TASK_FEE milta hai.
     free=True (sirf admin): ad balance se coin nahi katta, aur cancel par refund bhi nahi milta."""
@@ -287,9 +349,7 @@ async def create_task(owner, chat_id, title, link, target, free=False, price=Non
     cost = target * price
     async with pool.acquire() as c, c.transaction():
         if not free:
-            ok = await c.fetchval(
-                "UPDATE users SET ad_balance=ad_balance-$1 WHERE id=$2 AND ad_balance>=$1 RETURNING id", cost, owner)
-            if not ok:
+            if not await spend_for_ads(c, owner, cost):
                 return None
         tid = await c.fetchval(
             "INSERT INTO tasks(owner_id,chat_id,title,link,target,free,cost_per,reward) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id",
@@ -350,6 +410,7 @@ async def claim(task_id, uid):
         await led(c, uid, "hold", t["reward"], cid)
         if not t["free"]:
             await led(c, 0, "fee", t["cost_per"] - t["reward"], cid)
+        await streak_tick(c, uid)
         return "ok"
 
 
@@ -896,9 +957,7 @@ async def bw_create(owner, title, link, reward, n, free=False, instructions="", 
     cost = reward * n
     async with pool.acquire() as c, c.transaction():
         if not free:
-            ok = await c.fetchval(
-                "UPDATE users SET ad_balance=ad_balance-$1 WHERE id=$2 AND ad_balance>=$1 RETURNING id", cost, owner)
-            if not ok:
+            if not await spend_for_ads(c, owner, cost):
                 return None
         bid = await c.fetchval(
             "INSERT INTO botworks(owner_id,title,link,reward,target,free,instructions,needs_dev) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id",
@@ -1013,6 +1072,7 @@ async def _bw_pay(c, s):
                     s["reward"], s["worker_id"])
     await c.execute("UPDATE bw_subs SET status='approved', decided_at=now() WHERE id=$1", s["id"])
     await led(c, s["worker_id"], "bw_reward", s["reward"], s["id"])
+    await streak_tick(c, s["worker_id"])
 
 
 async def _bw_close(c, s):
@@ -1315,7 +1375,8 @@ async def ref_complete(referred):
             await c.execute("UPDATE referrals SET status='void' WHERE referred_id=$1", referred)  # banned/gayab referrer
             return None
         reward = util.plan(ru)["ref"]  # referrer ke premium level ke hisaab se (L3 = 200)
-        await c.execute("UPDATE users SET balance=balance+$1, total_earned=total_earned+$1 WHERE id=$2",
+        # refer ke coins sirf task banane ke liye: ad_balance me (withdraw nahi hote)
+        await c.execute("UPDATE users SET ad_balance=ad_balance+$1, total_earned=total_earned+$1 WHERE id=$2",
                         reward, r["referrer_id"])
         await led(c, r["referrer_id"], "referral", reward, referred)
         return r["referrer_id"], reward

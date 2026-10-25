@@ -127,6 +127,9 @@ async def on_cb(update, ctx):
         await mark(q, "\n\n✅ <b>Approved</b>")
         await util.notify(ctx.bot, s["worker_id"],
                           f"✅ Bot work approved! <b>+{s['reward']}</b> coins balance me add ho gaye.")
+        st = db.pop_streak(s["worker_id"])
+        if st:
+            await util.notify(ctx.bot, s["worker_id"], f"🔥 <b>Streak Day {st[0]} complete!</b> +{st[1]} coins.")
         return
 
     if act in ("bws_no", "bws_bk", "bws_rx") or act in {f"bws_r{k}" for k in REASONS}:

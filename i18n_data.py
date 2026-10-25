@@ -80,7 +80,7 @@ _add({
     "❌ Tum is chat ke admin/owner nahi ho.": ("❌ तुम इस चैट के एडमिन/ओनर नहीं हो।", "❌ You are not an admin/owner of this chat."),
     "❌ Invite link nahi ban paya. Bot ko 'Invite Users' permission do.": ("❌ इन्वाइट लिंक नहीं बन पाया। बॉट को 'Invite Users' परमिशन दो।", "❌ Couldn't create an invite link. Give the bot the 'Invite Users' permission."),
     "Members {} se {} ke beech rakho.": ("मेंबर्स {} से {} के बीच रखो।", "Keep members between {} and {}."),
-    "Coins kam hain. Chahiye {}, ad balance {}. Wallet se deposit karo.": ("कॉइन्स कम हैं। चाहिए {}, ऐड बैलेंस {}। वॉलेट से डिपॉजिट करो।", "Not enough coins. Need {}, ad balance {}. Deposit from Wallet."),
+    "Coins kam hain. Chahiye {}, tumhare paas {} (ad balance + earnings). Wallet se deposit karo ya aur kamao.": ("कॉइन्स कम हैं। चाहिए {}, तुम्हारे पास {} (ऐड बैलेंस + कमाई)। वॉलेट से डिपॉज़िट करो या और कमाओ।", "Not enough coins. You need {}, you have {} (ad balance + earnings). Deposit from Wallet or earn more."),
     "Ad balance kam hai. Pehle deposit karo.": ("ऐड बैलेंस कम है। पहले डिपॉजिट करो।", "Ad balance is low. Please deposit first."),
     "Task #{} live ho gaya! {} ke liye {} members. Har joiner ko {} coins milenge.": ("टास्क #{} लाइव हो गया! {} के लिए {} मेंबर्स। हर जॉइन करने वाले को {} कॉइन्स मिलेंगे।", "Task #{} is live! {} for {} members. Each joiner gets {} coins."),
     "Tumhare level me ek task me max {} members. Zyada ke liye Premium upgrade karo.": ("तुम्हारे लेवल में एक टास्क में मैक्स {} मेंबर्स। ज़्यादा के लिए प्रीमियम अपग्रेड करो।", "Your level allows up to {} members per task. Upgrade Premium for more."),
@@ -96,7 +96,7 @@ _add({
     "Sahi refer link daalo (https://...).": ("सही रेफ़र लिंक डालो (https://...)।", "Enter a valid refer link (https://...)."),
     "Reward min {} coins hona chahiye.": ("रिवॉर्ड कम से कम {} कॉइन्स होना चाहिए।", "Reward must be at least {} coins."),
     "Users {} se {} ke beech rakho.": ("यूज़र्स {} से {} के बीच रखो।", "Keep users between {} and {}."),
-    "Ad balance kam hai. Chahiye {} coins. Wallet se deposit karo.": ("ऐड बैलेंस कम है। {} कॉइन्स चाहिए। वॉलेट से डिपॉजिट करो।", "Ad balance is low. {} coins needed. Deposit from Wallet."),
+    "Coins kam hain. Chahiye {} coins (ad balance + earnings). Wallet se deposit karo ya aur kamao.": ("कॉइन्स कम हैं। {} कॉइन्स चाहिए (ऐड बैलेंस + कमाई)। वॉलेट से डिपॉज़िट करो या और कमाओ।", "Not enough coins. You need {} coins (ad balance + earnings). Deposit from Wallet or earn more."),
 })
 
 # ---------------- bot work (worker side) ----------------
@@ -240,7 +240,7 @@ _add({
     "✅ Rejoin ho gaya. <b>{}</b> coins ({}%) {}h hold me mile. Agar koi aur channel leave kiya hai to unhe bhi rejoin karo.": ("✅ रीजॉइन हो गया। <b>{}</b> कॉइन्स ({}%) {} घंटे होल्ड में मिले। अगर कोई और चैनल छोड़ा है तो उसे भी रीजॉइन करो।", "✅ Rejoined. You got <b>{}</b> coins ({}%) on {}h hold. If you left any other channel, rejoin it too."),
     "✅ Rejoin ho gaya. (Is channel ka reward ek baar hi milta hai.) Agar koi aur channel leave kiya hai to unhe bhi rejoin karo.": ("✅ रीजॉइन हो गया। (इस चैनल का रिवॉर्ड एक ही बार मिलता है।) अगर कोई और चैनल छोड़ा है तो उसे भी रीजॉइन करो।", "✅ Rejoined. (The reward for this channel is given only once.) If you left any other channel, rejoin it too."),
     "✅ {} coins released! Ab withdraw kar sakte ho.": ("✅ {} कॉइन्स रिलीज़ हो गए! अब विड्रॉ कर सकते हो।", "✅ {} coins released! You can withdraw now."),
-    "🎉 <b>Refer complete!</b> Tumhare dost ne apne task complete kar liye. <b>+{}</b> coins balance me add.": ("🎉 <b>रेफ़र पूरा!</b> तुम्हारे दोस्त ने अपने टास्क पूरे कर लिए। <b>+{}</b> कॉइन्स बैलेंस में जुड़े।", "🎉 <b>Referral complete!</b> Your friend completed their tasks. <b>+{}</b> coins added to your balance."),
+    "🎉 <b>Refer complete!</b> Tumhare dost ne apne task complete kar liye. <b>+{}</b> coins ad balance me add (ye sirf task banane me use ho sakte hain).": ("🎉 <b>रेफ़र पूरा!</b> तुम्हारे दोस्त ने अपने टास्क पूरे कर लिए। <b>+{}</b> कॉइन्स ऐड बैलेंस में जुड़े (ये सिर्फ़ टास्क बनाने में इस्तेमाल हो सकते हैं)।", "🎉 <b>Referral complete!</b> Your friend completed their tasks. <b>+{}</b> coins added to your ad balance (usable only for creating tasks)."),
     "📢 <b>{} naya channel task</b>: join karo aur coins kamao!": ("📢 <b>{} नए चैनल टास्क</b>: जॉइन करो और कॉइन्स कमाओ!", "📢 <b>{} new channel tasks</b>: join and earn coins!"),
     "📢 <b>Naya channel task</b>: {}\nJoin karo, {} coins kamao!": ("📢 <b>नया चैनल टास्क</b>: {}\nजॉइन करो, {} कॉइन्स कमाओ!", "📢 <b>New channel task</b>: {}\nJoin and earn {} coins!"),
     "🤖 <b>{} naya Bot Work</b> add hua!": ("🤖 <b>{} नए बॉट वर्क</b> जुड़े!", "🤖 <b>{} new Bot Works</b> added!"),
@@ -262,4 +262,5 @@ _add({
     "📢 Pehle hamara channel join karo.": ("📢 पहले हमारा चैनल जॉइन करो।", "📢 Please join our channel first."),
     "✅ Verify ho gaya! Welcome.": ("✅ वेरिफाई हो गया! वेलकम।", "✅ Verified! Welcome."),
     "❌ Abhi channel join nahi dikha. Join karke thodi der baad Verify dabao.": ("❌ अभी चैनल जॉइन नहीं दिखा। जॉइन करके थोड़ी देर बाद वेरिफाई दबाओ।", "❌ We can't see you in the channel yet. Join it, then tap Verify again in a moment."),
+    "🔥 <b>Streak Day {} complete!</b> +{} coins.": ("🔥 <b>स्ट्रीक डे {} पूरा!</b> +{} कॉइन्स।", "🔥 <b>Streak Day {} complete!</b> +{} coins."),
 })

@@ -365,7 +365,7 @@ async def job_refs(ctx):
         if res:
             rid, reward = res
             await util.notify(ctx.bot, rid, f"🎉 <b>Refer complete!</b> Tumhare dost ne apne task complete kar liye. "
-                                            f"<b>+{reward}</b> coins balance me add.")
+                                            f"<b>+{reward}</b> coins ad balance me add (ye sirf task banane me use ho sakte hain).")
 
 
 async def job_wd_expire(ctx):
