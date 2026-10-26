@@ -114,3 +114,6 @@ USDT_TTL = _int("USDT_TTL", 3600)                                  # order ka pa
 
 # Refer milestone bonus: itne completed refers par itne extra coins (ad balance me, sirf task ke liye)
 REF_BONUSES = {10: 300, 20: 500, 30: 800, 40: 1100, 50: 1500}
+
+# Amazon voucher withdraw: ₹10 ke multiple (unlimited), tax upar se
+AMAZON_STEP_INR = _int("AMAZON_STEP_INR", 10)

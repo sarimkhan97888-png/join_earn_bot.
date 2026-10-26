@@ -36,6 +36,19 @@ async def wd_act(main, wid, act, code=None):
                               f"TxID: <code>{w['tx']}</code>\n<a href=\"https://bscscan.com/tx/{w['tx']}\">BscScan par dekho</a>\n"
                               f"Ye TxID Wallet → History me bhi save hai.")
             msg = "✅ TxID user ko bhej diya"
+        elif w0 and w0["upi"] == db.AMAZON:
+            code = " ".join(str(code or "").split())
+            if not 6 <= len(code) <= 100:
+                return False, "Amazon voucher code do (6-100 chars)"
+            w = await db.wd_pay_code(wid, code)
+            if not w:
+                return False, "Already processed"
+            extras.feed(f"✅ Withdraw #{wid} <b>Amazon voucher bheja</b> ₹{float(w['amount_inr']):.2f} (user <code>{w['user_id']}</code>)")
+            await util.notify(main, w["user_id"],
+                              f"🛒 <b>Amazon voucher ready!</b>\nWithdraw #{wid}: ₹{float(w['amount_inr']):.2f}\n"
+                              f"Code: <code>{html.escape(code)}</code>\n"
+                              f"Amazon app → Account → Gift Cards → Redeem a Gift Card me daalo. Ye code Wallet → Gift Codes me bhi save hai.")
+            msg = "✅ Voucher user ko bhej diya"
         elif w0 and w0["upi"] == db.GPLAY:
             code = " ".join(str(code or "").split())
             if not 6 <= len(code) <= 100:
@@ -47,7 +60,7 @@ async def wd_act(main, wid, act, code=None):
             await util.notify(main, w["user_id"],
                               f"🎁 <b>Google Play code ready!</b>\nWithdraw #{wid}: ₹{float(w['amount_inr']):.2f}\n"
                               f"Code: <code>{html.escape(code)}</code>\n"
-                              f"Play Store → Profile → Payments & subscriptions → Redeem gift code me daalo. Ye code Wallet → Google Play Codes me bhi save hai.")
+                              f"Play Store → Profile → Payments & subscriptions → Redeem gift code me daalo. Ye code Wallet → Gift Codes me bhi save hai.")
             msg = "✅ Code user ko bhej diya"
         else:
             w = await db.wd_move(wid, "pending", "paid")

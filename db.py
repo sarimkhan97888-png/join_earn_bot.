@@ -898,9 +898,14 @@ def wd_fee(coins, pct=None):
 
 
 GPLAY = "Google Play Code"
+AMAZON = "Amazon Voucher"
 
 
-async def request_withdraw(uid, coins, pct=None, level=0, hours=None, max_day=None, gplay=False, addr=None, usdt=None):
+def is_code(upi):
+    return upi in (GPLAY, AMAZON)
+
+
+async def request_withdraw(uid, coins, pct=None, level=0, hours=None, max_day=None, gplay=False, addr=None, usdt=None, amazon=False):
     """coins = jitne ka paisa user ko milega. Tax upar se: balance se coins + tax kat-ta hai.
     Return (wid, upi, fee_coins, net_inr). withdrawals.coins = kul kata hua (coins+fee) taaki refund poora ho."""
     fee = wd_fee(coins, pct)
@@ -921,11 +926,11 @@ async def request_withdraw(uid, coins, pct=None, level=0, hours=None, max_day=No
             return None
         wid = await c.fetchval(
             "INSERT INTO withdrawals(user_id,coins,amount_inr,fee_coins,upi,level,expire_hours,method,usdt) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id",
-            uid, total, net_inr, fee, addr or (GPLAY if gplay else u["upi"]), level, hours, "usdt" if addr else None, usdt)
+            uid, total, net_inr, fee, addr or (AMAZON if amazon else GPLAY if gplay else u["upi"]), level, hours, "usdt" if addr else None, usdt)
         await led(c, uid, "withdraw", -total, wid)
         if fee:
             await led(c, 0, "tax", fee, wid)
-        return wid, (addr or (GPLAY if gplay else u["upi"])), fee, net_inr
+        return wid, (addr or (AMAZON if amazon else GPLAY if gplay else u["upi"])), fee, net_inr
 
 
 async def wd_get(wid):
@@ -935,8 +940,8 @@ async def wd_get(wid):
 async def wd_pay_code(wid, code):
     """Google Play withdraw: pending -> paid + code save (ek hi baar)."""
     return await pool.fetchrow(
-        "UPDATE withdrawals SET status='paid', code=$2, updated_at=now() WHERE id=$1 AND status='pending' AND upi=$3 RETURNING *",
-        wid, code, GPLAY)
+        "UPDATE withdrawals SET status='paid', code=$2, updated_at=now() WHERE id=$1 AND status='pending' AND upi IN ($3,$4) RETURNING *",
+        wid, code, GPLAY, AMAZON)
 
 
 async def wd_pay_tx(wid, tx):

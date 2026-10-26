@@ -104,7 +104,7 @@ def plans_json():
 def cfg(request):
     return {"coin_per_inr": config.COIN_PER_INR, "join_reward": config.JOIN_REWARD, "ad_cost": config.AD_COST, "task_fee": config.TASK_FEE, "max_members": (None if request["u"]["id"] in config.ADMIN_IDS else util.plan(request["u"])["members"]),
             "min_task_members": config.MIN_TASK_MEMBERS, "max_task_members": config.MAX_TASK_MEMBERS,
-            "min_deposit": config.MIN_DEPOSIT_COINS, "min_withdraw": config.MIN_WITHDRAW_COINS, "gplay_step": config.GPLAY_STEP_INR * config.COIN_PER_INR,
+            "min_deposit": config.MIN_DEPOSIT_COINS, "min_withdraw": config.MIN_WITHDRAW_COINS, "gplay_step": config.GPLAY_STEP_INR * config.COIN_PER_INR, "amazon_step": config.AMAZON_STEP_INR * config.COIN_PER_INR,
             "hold_hours": config.HOLD_HOURS, "plans": plans_json(),
             "bw_min_reward": config.BW_MIN_REWARD,
             "bw_min_users": config.BW_MIN_USERS, "bw_max_users": config.BW_MAX_USERS,
@@ -402,7 +402,7 @@ async def api_wallet(request):
     orders = [{"id": r["order_id"], "kind": r["kind"], "coins": r["coins"], "amount": r["amount_inr"],
                "status": r["status"], "at": iso(r["created_at"])} for r in oh]
     wds = [{"id": r["id"], "coins": r["coins"], "amount": float(r["amount_inr"]), "fee": r["fee_coins"], "upi": r["upi"],
-            "status": r["status"], "gp": r["upi"] == db.GPLAY, "code": r["code"] if r["upi"] == db.GPLAY else None,
+            "status": r["status"], "gp": db.is_code(r["upi"]), "amz": r["upi"] == db.AMAZON, "code": r["code"] if db.is_code(r["upi"]) else None,
             "usdt": float(r["usdt"]) if r["method"] == "usdt" else None, "tx": r["tx"],
             "at": iso(r["created_at"])} for r in wh]
     return ok(orders=orders, withdrawals=wds)
@@ -607,6 +607,7 @@ async def api_withdraw(request):
     bd = await body(request)
     coins = to_int(bd.get("coins"))
     gplay = bd.get("method") == "gplay"
+    amazon = bd.get("method") == "amazon"
     usdt_wd = bd.get("method") == "usdt"
     addr = str(bd.get("addr") or "").strip()
     if not u["device_ok"]:
@@ -637,7 +638,11 @@ async def api_withdraw(request):
             return err(f"⚠️ Withdraw ke liye kam se kam {config.MIN_TASKS_FOR_WITHDRAW} task complete karo "
                        f"(channel join ya bot work). Abhi complete: {done}.")
     step = config.GPLAY_STEP_INR * config.COIN_PER_INR
-    if gplay:
+    if amazon:
+        astep = config.AMAZON_STEP_INR * config.COIN_PER_INR
+        if coins < astep or coins % astep:
+            return err(f"Amazon voucher ₹{config.AMAZON_STEP_INR} ke multiple me hota hai ({astep} coins ke multiple me daalo, jaise {astep}, {astep * 2}, {astep * 5}).")
+    elif gplay:
         if coins < step or coins % step:
             return err(f"Google Play code ₹{config.GPLAY_STEP_INR} ke multiple me hota hai ({step} coins ke multiple me daalo, jaise {step}, {step * 2}, {step * 5}).")
     elif coins < config.MIN_WITHDRAW_COINS or coins % config.COIN_PER_INR:
@@ -650,7 +655,7 @@ async def api_withdraw(request):
                    f"Max withdraw: {mx} coins.")
     usdt_amt = (Decimal(coins) / config.COIN_PER_INR / config.USDT_INR_RATE).quantize(Decimal("0.0001"), ROUND_DOWN) if usdt_wd else None
     r = await db.request_withdraw(uid, coins, pct, pl["level"] if not is_admin_u else 0, pl["wd_hours"],
-                                  None if is_admin_u else pl["wd"], gplay=gplay, addr=addr if usdt_wd else None, usdt=usdt_amt)
+                                  None if is_admin_u else pl["wd"], gplay=gplay, amazon=amazon, addr=addr if usdt_wd else None, usdt=usdt_amt)
     if r == "limit":
         return err(f"⚠️ Aaj ke {pl['wd']} withdraw ho chuke. Kal dobara karo.")
     if not r:
@@ -662,9 +667,12 @@ async def api_withdraw(request):
     if usdt_wd:
         return ok(msg=f"USDT withdraw request #{wid} bhej di gayi. {usdt_amt} USDT (BEP20) → {addr[:8]}…{addr[-6:]} (balance se {coins} + {fee} tax = {coins + fee} coins kate). "
                       f"Admin bhejega to Transaction ID (TxID) bot me aayegi aur Wallet me bhi dikhegi. {pl['wd_hours']} ghante me process na hua to coins apne aap wapas aa jayenge.")
+    if amazon:
+        return ok(msg=f"Amazon voucher request #{wid} bhej di gayi. ₹{net:.2f} ka voucher (balance se {coins} + {fee} tax = {coins + fee} coins kate). "
+                      f"Admin voucher code bhejega to wo bot me aayega aur Wallet → Gift Codes me bhi dikhega. {pl['wd_hours']} ghante me process na hua to coins apne aap wapas aa jayenge.")
     if gplay:
         return ok(msg=f"Google Play code request #{wid} bhej di gayi. ₹{net:.2f} ka code (balance se {coins} + {fee} tax = {coins + fee} coins kate). "
-                      f"Admin code bhejega to wo bot me aayega aur Wallet → Google Play Codes me bhi dikhega. {pl['wd_hours']} ghante me process na hua to coins apne aap wapas aa jayenge.")
+                      f"Admin code bhejega to wo bot me aayega aur Wallet → Gift Codes me bhi dikhega. {pl['wd_hours']} ghante me process na hua to coins apne aap wapas aa jayenge.")
     return ok(msg=f"Withdraw request #{wid} bhej di gayi. ₹{net:.2f} → {upi} (balance se {coins} + {fee} tax = {coins + fee} coins kate). "
                   f"Admin approve karega to paisa aa jayega. {pl['wd_hours']} ghante me process na hua to coins apne aap wapas aa jayenge.")
 
@@ -679,9 +687,10 @@ async def _after_withdraw(bot, u, wid, coins, fee, net, upi, lvl=0, usdt=None):
         await payouts.alert(bot, f"💸 <b>{util.tag(lvl)}</b> · Withdraw #{wid}\nUser: <code>{u['id']}</code>\n₹{net:.2f} payable "
                                  f"(user se {coins + fee} coins kate = {coins} + {fee} tax)\n"
                                  + (f"💵 <b>USDT (BEP20) bhejna hai: {usdt} USDT</b>\nAddress: <code>{html.escape(upi)}</code>\nBhejne ke baad: <code>/txid {wid} TXHASH</code> ya Admin Panel > Withdraws" if usdt
+                                    else f"🛒 <b>Amazon voucher code bhejna hai</b>\n<code>/gpcode {wid} CODE</code> ya Admin Panel > Withdraws" if upi == db.AMAZON
                                     else f"🎁 <b>Google Play redeem code bhejna hai</b>\n<code>/gpcode {wid} CODE</code> ya Admin Panel > Withdraws" if upi == db.GPLAY
                                     else f"UPI: <code>{html.escape(upi)}</code>") + why,
-                            payouts.admin_kb(wid, upi == db.GPLAY or bool(usdt)), wid=wid)
+                            payouts.admin_kb(wid, db.is_code(upi) or bool(usdt)), wid=wid)
     except Exception:
         log.exception("after_withdraw failed for #%s", wid)
 
@@ -699,7 +708,7 @@ def _u_row(r):
 
 def _wd_row(w):
     return {"id": w["id"], "user": w["user_id"], "coins": w["coins"], "fee": w["fee_coins"], "inr": float(w["amount_inr"]),
-            "upi": w["upi"], "gp": w["upi"] == db.GPLAY, "usdt": float(w["usdt"]) if w["method"] == "usdt" else None, "status": w["status"], "level": int(w.get("level") or 0), "at": iso(w["created_at"])}
+            "upi": w["upi"], "gp": db.is_code(w["upi"]), "amz": w["upi"] == db.AMAZON, "usdt": float(w["usdt"]) if w["method"] == "usdt" else None, "status": w["status"], "level": int(w.get("level") or 0), "at": iso(w["created_at"])}
 
 
 @routes.get("/api/admin/stats")

@@ -311,7 +311,7 @@ async def bc_cmd(update: Update, ctx):
 
 
 async def gpcode_cmd(update: Update, ctx):
-    """/gpcode <id> <code> (Google Play) ya /txid <id> <TxHash> (USDT): user ko bhejo, withdraw paid ho jata hai."""
+    """/gpcode <id> <code> (Google Play / Amazon) ya /txid <id> <TxHash> (USDT): user ko bhejo, withdraw paid ho jata hai."""
     if update.effective_user.id not in config.ADMIN_IDS:
         return
     a = ctx.args
@@ -530,10 +530,12 @@ async def job_wd_stuck(ctx):
         if w["status"] == "pending":
             txt = (f"⏰ <b>{util.tag(w['level'])} · Withdraw #{w['id']} abhi pending hai</b>\nUser: <code>{w['user_id']}</code>\n"
                    f"₹{float(w['amount_inr']):.2f} → <code>{html.escape(w['upi'])}</code>")
-            kb = payouts.admin_kb(w["id"], w["upi"] == db.GPLAY or w["method"] == "usdt")
+            kb = payouts.admin_kb(w["id"], db.is_code(w["upi"]) or w["method"] == "usdt")
             if w["method"] == "usdt":
                 txt = (f"⏰ <b>{util.tag(w['level'])} · USDT Withdraw #{w['id']} pending</b>\nUser: <code>{w['user_id']}</code>\n"
                        f"{w['usdt']} USDT (BEP20) → <code>{html.escape(w['upi'])}</code>\nBhejne ke baad: <code>/txid {w['id']} TXHASH</code>")
+            elif w["upi"] == db.AMAZON:
+                txt += f"\n🛒 Amazon voucher bhejna hai: <code>/gpcode {w['id']} CODE</code> (ya Admin Panel > Withdraws)"
             elif w["upi"] == db.GPLAY:
                 txt += f"\n🎁 Google Play code bhejna hai: <code>/gpcode {w['id']} CODE</code> (ya Admin Panel > Withdraws)"
         else:
