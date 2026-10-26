@@ -1450,6 +1450,18 @@ async def ledger_prune():
            (PARTITION BY user_id ORDER BY id DESC) rn FROM ledger) q WHERE rn > $1)""", config.LEDGER_KEEP)
 
 
+async def history_prune(uid=None):
+    """Wallet history: har user ki sirf last LEDGER_KEEP orders + withdrawals rakho, purani DB se delete.
+    Pending/processing wali kabhi delete nahi hoti (payout ka kaam baki hai)."""
+    for tbl, key, safe, order in (("orders", "order_id", "'pending'", "created_at"),
+                                  ("withdrawals", "id", "'pending','processing','sending'", "id")):
+        await pool.execute(
+            f"""DELETE FROM {tbl} WHERE {key} IN (SELECT {key} FROM (SELECT {key}, status, row_number() OVER
+               (PARTITION BY user_id ORDER BY {order} DESC) rn FROM {tbl}
+               WHERE ($2::bigint IS NULL OR user_id=$2)) q WHERE rn > $1 AND status NOT IN ({safe}))""",
+            config.LEDGER_KEEP, uid)
+
+
 # ---------- referrals ----------
 async def ref_add(referred, referrer):
     """Naya user referrer ke link se aaya. True agar record bana."""
@@ -1680,3 +1692,4 @@ async def adm_cancel(kind, tid):
         return None if owner is None else await cancel_task(tid, owner)
     owner = await pool.fetchval("SELECT owner_id FROM botworks WHERE id=$1", tid)
     return None if owner is None else await bw_cancel(tid, owner)
+

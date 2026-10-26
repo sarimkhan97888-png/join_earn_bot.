@@ -399,6 +399,7 @@ async def api_rejoin(request):
 @routes.get("/api/wallet")
 async def api_wallet(request):
     uid = request["u"]["id"]
+    await db.history_prune(uid)
     oh, wh = await asyncio.gather(db.order_history(uid), db.wd_history(uid))
     orders = [{"id": r["order_id"], "kind": r["kind"], "coins": r["coins"], "amount": r["amount_inr"],
                "status": r["status"], "at": iso(r["created_at"])} for r in oh]

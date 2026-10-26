@@ -297,15 +297,25 @@ async def uassign_cmd(update: Update, ctx):
 
 
 async def bc_cmd(update: Update, ctx):
-    """Admin: /bc <text> ya photo bhejo jiske caption me /bc <text>. Sab users ko jata hai + app ke Notifications page me dikhta hai."""
+    """Admin/Support: /bc <text> ya photo (gallery photo, file ya reply) + caption me /bc <text>. Sab users ko DM + app ke Notifications me."""
     m = update.effective_message
-    if update.effective_user.id not in config.ADMIN_IDS or not m:
+    uid = update.effective_user.id
+    if (uid not in config.ADMIN_IDS and uid not in config.SUPPORT_IDS) or not m:
         return
-    raw = (m.caption_html if m.photo else m.text_html) or ""
+    raw = (m.caption_html or m.text_html or "")
     text = re.sub(r"^/bc(@\w+)?\s*", "", raw.strip()).strip()
-    photo = m.photo[-1].file_id if m.photo else None
+    photo = None
+    for src in (m, m.reply_to_message):  # khud ki photo ya kisi photo ka reply
+        if not src:
+            continue
+        if src.photo:
+            photo = src.photo[-1].file_id
+        elif src.document and (src.document.mime_type or "").startswith("image/"):
+            photo = src.document.file_id
+        if photo:
+            break
     if not text and not photo:
-        return await m.reply_text("Usage: <code>/bc aapka message</code>\nPhoto ke saath: photo bhejo aur caption me <code>/bc message</code> likho.", parse_mode="HTML")
+        return await m.reply_text("Usage: <code>/bc aapka message</code>\nPhoto ke saath: photo bhejo aur caption me <code>/bc message</code> likho (ya photo ko reply karke /bc likho).", parse_mode="HTML")
     nid, n = await db.news_add(text, photo)
     await m.reply_text(f"✅ Broadcast #{nid} queue me hai. ~{n} users ko jayega (thoda time lagta hai) aur app ke 🔔 Notifications me dikhega.")
 
@@ -494,6 +504,7 @@ async def pending_cmd(update: Update, ctx):
 async def job_cleanup(ctx):
     await db.sup_cleanup()
     await db.ledger_prune()
+    await db.history_prune()
 
 
 async def job_support_clean(ctx):
@@ -594,7 +605,7 @@ def register(app):
     app.add_handler(CallbackQueryHandler(on_usdt_ignore, pattern=r"^uign:"))
     app.add_handler(CommandHandler("uassign", uassign_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("bc", bc_cmd, filters=filters.ChatType.PRIVATE))
-    app.add_handler(MessageHandler(filters.PHOTO & filters.CaptionRegex(r"^/bc") & filters.ChatType.PRIVATE, bc_cmd))
+    app.add_handler(MessageHandler((filters.PHOTO | filters.Document.IMAGE) & filters.CaptionRegex(r"^/bc") & filters.ChatType.PRIVATE, bc_cmd))
     app.add_handler(CommandHandler("assign", assign_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("gpcode", gpcode_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("txid", gpcode_cmd, filters=filters.ChatType.PRIVATE))
