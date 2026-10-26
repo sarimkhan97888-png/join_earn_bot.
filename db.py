@@ -1485,7 +1485,14 @@ async def ref_complete(referred):
         await c.execute("UPDATE users SET ad_balance=ad_balance+$1, total_earned=total_earned+$1 WHERE id=$2",
                         reward, r["referrer_id"])
         await led(c, r["referrer_id"], "referral", reward, referred)
-        return r["referrer_id"], reward
+        # milestone bonus: referrer row lock ke baad count (do saath me complete hone par bhi bonus ek hi baar)
+        await c.fetchval("SELECT id FROM users WHERE id=$1 FOR UPDATE", r["referrer_id"])
+        done = await c.fetchval("SELECT count(*) FROM referrals WHERE referrer_id=$1 AND status='done'", r["referrer_id"])
+        bonus = config.REF_BONUSES.get(done, 0)
+        if bonus:
+            await c.execute("UPDATE users SET ad_balance=ad_balance+$1, total_earned=total_earned+$1 WHERE id=$2", bonus, r["referrer_id"])
+            await led(c, r["referrer_id"], "ref_bonus", bonus, done)
+        return r["referrer_id"], reward, bonus, done
 
 
 async def ref_stats(uid):

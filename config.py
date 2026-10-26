@@ -111,3 +111,6 @@ USDT_RPCS = [x.strip() for x in os.getenv("USDT_RPCS", "https://bsc-dataseed.bin
                                           "https://bsc-dataseed1.ninicoin.io,https://bsc-rpc.publicnode.com").split(",") if x.strip()]
 USDT_CONFIRMS = _int("USDT_CONFIRMS", 3)                           # itne blocks baad payment final maano
 USDT_TTL = _int("USDT_TTL", 3600)                                  # order ka payment time (sec)
+
+# Refer milestone bonus: itne completed refers par itne extra coins (ad balance me, sirf task ke liye)
+REF_BONUSES = {10: 300, 20: 500, 30: 800, 40: 1100, 50: 1500}

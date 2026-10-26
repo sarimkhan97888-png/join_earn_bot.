@@ -414,9 +414,11 @@ async def job_refs(ctx):
     for r in await db.ref_ready():
         res = await db.ref_complete(r["referred_id"])
         if res:
-            rid, reward = res
+            rid, reward, bonus, done = res
             await util.notify(ctx.bot, rid, f"🎉 <b>Refer complete!</b> Tumhare dost ne apne task complete kar liye. "
                                             f"<b>+{reward}</b> coins ad balance me add (ye sirf task banane me use ho sakte hain).")
+            if bonus:
+                await util.notify(ctx.bot, rid, f"🏆 <b>Milestone bonus!</b> {done} refers complete hone par <b>+{bonus}</b> extra coins ad balance me add.")
 
 
 async def job_wd_expire(ctx):

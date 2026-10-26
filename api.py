@@ -978,8 +978,10 @@ async def api_refer(request):
     uid = request["u"]["id"]
     st, lst = await asyncio.gather(db.ref_stats(uid), db.ref_list(uid))
     items = [{"name": (r["first_name"] or "User")[:20], "status": r["status"], "at": iso(r["created_at"])} for r in lst]
+    ms = [{"n": n, "bonus": bn, "got": st["done"] >= n} for n, bn in sorted(config.REF_BONUSES.items())]
     return ok(link=f"https://t.me/{request.app['bot'].username}?start=r{uid}", total=st["total"], done=st["done"],
-              earned=st["done"] * util.plan(request["u"])["ref"], reward=util.plan(request["u"])["ref"], items=items)
+              earned=st["done"] * util.plan(request["u"])["ref"] + sum(m["bonus"] for m in ms if m["got"]),
+              reward=util.plan(request["u"])["ref"], items=items, milestones=ms)
 
 
 # ---------------- profile ----------------
