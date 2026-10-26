@@ -235,6 +235,40 @@ def feed(text):
         pass  # queue full / loop nahi: feed ke liye kuch rokna nahi
 
 
+# ---------- support agents ki feed: naya user / task join / USDT withdraw ----------
+_sfeed_q = None
+_sfeed_task = None
+
+
+async def _sfeed_worker():
+    while True:
+        lines = [await _sfeed_q.get()]
+        while not _sfeed_q.empty() and len(lines) < 12:
+            lines.append(_sfeed_q.get_nowait())
+        bot = util.main_bot
+        if not bot:
+            continue
+        txt = "\n".join(lines)
+        for sid in config.SUPPORT_IDS:
+            await util.notify(bot, sid, txt, disable_notification=True)
+        await asyncio.sleep(0.4)
+
+
+def sfeed(text):
+    """Support agents ko ek line ki khabar (queue). Kabhi raise nahi karta."""
+    global _sfeed_q, _sfeed_task
+    if not config.SUPPORT_IDS:
+        return
+    try:
+        if _sfeed_q is None:
+            _sfeed_q = asyncio.Queue(maxsize=500)
+        if _sfeed_task is None or _sfeed_task.done():
+            _sfeed_task = asyncio.get_running_loop().create_task(_sfeed_worker())
+        _sfeed_q.put_nowait(f"{datetime.now(timezone(timedelta(hours=5, minutes=30))):%H:%M} {text}")
+    except Exception:
+        pass
+
+
 def uname(u):
     """User ko feed me dikhane ka chhota text: name/@username + id."""
     n = (u.get("first_name") if hasattr(u, "get") else None) or ""
@@ -245,6 +279,7 @@ def uname(u):
 
 def _new_user(row):
     feed(f"🆕 <b>New user</b> {uname(row)}")
+    sfeed(f"🆕 <b>New user</b> {uname(row)}")
 
 
 db.new_user_hook = _new_user

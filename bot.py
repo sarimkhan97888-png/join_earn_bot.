@@ -312,11 +312,16 @@ async def bc_cmd(update: Update, ctx):
 
 async def gpcode_cmd(update: Update, ctx):
     """/gpcode <id> <code> (Google Play / Amazon) ya /txid <id> <TxHash> (USDT): user ko bhejo, withdraw paid ho jata hai."""
-    if update.effective_user.id not in config.ADMIN_IDS:
+    uid = update.effective_user.id
+    if uid not in config.ADMIN_IDS and uid not in config.SUPPORT_IDS:
         return
     a = ctx.args
     if len(a) < 2 or not a[0].isdigit():
         return await update.message.reply_text("Usage: /gpcode <withdraw_id> <code>  ya  /txid <withdraw_id> <TxHash>")
+    if uid not in config.ADMIN_IDS:  # support agent: sirf USDT withdraw
+        w0 = await db.wd_get(int(a[0]))
+        if not w0 or w0["method"] != "usdt":
+            return await update.message.reply_text("Tum sirf USDT withdraw ka TxID bhej sakte ho.")
     _, msg = await adminops.wd_act(util.main_bot or ctx.bot, int(a[0]), "ok", " ".join(a[1:]))
     await update.message.reply_text(msg)
 

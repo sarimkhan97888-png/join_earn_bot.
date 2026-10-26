@@ -372,6 +372,7 @@ async def api_check(request):
     res = await db.claim(tid, uid)
     if res == "ok":
         extras.feed(f"✅ Task #{tid} join verified — {extras.uname(request['u'])}")
+        extras.sfeed(f"✅ Task #{tid} join verified — {extras.uname(request['u'])}")
         st = db.pop_streak(uid)
         return ok(msg=f"Join verified! +{t['reward']} coins ({config.HOLD_HOURS}h hold me)",
                   streak=({"day": st[0], "reward": st[1]} if st else None))
@@ -684,6 +685,9 @@ async def _after_withdraw(bot, u, wid, coins, fee, net, upi, lvl=0, usdt=None):
         why = ""
         if u["suspect"]:
             why += "\n⚠️ <b>Suspect:</b> iska device fingerprint kisi aur account se match karta hai. Pehle check karo."
+        if usdt:
+            extras.sfeed(f"💵 <b>Naya USDT withdraw #{wid}</b> [{util.tag(lvl)}]\n{usdt} USDT (BEP20) → <code>{html.escape(upi)}</code>\n"
+                         f"User: <code>{u['id']}</code>\nBhejne ke baad: <code>/txid {wid} TXHASH</code> ya Panel > USDT Withdraws")
         await payouts.alert(bot, f"💸 <b>{util.tag(lvl)}</b> · Withdraw #{wid}\nUser: <code>{u['id']}</code>\n₹{net:.2f} payable "
                                  f"(user se {coins + fee} coins kate = {coins} + {fee} tax)\n"
                                  + (f"💵 <b>USDT (BEP20) bhejna hai: {usdt} USDT</b>\nAddress: <code>{html.escape(upi)}</code>\nBhejne ke baad: <code>/txid {wid} TXHASH</code> ya Admin Panel > Withdraws" if usdt
@@ -752,20 +756,27 @@ async def api_adm_user_act(request):
 
 @routes.get("/api/admin/withdraws")
 async def api_adm_wd(request):
-    if not adm_only(request):
+    if not is_support(request):
         return err("Not allowed")
     pend, rec = await db.adm_wd_list()
+    if not adm_only(request):  # support agent: sirf USDT withdraws
+        pend = [w for w in pend if w["method"] == "usdt"]
+        rec = [w for w in rec if w["method"] == "usdt"]
     return ok(pending=[_wd_row(w) for w in pend], recent=[_wd_row(w) for w in rec])
 
 
 @routes.post("/api/admin/withdraw/act")
 async def api_adm_wd_act(request):
-    if not adm_only(request):
+    if not is_support(request):
         return err("Not allowed")
     d = await body(request)
     act = str(d.get("act"))
     if act not in ("ok", "no", "paid", "refund"):
         return err("Galat action")
+    if not adm_only(request):  # support agent: sirf USDT withdraw ko approve (TxID) ya reject
+        w0 = await db.wd_get(to_int(d.get("id")))
+        if act not in ("ok", "no") or not w0 or w0["method"] != "usdt":
+            return err("Not allowed")
     good, msg = await adminops.wd_act(request.app["bot"], to_int(d.get("id")), act, str(d.get("code") or ""))
     return ok(msg=msg) if good else err(msg)
 
