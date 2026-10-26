@@ -80,7 +80,7 @@ async def handle(bot, tx, idx, amt, sender, block):
         extras.feed(f"💵 USDT payment ✅ {amt} USDT — user <code>{d['user_id']}</code> ({d['kind']}) tx <code>{tx}</code>")
         await util.notify(bot, d["user_id"], payments.paid_msg(d))
     elif amt >= config.USDT_MIN:
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🙈 Ignore (mera paisa)", callback_data=f"uign:{tx[:60]}")]])
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🙈 Ignore (mera paisa)", callback_data=f"uign:{tx[:56]}")]])
         await _admins(bot, f"❓ <b>Unmatched USDT</b> {amt} USDT\nFrom: <code>{sender}</code>\nTx: <code>{tx}</code>\n\n"
                            f"Kisi user ka deposit hai to <code>/uassign {tx} USER_ID</code> (coins rate se mil jayenge). "
                            f"Tumhara apna paisa hai to Ignore dabao.", kb)

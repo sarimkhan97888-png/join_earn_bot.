@@ -124,7 +124,7 @@ _rl = {}
 _rl_gc = [0.0]
 # Device verify ke bina sirf ye endpoints chalte hain (baaki sab server par block)
 OPEN_PATHS = {"/api/me", "/api/lang", "/api/verify", "/api/support", "/api/support/send", "/api/support/photo", "/api/wallet",
-              "/api/order", "/api/tasks"}
+              "/api/order", "/api/tasks", "/api/news", "/api/streak/seen"}
 _cd = {}
 _giftfail = {}
 

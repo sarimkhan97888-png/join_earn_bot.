@@ -144,6 +144,7 @@ ALTER TABLE orders ADD COLUMN IF NOT EXISTS method TEXT;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS charge_id TEXT;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS pay_paise INT;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_fam_pending ON orders(pay_paise) WHERE status='pending' AND method='fam';
+UPDATE orders SET status='failed' WHERE method='usdt' AND status='pending' AND gateway_ref IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_usdt_pending ON orders(pay_amount) WHERE status='pending' AND method='usdt';
 CREATE TABLE IF NOT EXISTS fam_payments(
   txn_id TEXT PRIMARY KEY, pay_paise INT NOT NULL, sender TEXT, email_ts TIMESTAMPTZ, balance_paise BIGINT,
