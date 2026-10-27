@@ -81,8 +81,12 @@ async def on_text(update, ctx):
 async def mark(q, suffix):
     try:
         await q.edit_message_caption((q.message.caption_html or "") + suffix, parse_mode="HTML", reply_markup=None)
-    except TelegramError:
-        pass
+    except TelegramError as e:
+        log.warning("bw mark caption edit failed: %s", e)
+        try:  # caption edit na chale to kam se kam buttons hata do
+            await q.edit_message_reply_markup(reply_markup=None)
+        except TelegramError:
+            pass
 
 
 async def send_report(bot, sid):
@@ -118,10 +122,21 @@ async def on_cb(update, ctx):
     async def popup(text):
         await q.answer(i18n.tr(text, ul), show_alert=True)
 
+    async def stale(sid, uid):
+        """Button dabane par kaam nahi hua: sahi wajah batao, aur agar submission pehle hi ho chuki hai to purane buttons hata do."""
+        s0 = await db.bw_sub(sid)
+        if s0 and s0["owner_id"] != uid:
+            return await popup("Ye task tumhara nahi hai (sirf task ka owner Done/Reject kar sakta hai).")
+        names = {"approved": "✅ Approved", "rejected": "❌ Rejected", "reported": "🚩 Reported", "closed": "🔒 Closed"}
+        st = names.get(s0["status"]) if s0 else None
+        if st:
+            await mark(q, f"\n\n{st}")  # buttons hata do
+        await popup("Ye submission pehle hi process ho chuki hai.")
+
     if act == "bws_ok":
         s = await db.bw_review(sid, uid, True)
         if not s:
-            return await popup("Already processed ya tum is task ke owner nahi ho.")
+            return await stale(sid, uid)
         extras.feed(f"✅ Bot work submission #{sid} approved by owner (worker <code>{s['worker_id']}</code>, +{s['reward']})")
         await popup("✅ Done! Worker ko coins mil gaye.")
         await mark(q, "\n\n✅ <b>Approved</b>")
@@ -135,7 +150,7 @@ async def on_cb(update, ctx):
     if act in ("bws_no", "bws_bk", "bws_rx") or act in {f"bws_r{k}" for k in REASONS}:
         s = await db.bw_sub(sid)
         if not s or s["owner_id"] != uid or s["status"] != "pending":
-            return await popup("Already processed ya tum is task ke owner nahi ho.")
+            return await stale(sid, uid)
         if act == "bws_no":  # reject se pehle reason poochho
             await q.answer(i18n.tr("Reason chuno: worker ko ye dikhega", ul))
             try:

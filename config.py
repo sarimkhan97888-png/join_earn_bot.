@@ -117,3 +117,28 @@ REF_BONUSES = {10: 300, 20: 500, 30: 800, 40: 1100, 50: 1500}
 
 # Amazon voucher withdraw: ₹10 ke multiple (unlimited), tax upar se
 AMAZON_STEP_INR = _int("AMAZON_STEP_INR", 10)
+
+
+# /send ka default promo message (bina text ke /send likhne par yahi jata hai)
+PROMO_TEXT = """╔═══════ ⟡ 💎 ⟡ ═══════╗
+🚀 𓆩♡𓆪 ɴᴇᴡ ᴛᴀsᴋ & ᴇᴀʀɴ ʙᴏᴛ 𓆩♡𓆪 🚀
+╚═══════ ⟡ 💎 ⟡ ═══════╝
+
+🤖 𓆩♡𓆪 ʙᴏᴛ: @Sarimproifitix_bot
+                       @Sarimproifitix_bot
+
+💸 ᴄʀᴇᴀᴛᴇ ᴛᴀsᴋs & ᴇᴀʀɴ
+🎯 ᴄᴏᴍᴘʟᴇᴛᴇ ᴛᴀsᴋs • ɢᴇᴛ ʀᴇᴡᴀʀᴅs
+
+👥 ɢᴇᴛ ғʀᴇᴇ ᴛᴇʟᴇɢʀᴀᴍ ᴍᴇᴍʙᴇʀs
+🎁 ɪɴᴠɪᴛᴇ ғʀɪᴇɴᴅs & ᴇᴀʀɴ ʀᴇғᴇʀʀᴀʟ ʀᴇᴡᴀʀᴅs
+
+💰 ɪɴsᴛᴀɴᴛ ᴡɪᴛʜᴅʀᴀᴡᴀʟs
+💳 ᴜᴘɪ | ᴜsᴅᴛ | ʀᴇᴅᴇᴇᴍ ᴄᴏᴅᴇ
+🎁 ᴀᴍᴀᴢᴏɴ ᴠᴏᴜᴄʜᴇʀs
+
+💵 ᴍɪɴɪᴍᴜᴍ ᴡɪᴛʜᴅʀᴀᴡᴀʟ: ₹𝟏5
+
+━━━━━━━━━━━━━━━━━━
+🔥 ᴄʀᴇᴀᴛᴇ • ᴄᴏᴍᴘʟᴇᴛᴇ • ᴇᴀʀɴ 🔥
+━━━━━━━━━━━━━━━━━━"""

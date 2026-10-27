@@ -8,7 +8,7 @@ import secrets
 import time
 
 from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as M, MenuButtonWebApp, Update, WebAppInfo
-from telegram.error import TelegramError
+from telegram.error import Forbidden, TelegramError
 from telegram.ext import CallbackQueryHandler, ChatMemberHandler, CommandHandler, MessageHandler, PreCheckoutQueryHandler, filters
 
 import adminops
@@ -320,6 +320,87 @@ async def bc_cmd(update: Update, ctx):
     await m.reply_text(f"✅ Broadcast #{nid} queue me hai. ~{n} users ko jayega (thoda time lagta hai) aur app ke 🔔 Notifications me dikhega.")
 
 
+def _snd_target(tok):
+    """@user, t.me/user, https://t.me/user ya -100... id -> chat id/username. None = samajh nahi aaya."""
+    t = tok.strip().rstrip("/")
+    mm = re.match(r"^(?:https?://)?(?:www\.)?(?:t|telegram)\.me/(?!\+|joinchat)([A-Za-z][\w]{3,})(?:/\d+)?$", t)
+    if mm:
+        return "@" + mm.group(1)
+    if re.match(r"^@[A-Za-z][\w]{3,}$", t):
+        return t
+    if re.match(r"^-100\d{5,}$", t):
+        return int(t)
+    return None
+
+
+async def snd_cmd(update: Update, ctx):
+    """Admin/Support: /snd <channel @username ya link> <message>. Photo ke saath: photo bhejo, caption me /snd <channel> <message> (ya photo ko reply karke)."""
+    m = update.effective_message
+    uid = update.effective_user.id
+    if (uid not in config.ADMIN_IDS and uid not in config.SUPPORT_IDS) or not m:
+        return
+    plain = (m.caption or m.text or "").strip()
+    raw = (m.caption_html or m.text_html or "").strip()
+    rest = re.sub(r"^/snd(@\w+)?\s*", "", plain)
+    parts = rest.split(None, 1)
+    tgt = _snd_target(parts[0]) if parts else None
+    if tgt is None:
+        return await m.reply_text(
+            "Usage: <code>/snd @channel_username aapka message</code>\n(ya <code>/snd https://t.me/channel message</code>)\n"
+            "Photo ke saath: photo bhejo aur caption me <code>/snd @channel message</code> likho, ya photo ko reply karke /snd likho.\n"
+            "Sirf message na likho to default promo jata hai. Private invite link (t.me/+...) se nahi hota, @username ya -100 id do.", parse_mode="HTML")
+    body_plain = parts[1] if len(parts) > 1 else ""
+    text = re.sub(r"^/snd(@\w+)?\s*", "", raw).strip()
+    text = text[len(parts[0]):].strip() if text.startswith(parts[0]) else text.replace(parts[0], "", 1).strip()
+    if not body_plain:
+        text = ""
+    photo = None
+    for src in (m, m.reply_to_message):
+        if not src:
+            continue
+        if src.photo:
+            photo = src.photo[-1].file_id
+        elif src.document and (src.document.mime_type or "").startswith("image/"):
+            photo = src.document.file_id
+        if photo:
+            break
+    if not text and not photo:
+        text = config.PROMO_TEXT
+    bot = util.main_bot or ctx.bot
+    try:
+        if photo:
+            short = len(text) <= 1000
+            await bot.send_photo(tgt, photo, caption=text if (short and text) else None, parse_mode="HTML")
+            if text and not short:
+                await bot.send_message(tgt, text, parse_mode="HTML")
+        else:
+            await bot.send_message(tgt, text, parse_mode="HTML")
+    except TelegramError as e:
+        why = str(e)
+        if "chat not found" in why.lower():
+            why = "channel nahi mila. Username check karo, aur bot ko us channel me add karo (admin, post message right ke saath)."
+        elif isinstance(e, Forbidden) or "not enough rights" in why.lower():
+            why = "bot ko wahan post karne ka right nahi hai (channel me admin banao)."
+        return await m.reply_text(f"❌ Nahi gaya: {why}")
+    await m.reply_text(f"✅ {tgt} me bhej diya.")
+
+
+async def bwinfo_cmd(update: Update, ctx):
+    """Admin: /bwinfo <submission_id> -> us bot work submission ki asli status (debug)."""
+    if update.effective_user.id not in config.ADMIN_IDS:
+        return
+    a = ctx.args
+    if not a or not a[0].isdigit():
+        return await update.message.reply_text("Usage: /bwinfo <submission_id>")
+    s = await db.bw_sub(int(a[0]))
+    if not s:
+        return await update.message.reply_text(f"Submission #{a[0]} database me nahi hai.")
+    await update.message.reply_text(
+        f"🤖 Submission #{s['id']} (task #{s['bw_id']}: {s['title']})\nStatus: {s['status']} (attempt {s['attempt']})\n"
+        f"Poster (owner): {s['owner_id']}\nWorker: {s['worker_id']}\nBani: {s['created_at']:%d %b %H:%M}\n"
+        f"Faisla: {s['decided_at'] and format(s['decided_at'], '%d %b %H:%M') or '—'}\nReject reason: {s['reject_reason'] or '—'}")
+
+
 async def gpcode_cmd(update: Update, ctx):
     """/gpcode <id> <code> (Google Play / Amazon) ya /txid <id> <TxHash> (USDT): user ko bhejo, withdraw paid ho jata hai."""
     uid = update.effective_user.id
@@ -577,6 +658,9 @@ def register_backup(app):
     app.add_handler(CallbackQueryHandler(on_admin_wd, pattern=r"^adm_"))
     app.add_handler(CallbackQueryHandler(on_admin_claim, pattern=r"^clm_"))
     app.add_handler(CallbackQueryHandler(on_ignore, pattern=r"^ign:"))
+    app.add_handler(CommandHandler("bwinfo", bwinfo_cmd, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("snd", snd_cmd, filters=filters.ChatType.PRIVATE))
+    app.add_handler(MessageHandler((filters.PHOTO | filters.Document.IMAGE) & filters.CaptionRegex(r"^/snd") & filters.ChatType.PRIVATE, snd_cmd))
     app.add_handler(CommandHandler("assign", assign_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("gpcode", gpcode_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("txid", gpcode_cmd, filters=filters.ChatType.PRIVATE))
