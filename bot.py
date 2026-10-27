@@ -401,6 +401,50 @@ async def bwinfo_cmd(update: Update, ctx):
         f"Faisla: {s['decided_at'] and format(s['decided_at'], '%d %b %H:%M') or '—'}\nReject reason: {s['reject_reason'] or '—'}")
 
 
+async def send_cmd(update: Update, ctx):
+    """Admin: /send <user_id> <message>. Photo ke saath: photo bhejo, caption me /send <user_id> <message> (ya photo ko reply karke)."""
+    m = update.effective_message
+    if not m or update.effective_user.id not in config.ADMIN_IDS:
+        return
+    plain = (m.caption or m.text or "").strip()
+    raw = (m.caption_html or m.text_html or "").strip()
+    rest = re.sub(r"^/send(@\w+)?\s*", "", plain)
+    parts = rest.split(None, 1)
+    if not parts or not parts[0].lstrip("-").isdigit():
+        return await m.reply_text("Usage: <code>/send USER_ID aapka message</code>\nPhoto ke saath: photo bhejo aur caption me <code>/send USER_ID message</code> likho (ya photo ko reply karke /send USER_ID likho).", parse_mode="HTML")
+    uid = int(parts[0])
+    text = re.sub(r"^/send(@\w+)?\s*", "", raw).strip()
+    text = text[len(parts[0]):].strip() if text.startswith(parts[0]) else text.replace(parts[0], "", 1).strip()
+    photo = None
+    for src in (m, m.reply_to_message):
+        if not src:
+            continue
+        if src.photo:
+            photo = src.photo[-1].file_id
+        elif src.document and (src.document.mime_type or "").startswith("image/"):
+            photo = src.document.file_id
+        if photo:
+            break
+    if not text and not photo:
+        return await m.reply_text("Message ya photo bhi likho: <code>/send USER_ID aapka message</code>", parse_mode="HTML")
+    if not await db.pool.fetchval("SELECT 1 FROM users WHERE id=$1", uid):
+        return await m.reply_text(f"❌ User {uid} database me nahi hai.")
+    bot = util.main_bot or ctx.bot
+    try:
+        if photo:
+            short = len(text) <= 1000
+            await bot.send_photo(uid, photo, caption=text if (short and text) else None, parse_mode="HTML")
+            if text and not short:
+                await bot.send_message(uid, text, parse_mode="HTML")
+        else:
+            await bot.send_message(uid, text, parse_mode="HTML")
+    except Forbidden:
+        return await m.reply_text(f"❌ User {uid} ne bot block kar rakha hai.")
+    except TelegramError as e:
+        return await m.reply_text(f"❌ Nahi gaya: {e}")
+    await m.reply_text(f"✅ User {uid} ko bhej diya.")
+
+
 async def gpcode_cmd(update: Update, ctx):
     """/gpcode <id> <code> (Google Play / Amazon) ya /txid <id> <TxHash> (USDT): user ko bhejo, withdraw paid ho jata hai."""
     uid = update.effective_user.id
@@ -659,6 +703,8 @@ def register_backup(app):
     app.add_handler(CallbackQueryHandler(on_admin_claim, pattern=r"^clm_"))
     app.add_handler(CallbackQueryHandler(on_ignore, pattern=r"^ign:"))
     app.add_handler(CommandHandler("bwinfo", bwinfo_cmd, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("send", send_cmd, filters=filters.ChatType.PRIVATE))
+    app.add_handler(MessageHandler((filters.PHOTO | filters.Document.IMAGE) & filters.CaptionRegex(r"^/send") & filters.ChatType.PRIVATE, send_cmd))
     app.add_handler(CommandHandler("snd", snd_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(MessageHandler((filters.PHOTO | filters.Document.IMAGE) & filters.CaptionRegex(r"^/snd") & filters.ChatType.PRIVATE, snd_cmd))
     app.add_handler(CommandHandler("assign", assign_cmd, filters=filters.ChatType.PRIVATE))

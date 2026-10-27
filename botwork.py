@@ -125,6 +125,9 @@ async def on_cb(update, ctx):
     async def stale(sid, uid):
         """Button dabane par kaam nahi hua: sahi wajah batao, aur agar submission pehle hi ho chuki hai to purane buttons hata do."""
         s0 = await db.bw_sub(sid)
+        if not s0:  # submission DB me nahi (cancel ho gayi): purane buttons hata do
+            await mark(q, "\n\n⚠️ Cancelled")
+            return await popup("Ye submission ab maujood nahi hai (cancel ho gayi). Worker ko dobara submit karna hoga.")
         if s0 and s0["owner_id"] != uid:
             return await popup("Ye task tumhara nahi hai (sirf task ka owner Done/Reject kar sakta hai).")
         names = {"approved": "✅ Approved", "rejected": "❌ Rejected", "reported": "🚩 Reported", "closed": "🔒 Closed"}

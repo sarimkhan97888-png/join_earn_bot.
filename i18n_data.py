@@ -280,4 +280,6 @@ _add({
 "🗑 History saaf ho gayi.": ("🗑 हिस्ट्री साफ़ हो गई।", "🗑 History cleared."),
 "Ye task tumhara nahi hai (sirf task ka owner Done/Reject kar sakta hai).": ("यह टास्क तुम्हारा नहीं है (सिर्फ़ टास्क का ओनर Done/Reject कर सकता है)।", "This task isn't yours (only the task owner can tap Done/Reject)."),
 "Ye submission pehle hi process ho chuki hai.": ("यह सबमिशन पहले ही प्रोसेस हो चुका है।", "This submission was already processed."),
+"Ye submission ab maujood nahi hai (cancel ho gayi). Worker ko dobara submit karna hoga.": ("यह सबमिशन अब मौजूद नहीं है (कैंसल हो गया)। वर्कर को दोबारा सबमिट करना होगा।", "This submission no longer exists (it was cancelled). The worker has to submit again."),
+"⚠️ Tumhari Bot Work submission owner tak nahi pahunch payi. Ye cancel ho gayi hai, Tasks me jaake dobara submit karo.": ("⚠️ तुम्हारा Bot Work सबमिशन ओनर तक नहीं पहुँच पाया। यह कैंसल हो गया है, Tasks में जाकर दोबारा सबमिट करो।", "⚠️ Your Bot Work submission could not reach the owner. It was cancelled — go to Tasks and submit again."),
 })

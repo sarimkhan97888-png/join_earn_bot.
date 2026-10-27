@@ -16,7 +16,7 @@ from urllib.parse import parse_qsl, quote
 import qrcode
 from aiohttp import web
 from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as M, LabeledPrice, WebAppInfo
-from telegram.error import TelegramError
+from telegram.error import NetworkError, TelegramError, TimedOut
 
 import adminops
 import botwork
@@ -1301,18 +1301,42 @@ async def api_bw_submit(request):
     kb = M([[B("✅ Done", callback_data=f"bws_ok:{sid}"), B("❌ Reject", callback_data=f"bws_no:{sid}")]])
     ol = await i18n.lang_of(b["owner_id"])  # poster ki bhasha me caption
     cap = i18n.tr(cap, ol)
-    try:
-        f2 = None
-        if photo2:  # pehle device-verification wali photo, phir buttons wali main photo
-            m2 = await bot.send_photo(b["owner_id"], photo2, parse_mode="HTML",
-                                      caption=i18n.tr(f"🔐 <b>Device verification screenshot</b> (submission #{sid}). Result success hai ya failed, dekho.", ol))
-            f2 = m2.photo[-1].file_id
-        m = await bot.send_photo(b["owner_id"], photo, caption=cap, parse_mode="HTML", reply_markup=kb)
-        await db.bw_set_photo(sid, m.photo[-1].file_id, f2)
-    except TelegramError:
-        await db.bw_drop(sid)
-        return err("Owner tak bhej nahi paya (unhone bot start nahi kiya hoga). Baad me try karo.")
+    # Owner ko bhejna background me (network glitch par bhi submission na khoye): worker ko turant Pending dikhta hai
+    asyncio.create_task(_bw_deliver(bot, sid, b["owner_id"], uid, photo, photo2, cap, ol, kb))
     return ok(msg="Submit ho gaya! Status: Pending. Owner check karke Done karega to coins mil jayenge.")
+
+
+async def _bw_deliver(bot, sid, owner, worker, photo, photo2, cap, ol, kb):
+    """Submission owner tak pahunchao. Telegram ka network glitch (Bad Gateway/timeout) ho to 8 baar tak retry
+    (~5 min). Pehla message chala gaya ho to duplicate buttons safe hain (pehla Done chalega, dusra stale ho jata hai).
+    Pakka fail (owner ne bot block kiya) ya retry khatam: submission hata ke worker ko DM, taaki wo dobara submit kar sake."""
+    delay, last = 3, None
+    for attempt in range(8):
+        try:
+            f2 = None
+            if photo2:
+                m2 = await bot.send_photo(owner, photo2, parse_mode="HTML",
+                                          caption=i18n.tr(f"🔐 <b>Device verification screenshot</b> (submission #{sid}). Result success hai ya failed, dekho.", ol))
+                f2 = m2.photo[-1].file_id
+                photo2 = f2  # dobara upload nahi, file_id se
+            m = await bot.send_photo(owner, photo, caption=cap, parse_mode="HTML", reply_markup=kb)
+            await db.bw_set_photo(sid, m.photo[-1].file_id, f2)
+            return
+        except (NetworkError, TimedOut) as e:
+            last = e
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, 60)
+        except TelegramError as e:
+            last = e
+            break
+        except Exception:
+            logging.getLogger("api").exception("bw deliver #%s", sid)
+            break
+    logging.getLogger("api").warning("bw deliver #%s failed: %s", sid, last)
+    await db.bw_drop(sid)
+    await util.notify(bot, worker, "⚠️ Tumhari Bot Work submission owner tak nahi pahunch payi. Ye cancel ho gayi hai, "
+                                   "Tasks me jaake dobara submit karo.")
+    extras.feed(f"⚠️ Bot work submission #{sid} owner <code>{owner}</code> tak nahi pahunchi: {last}")
 
 
 @routes.post("/api/bw/report")
