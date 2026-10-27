@@ -35,7 +35,10 @@ async def post_init(app):
             menu_button=MenuButtonWebApp(text="Open App", web_app=WebAppInfo(url=f"{config.BASE_URL}/app")))
     except TelegramError:
         log.warning("menu button set nahi hua")
-    await set_command_menus(app.bot)
+    try:
+        await set_command_menus(app.bot)
+    except Exception:
+        log.exception("command menu set nahi hua")
 
 
 ADMIN_CMDS = [
@@ -760,6 +763,11 @@ def register(app):
     app.add_handler(CommandHandler("assign", assign_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("gpcode", gpcode_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("txid", gpcode_cmd, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("bwinfo", bwinfo_cmd, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("send", send_cmd, filters=filters.ChatType.PRIVATE))
+    app.add_handler(MessageHandler((filters.PHOTO | filters.Document.IMAGE) & filters.CaptionRegex(r"^/send") & filters.ChatType.PRIVATE, send_cmd))
+    app.add_handler(CommandHandler("snd", snd_cmd, filters=filters.ChatType.PRIVATE))
+    app.add_handler(MessageHandler((filters.PHOTO | filters.Document.IMAGE) & filters.CaptionRegex(r"^/snd") & filters.ChatType.PRIVATE, snd_cmd))
     app.add_handler(CallbackQueryHandler(botwork.on_cb, pattern=r"^(bws_|bwa_)"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, botwork.on_text))
     app.add_handler(ChatMemberHandler(on_chat_member, ChatMemberHandler.CHAT_MEMBER))
