@@ -35,6 +35,35 @@ async def post_init(app):
             menu_button=MenuButtonWebApp(text="Open App", web_app=WebAppInfo(url=f"{config.BASE_URL}/app")))
     except TelegramError:
         log.warning("menu button set nahi hua")
+    await set_command_menus(app.bot)
+
+
+ADMIN_CMDS = [
+    ("admin", "👑 Admin panel"), ("pending", "⏳ Pending withdraws"), ("ping", "📡 DB speed check"),
+    ("backup", "🗄 Abhi backup bhejo"), ("addbalance", "💰 Apne account me balance"),
+    ("bc", "📢 Sab users ko broadcast (text/photo)"), ("snd", "📣 Channel me post: /snd @channel msg"),
+    ("send", "✉️ User ko msg: /send USER_ID msg"), ("txid", "💵 USDT TxID bhejo: /txid ID TxHash"),
+    ("gpcode", "🎁 Gift code bhejo: /gpcode ID code"), ("assign", "🔗 Fam payment assign"),
+    ("uassign", "🔗 USDT payment assign"), ("bwinfo", "🤖 Bot work submission status"),
+    ("bypass", "✅ Device verify bypass"), ("unbypass", "↩️ Bypass hatao"), ("allowdev", "📱 Device allow"),
+    ("resetdev", "♻️ Device reset"), ("ban", "🚫 User ban"), ("unban", "✅ User unban"),
+    ("language", "🌐 Bhasha badlo"), ("start", "🏠 Start"),
+]
+SUPPORT_CMDS = [
+    ("bc", "📢 Sab users ko broadcast (text/photo)"), ("snd", "📣 Channel me post: /snd @channel msg"),
+    ("txid", "💵 USDT TxID bhejo: /txid ID TxHash"), ("language", "🌐 Bhasha badlo"), ("start", "🏠 Start"),
+]
+
+
+async def set_command_menus(bot):
+    """'/' wale command box me list: sirf admin aur support ko dikhti hai (har ek ki apni chat par). Baaki users ke liye kuch nahi badalta."""
+    from telegram import BotCommand, BotCommandScopeChat
+    for ids, cmds in ((config.ADMIN_IDS, ADMIN_CMDS), (config.SUPPORT_IDS, SUPPORT_CMDS)):
+        for uid in ids:
+            try:
+                await bot.set_my_commands([BotCommand(c, d[:256]) for c, d in cmds], scope=BotCommandScopeChat(uid))
+            except TelegramError as e:
+                log.warning("command menu %s set nahi hua: %s", uid, e)
 
 
 _last_start = {}
@@ -702,14 +731,6 @@ def register_backup(app):
     app.add_handler(CallbackQueryHandler(on_admin_wd, pattern=r"^adm_"))
     app.add_handler(CallbackQueryHandler(on_admin_claim, pattern=r"^clm_"))
     app.add_handler(CallbackQueryHandler(on_ignore, pattern=r"^ign:"))
-    app.add_handler(CommandHandler("bwinfo", bwinfo_cmd, filters=filters.ChatType.PRIVATE))
-    app.add_handler(CommandHandler("send", send_cmd, filters=filters.ChatType.PRIVATE))
-    app.add_handler(MessageHandler((filters.PHOTO | filters.Document.IMAGE) & filters.CaptionRegex(r"^/send") & filters.ChatType.PRIVATE, send_cmd))
-    app.add_handler(CommandHandler("snd", snd_cmd, filters=filters.ChatType.PRIVATE))
-    app.add_handler(MessageHandler((filters.PHOTO | filters.Document.IMAGE) & filters.CaptionRegex(r"^/snd") & filters.ChatType.PRIVATE, snd_cmd))
-    app.add_handler(CommandHandler("assign", assign_cmd, filters=filters.ChatType.PRIVATE))
-    app.add_handler(CommandHandler("gpcode", gpcode_cmd, filters=filters.ChatType.PRIVATE))
-    app.add_handler(CommandHandler("txid", gpcode_cmd, filters=filters.ChatType.PRIVATE))
 
 
 def register(app):
