@@ -37,7 +37,7 @@ IMAP_FOLDERS = [x.strip() for x in os.getenv("IMAP_FOLDERS", "[Gmail]/All Mail|[
 ALLOWED_SENDER_DOMAINS = [d.strip().lower() for d in os.getenv("ALLOWED_SENDER_DOMAINS", "famapp.in,fampay.in").split(",") if d.strip()]
 REQUIRE_DKIM = os.getenv("REQUIRE_DKIM", "1") == "1"
 FAM_POLL_SECONDS = _int("FAM_POLL_SECONDS", 8)
-FAM_TTL = 600               # order itne second valid (10 min)
+FAM_TTL = _int("FAM_TTL", 180)   # order itne second valid (3 min)
 FAM_GRACE = 60              # expiry ke baad bhi itni der mail chalegi (mail delay)
 MAX_PENDING_FAM = 2         # ek user ke khule orders
 MAX_FAM_ORDERS_PER_HOUR = 8
@@ -77,7 +77,7 @@ BW_REPORT_HOURS = 48        # reject ke baad itne ghante tak worker report kar s
 STRICT_FP = os.getenv("STRICT_FP", "1") == "1"  # 1 = same fingerprint + same IP wala dusra account verify nahi hoga
 MIN_TASKS_FOR_WITHDRAW = _int("MIN_TASKS_FOR_WITHDRAW", 2)  # withdraw se pehle itne task complete hone chahiye (channel join / bot work)
 MIN_TASKS_FOR_REFER = _int("MIN_TASKS_FOR_REFER", 2)  # dost itne task kare tab referrer ko reward
-ORDER_EXPIRY_MIN = _int("ORDER_EXPIRY_MIN", 11)  # itne minute baad unpaid deposit/premium order history me Failed dikhta hai
+ORDER_EXPIRY_MIN = _int("ORDER_EXPIRY_MIN", 4)  # itne minute baad unpaid deposit/premium order history me Failed dikhta hai
 WITHDRAW_EXPIRE_HOURS = _int("WITHDRAW_EXPIRE_HOURS", 48)  # pending withdraw itne ghante me approve na ho to expire + refund
 BW_MAX_ATTEMPTS = _int("BW_MAX_ATTEMPTS", 2)  # bot work me ek worker ke kitne try (reject ke baad retry), uske baad lock
 
@@ -110,7 +110,7 @@ USDT_CONTRACT = os.getenv("USDT_CONTRACT", "0x55d398326f99059fF775485246999027B3
 USDT_RPCS = [x.strip() for x in os.getenv("USDT_RPCS", "https://bsc-dataseed.binance.org,https://bsc-dataseed1.defibit.io,"
                                           "https://bsc-dataseed1.ninicoin.io,https://bsc-rpc.publicnode.com").split(",") if x.strip()]
 USDT_CONFIRMS = _int("USDT_CONFIRMS", 3)                           # itne blocks baad payment final maano
-USDT_TTL = _int("USDT_TTL", 600)                                   # order ka payment time (sec) = 10 min
+USDT_TTL = _int("USDT_TTL", 180)                                   # order ka payment time (sec) = 3 min
 
 # Refer milestone bonus: itne completed refers par itne extra coins (ad balance me, sirf task ke liye)
 REF_BONUSES = {10: 300, 20: 500, 30: 800, 40: 1100, 50: 1500}

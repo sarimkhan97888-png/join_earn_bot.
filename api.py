@@ -114,7 +114,7 @@ def cfg(request):
             "tasks_daily": None if request["u"]["id"] in config.ADMIN_IDS else util.plan(request["u"])["tasks"],
             "free_wd_hours": config.WITHDRAW_EXPIRE_HOURS, "free_wd": 1, "free_tasks": config.FREE_TASKS_DAILY, "free_members": config.FREE_TASK_MEMBERS, "payout_link": config.PAYOUT_CHANNEL_LINK, "app_name": config.APP_NAME,
             "refer_reward": util.plan(request["u"])["ref"], "min_tasks": config.MIN_TASKS_FOR_WITHDRAW, "min_ref_tasks": config.MIN_TASKS_FOR_REFER, "order_expiry_min": config.ORDER_EXPIRY_MIN,
-            "upi_id": config.FAM_UPI_ID, "max_deposit": config.MAX_DEPOSIT_COINS, "fam_ttl": config.FAM_TTL,
+            "upi_id": config.FAM_UPI_ID, "max_deposit": config.MAX_DEPOSIT_COINS, "fam_ttl": config.FAM_TTL, "usdt_ttl": config.USDT_TTL,
             "usdt_on": config.USDT_ON, "usdt_rate": float(config.USDT_INR_RATE), "usdt_fee": float(config.USDT_FEE_PCT),
             "usdt_min": float(config.USDT_MIN), "usdt_max": float(config.USDT_MAX)}
 
@@ -124,7 +124,7 @@ _rl = {}
 _rl_gc = [0.0]
 # Device verify ke bina sirf ye endpoints chalte hain (baaki sab server par block)
 OPEN_PATHS = {"/api/me", "/api/lang", "/api/verify", "/api/support", "/api/support/send", "/api/support/photo", "/api/wallet",
-              "/api/order", "/api/tasks", "/api/news", "/api/streak/seen"}
+              "/api/order", "/api/order/active", "/api/tasks", "/api/news", "/api/streak/seen"}
 _cd = {}
 _giftfail = {}
 
@@ -327,6 +327,9 @@ async def api_me(request):
     me = pub(u)
     me["streak"] = await db.streak_info(u["id"])
     me["news_unread"] = int(await db.news_unread(u["id"]) or 0)
+    ao = await db.active_order(u["id"])
+    me["active"] = None if not ao else {"method": ao["method"], "left": int(ao["left_s"]),
+        "pay_amount": format(ao["pay_amount"], "f") if ao["method"] == "usdt" else f"{ao['pay_paise'] // 100}.{ao['pay_paise'] % 100:02d}"}
     me.update(need_join=bool(u.get("need_join")), join_link=config.FORCE_LINK)
     me.update(tasks_today=tdone, wd_today=wdone, queued=[{"level": r["level"], "days": r["days"]} for r in queued])
     return ok(me=me, blocked=blocked, history=hist, cfg=cfg(request))
@@ -426,7 +429,7 @@ async def make_order(request, kind, coins, amount, level=None, mode=None):
         return too_fast()
     pend, hour = await db.fam_order_counts(uid)
     if pend >= config.MAX_PENDING_FAM:
-        return err("Pehle wale payment order ko pura karo ya 12 minute ruko, phir naya banao.")
+        return err("Pehle wale payment order ko pura karo ya 3 minute ruko, phir naya banao.")
     if hour >= config.MAX_FAM_ORDERS_PER_HOUR:
         return err("Bahut saare orders. Thodi der baad try karo.")
     order_id = f"{kind[0].upper()}{uid}{int(time.time() * 1000)}"
@@ -434,10 +437,20 @@ async def make_order(request, kind, coins, amount, level=None, mode=None):
     if not pay:
         return err("Abhi bahut log payment kar rahe hain. 1 minute baad try karo.")
     extras.feed(f"🧾 {('Premium L%s' % level) if kind == 'premium' else 'Deposit'} order bana ₹{pay / 100:.2f} — {extras.uname(u)}")
+    return ok(**fam_payload(order_id, kind, pay, amount, coins, config.FAM_TTL))
+
+
+def fam_payload(order_id, kind, pay, amount, coins, left):
     amt = f"{pay // 100}.{pay % 100:02d}"
     link = f"upi://pay?pa={quote(config.FAM_UPI_ID)}&pn={quote(config.PAYEE_NAME)}&am={amt}&cu=INR&tn={quote(order_id[-8:])}"
-    return ok(order_id=order_id, amount=amount, pay_amount=amt, coins=coins, upi_id=config.FAM_UPI_ID,
-              pay_url=link, qr=make_qr(link), expires_in=config.FAM_TTL)
+    return dict(order_id=order_id, kind=kind, method="fam", amount=amount, pay_amount=amt, coins=coins, upi_id=config.FAM_UPI_ID,
+                pay_url=link, qr=make_qr(link), expires_in=int(left))
+
+
+def usdt_payload(order_id, kind, pay, usdt, coins, left, address):
+    return dict(order_id=order_id, kind=kind, method="usdt", usdt=float(usdt), coins=coins, pay_amount=format(pay, "f"), address=address,
+                qr=make_qr(f"ethereum:{config.USDT_CONTRACT}@56/transfer?address={address}&uint256={int(pay * 10 ** 18)}"),
+                expires_in=int(left), network="BEP20")
 
 
 def _usdt_ceil(inr):
@@ -488,9 +501,18 @@ async def api_usdt_order(request):
     if not pay:
         return err("Abhi bahut log payment kar rahe hain. 1 minute baad try karo.")
     extras.feed(f"💵 USDT {('Premium L%s' % level) if kind == 'premium' else 'Deposit'} order {pay} USDT — {extras.uname(u)}")
-    return ok(order_id=order_id, usdt=float(usdt), coins=coins, pay_amount=format(pay, "f"), address=config.USDT_WALLET,
-              qr=make_qr(f"ethereum:{config.USDT_CONTRACT}@56/transfer?address={config.USDT_WALLET}&uint256={int(pay * 10 ** 18)}"),
-              expires_in=config.USDT_TTL, network="BEP20")
+    return ok(**usdt_payload(order_id, kind, pay, usdt, coins, config.USDT_TTL, config.USDT_WALLET))
+
+
+@routes.get("/api/order/active")
+async def api_order_active(request):
+    """Sheet galti se band ho gayi: abhi chalte order ka QR dobara."""
+    r = await db.active_order(request["u"]["id"])
+    if not r:
+        return ok(order=None)
+    if r["method"] == "usdt":
+        return ok(order=usdt_payload(r["order_id"], r["kind"], r["pay_amount"], r["usdt"], r["coins"], r["left_s"], r["pay_address"]))
+    return ok(order=fam_payload(r["order_id"], r["kind"], r["pay_paise"], r["amount_inr"], r["coins"], r["left_s"]))
 
 
 @routes.post("/api/deposit/claim")

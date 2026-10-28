@@ -561,6 +561,7 @@ async def orders_expire_old():
 async def usdt_order_new(order_id, uid, kind, coins, amount_inr, level, mode, usdt, base_amount, address):
     """Unique pay_amount (base + 0.0001..0.0099): wahi amount aane par order match hota hai. Return pay_amount ya None (busy)."""
     await usdt_expire_old()
+    await cancel_pending(uid)
     for _ in range(5):
         used = {r["pay_amount"] for r in await pool.fetch(
             "SELECT pay_amount FROM orders WHERE method='usdt' AND status='pending' AND pay_amount BETWEEN $1 AND $2",
@@ -717,17 +718,26 @@ async def fam_order_counts(uid):
     return r["pending"], r["hour"]
 
 
+async def cancel_pending(uid):
+    """Naya payment order banne se pehle: is user ke purane khule Fam/USDT orders turant 'failed' (QR band)."""
+    await pool.execute("UPDATE orders SET status='failed' WHERE user_id=$1 AND method IN ('fam','usdt') AND status='pending'", uid)
+
+
 async def fam_new_order(order_id, uid, kind, coins, base_paise, level=None, mode=None):
-    """Unique amount (base + 1..99 paise) ka pending order. Return pay_paise ya None (busy)."""
+    """Sequential amount: base+1, base+2 ... (sabse chhota khali paisa), max 99 ek saath. Return pay_paise ya None (busy).
+    Cancel/expire hue order ka slot TTL+grace tak band rehta hai (der se aaya payment kisi aur ke order se match na ho)."""
     await fam_expire_old()
+    await cancel_pending(uid)
+    hold = config.FAM_TTL + config.FAM_GRACE + 60
     for _ in range(4):
         used = {r["pay_paise"] for r in await pool.fetch(
-            "SELECT pay_paise FROM orders WHERE method='fam' AND status='pending' AND pay_paise BETWEEN $1 AND $2",
-            base_paise + 1, base_paise + 99)}
+            "SELECT pay_paise FROM orders WHERE method='fam' AND pay_paise BETWEEN $1 AND $2 "
+            "AND (status='pending' OR (status='failed' AND created_at > now() - make_interval(secs => $3)))",
+            base_paise + 1, base_paise + 99, hold)}
         free = [x for x in range(base_paise + 1, base_paise + 100) if x not in used]
         if not free:
             return None
-        pay = random.choice(free)
+        pay = free[0]
         try:
             await pool.execute(
                 "INSERT INTO orders(order_id,user_id,kind,coins,amount_inr,level,mode,method,pay_paise) "
@@ -1275,6 +1285,15 @@ async def order_history(uid):
                   CASE WHEN status='pending' AND created_at < now() - make_interval(mins => $2) THEN 'failed'
                        ELSE status END AS status
            FROM orders WHERE user_id=$1 ORDER BY created_at DESC LIMIT 10""", uid, config.ORDER_EXPIRY_MIN)
+
+
+async def active_order(uid):
+    """User ka abhi chalta (TTL ke andar) Fam/USDT order, QR dobara dikhane ke liye. None agar koi nahi."""
+    r = await pool.fetchrow(
+        """SELECT *, CASE WHEN method='usdt' THEN $2::int ELSE $3::int END - extract(epoch FROM now() - created_at) AS left_s
+           FROM orders WHERE user_id=$1 AND method IN ('fam','usdt') AND status='pending' ORDER BY created_at DESC LIMIT 1""",
+        uid, config.USDT_TTL, config.FAM_TTL)
+    return r if r and r["left_s"] > 3 else None
 
 
 async def order_get(order_id, uid):

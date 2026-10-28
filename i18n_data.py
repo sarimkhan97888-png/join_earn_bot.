@@ -157,7 +157,7 @@ _add({
 _add({
     "❌ Payment abhi available nahi. Baad me try karo.": ("❌ पेमेंट अभी उपलब्ध नहीं है। बाद में कोशिश करो।", "❌ Payment isn't available right now. Please try later."),
     "❌ Stars payment abhi available nahi. Baad me try karo.": ("❌ स्टार्स पेमेंट अभी उपलब्ध नहीं है। बाद में कोशिश करो।", "❌ Stars payment isn't available right now. Please try later."),
-    "Pehle wale payment order ko pura karo ya 12 minute ruko, phir naya banao.": ("पहले वाले पेमेंट ऑर्डर को पूरा करो या 12 मिनट रुको, फिर नया बनाओ।", "Complete your earlier payment order or wait 12 minutes, then create a new one."),
+    "Pehle wale payment order ko pura karo ya 3 minute ruko, phir naya banao.": ("पहले वाले पेमेंट ऑर्डर को पूरा करो या 3 मिनट रुको, फिर नया बनाओ।", "Complete your earlier payment order or wait 3 minutes, then create a new one."),
     "Bahut saare orders. Thodi der baad try karo.": ("बहुत सारे ऑर्डर हो गए। थोड़ी देर बाद कोशिश करो।", "Too many orders. Please try again in a while."),
     "Abhi bahut log payment kar rahe hain. 1 minute baad try karo.": ("अभी बहुत लोग पेमेंट कर रहे हैं। 1 मिनट बाद कोशिश करो।", "Many people are paying right now. Try again in 1 minute."),
     "Transaction ID sahi daalo (Fam app me payment detail me hota hai).": ("ट्रांज़ैक्शन ID सही डालो (Fam ऐप में पेमेंट डिटेल में होती है)।", "Enter the correct Transaction ID (it's in the payment details of the Fam app)."),
