@@ -1,5 +1,7 @@
 """AI Support: user ke sawal ka jawab app ki poori jankari ke saath. Chat DB me sirf AI_KEEP_MINUTES tak rehti hai."""
+import itertools
 import logging
+import time
 
 import aiohttp
 
@@ -8,10 +10,12 @@ import db
 
 log = logging.getLogger("ai")
 _sess = None
+_rr = itertools.count()
+_bad = {}   # key -> time tak skip (limit/quota/invalid hone par)
 
 
 def enabled():
-    return bool(config.AI_API_KEY)
+    return bool(config.AI_KEYS or config.AI_API_KEY)
 
 
 def _session():
@@ -98,19 +102,40 @@ async def ask(history, text, u):
     """history = [(role, text)...] purana (role: user/assistant). Return AI ka jawab (str). Error par Exception."""
     system = system_prompt() + "\n\n" + await user_context(u)
     msgs = [{"role": r, "content": t} for r, t in history] + [{"role": "user", "content": text}]
-    if config.AI_PROVIDER == "openai":
-        url = config.AI_BASE_URL + "/chat/completions"
-        body = {"model": config.AI_MODEL, "max_tokens": 400, "temperature": 0.3, "messages": [{"role": "system", "content": system}] + msgs}
-        headers = {"Authorization": "Bearer " + config.AI_API_KEY}
-    else:
-        url = config.AI_BASE_URL + "/v1/messages"
-        body = {"model": config.AI_MODEL, "max_tokens": 400, "temperature": 0.3, "system": system, "messages": msgs}
-        headers = {"x-api-key": config.AI_API_KEY, "anthropic-version": "2023-06-01"}
-    async with _session().post(url, json=body, headers=headers) as r:
-        data = await r.json(content_type=None)
-        if r.status != 200:
-            log.warning("AI API %s: %s", r.status, str(data)[:300])
-            raise RuntimeError(f"ai http {r.status}")
+    keys = config.AI_KEYS or [config.AI_API_KEY]
+    n = len(keys)
+    start = next(_rr)
+    order = [keys[(start + i) % n] for i in range(n)]
+    now = time.monotonic()
+    order = [k for k in order if _bad.get(k, 0) <= now] + [k for k in order if _bad.get(k, 0) > now]  # theek keys pehle
+    last, data = None, None
+    for key in order:
+        if config.AI_PROVIDER == "openai":
+            url = config.AI_BASE_URL + "/chat/completions"
+            body = {"model": config.AI_MODEL, "max_tokens": 400, "temperature": 0.3, "messages": [{"role": "system", "content": system}] + msgs}
+            headers = {"Authorization": "Bearer " + key}
+        else:
+            url = config.AI_BASE_URL + "/v1/messages"
+            body = {"model": config.AI_MODEL, "max_tokens": 400, "temperature": 0.3, "system": system, "messages": msgs}
+            headers = {"x-api-key": key, "anthropic-version": "2023-06-01"}
+        try:
+            async with _session().post(url, json=body, headers=headers) as r:
+                d = await r.json(content_type=None)
+                status = r.status
+        except Exception as e:
+            last = e
+            _bad[key] = time.monotonic() + 30
+            continue
+        if status == 200:
+            data = d
+            _bad.pop(key, None)
+            break
+        # limit / quota / galat key / server error: ye key kuch der skip, agli try
+        log.warning("AI API %s (key ...%s): %s", status, key[-4:], str(d)[:200])
+        _bad[key] = time.monotonic() + (300 if status in (401, 402, 403) else 60)
+        last = RuntimeError(f"ai http {status}")
+    if data is None:
+        raise last or RuntimeError("ai failed")
     if config.AI_PROVIDER == "openai":
         out = (data["choices"][0]["message"]["content"] or "").strip()
     else:

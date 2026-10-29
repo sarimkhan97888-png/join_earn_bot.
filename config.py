@@ -145,7 +145,8 @@ PROMO_TEXT = """╔═══════ ⟡ 💎 ⟡ ═══════╗
 
 
 # ---- AI Support (Profile -> AI Support). Key sirf Render env me. Khali = option app me dikhta hi nahi ----
-AI_API_KEY = (os.getenv("AI_API_KEY") or os.getenv("ANTHROPIC_API_KEY") or "").strip()
+AI_API_KEY = (os.getenv("AI_API_KEY") or os.getenv("ANTHROPIC_API_KEY") or "").strip()   # ek ya kai key comma (,) se alag: key1,key2,key3
+AI_KEYS = [k.strip() for k in AI_API_KEY.replace("\n", ",").split(",") if k.strip()]
 AI_PROVIDER = os.getenv("AI_PROVIDER", "anthropic").strip().lower()   # "anthropic" ya "openai" (OpenAI-compatible: OpenAI/Groq/Gemini...)
 AI_MODEL = os.getenv("AI_MODEL", "").strip() or ("claude-haiku-5-5" if AI_PROVIDER == "anthropic" else "gpt-4o-mini")
 AI_BASE_URL = os.getenv("AI_BASE_URL", "").strip().rstrip("/") or ("https://api.anthropic.com" if AI_PROVIDER == "anthropic" else "https://api.openai.com/v1")
