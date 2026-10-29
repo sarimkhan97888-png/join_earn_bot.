@@ -145,8 +145,15 @@ PROMO_TEXT = """╔═══════ ⟡ 💎 ⟡ ═══════╗
 
 
 # ---- AI Support (Profile -> AI Support). Key sirf Render env me. Khali = option app me dikhta hi nahi ----
-AI_API_KEY = (os.getenv("AI_API_KEY") or os.getenv("ANTHROPIC_API_KEY") or "").strip()   # ek ya kai key comma (,) se alag: key1,key2,key3
-AI_KEYS = [k.strip() for k in AI_API_KEY.replace("\n", ",").split(",") if k.strip()]
+AI_API_KEY = (os.getenv("AI_API_KEY") or os.getenv("ANTHROPIC_API_KEY") or "").strip()   # purana tareeka: ek ya kai key comma (,) se
+import re as _re
+_numbered = sorted((k for k in os.environ if _re.fullmatch(r"AI_API_KEY_\d+", k)), key=lambda k: int(k.rsplit("_", 1)[1]))   # AI_API_KEY_1, AI_API_KEY_2 ...
+AI_KEYS = []
+for _v in [AI_API_KEY] + [os.environ[k] for k in _numbered]:
+    for _k in _v.replace("\n", ",").split(","):
+        if _k.strip() and _k.strip() not in AI_KEYS:
+            AI_KEYS.append(_k.strip())
+AI_API_KEY = AI_KEYS[0] if AI_KEYS else ""
 AI_PROVIDER = os.getenv("AI_PROVIDER", "anthropic").strip().lower()   # "anthropic" ya "openai" (OpenAI-compatible: OpenAI/Groq/Gemini...)
 AI_MODEL = os.getenv("AI_MODEL", "").strip() or ("claude-haiku-5-5" if AI_PROVIDER == "anthropic" else "gpt-4o-mini")
 AI_BASE_URL = os.getenv("AI_BASE_URL", "").strip().rstrip("/") or ("https://api.anthropic.com" if AI_PROVIDER == "anthropic" else "https://api.openai.com/v1")
