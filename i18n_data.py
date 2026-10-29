@@ -282,4 +282,9 @@ _add({
 "Ye submission pehle hi process ho chuki hai.": ("यह सबमिशन पहले ही प्रोसेस हो चुका है।", "This submission was already processed."),
 "Ye submission ab maujood nahi hai (cancel ho gayi). Worker ko dobara submit karna hoga.": ("यह सबमिशन अब मौजूद नहीं है (कैंसल हो गया)। वर्कर को दोबारा सबमिट करना होगा।", "This submission no longer exists (it was cancelled). The worker has to submit again."),
 "⚠️ Tumhari Bot Work submission owner tak nahi pahunch payi. Ye cancel ho gayi hai, Tasks me jaake dobara submit karo.": ("⚠️ तुम्हारा Bot Work सबमिशन ओनर तक नहीं पहुँच पाया। यह कैंसल हो गया है, Tasks में जाकर दोबारा सबमिट करो।", "⚠️ Your Bot Work submission could not reach the owner. It was cancelled — go to Tasks and submit again."),
+"AI support abhi available nahi.": ("AI सपोर्ट अभी उपलब्ध नहीं है।", "AI support is not available right now."),
+"Sawal likho.": ("सवाल लिखो।", "Please type your question."),
+"Pehle jawab aane do.": ("पहले जवाब आने दो।", "Wait for the answer first."),
+"Abhi ke liye limit poori ho gayi. Thodi der baad poochho ya Customer service me likho.": ("अभी के लिए लिमिट पूरी हो गई। थोड़ी देर बाद पूछो या Customer service में लिखो।", "Limit reached for now. Ask again later or write to Customer service."),
+"AI abhi busy hai. Thodi der baad try karo ya Customer service me likho.": ("AI अभी बिज़ी है। थोड़ी देर बाद कोशिश करो या Customer service में लिखो।", "The AI is busy right now. Try again later or write to Customer service."),
 })

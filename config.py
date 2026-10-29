@@ -142,3 +142,13 @@ PROMO_TEXT = """╔═══════ ⟡ 💎 ⟡ ═══════╗
 ━━━━━━━━━━━━━━━━━━
 🔥 ᴄʀᴇᴀᴛᴇ • ᴄᴏᴍᴘʟᴇᴛᴇ • ᴇᴀʀɴ 🔥
 ━━━━━━━━━━━━━━━━━━"""
+
+
+# ---- AI Support (Profile -> AI Support). Key sirf Render env me. Khali = option app me dikhta hi nahi ----
+AI_API_KEY = (os.getenv("AI_API_KEY") or os.getenv("ANTHROPIC_API_KEY") or "").strip()
+AI_PROVIDER = os.getenv("AI_PROVIDER", "anthropic").strip().lower()   # "anthropic" ya "openai" (OpenAI-compatible: OpenAI/Groq/Gemini...)
+AI_MODEL = os.getenv("AI_MODEL", "").strip() or ("claude-haiku-5-5" if AI_PROVIDER == "anthropic" else "gpt-4o-mini")
+AI_BASE_URL = os.getenv("AI_BASE_URL", "").strip().rstrip("/") or ("https://api.anthropic.com" if AI_PROVIDER == "anthropic" else "https://api.openai.com/v1")
+AI_KEEP_MINUTES = _int("AI_KEEP_MINUTES", 60)       # AI chat itne minute baad delete
+AI_HOURLY_LIMIT = _int("AI_HOURLY_LIMIT", 20)       # ek user ke itne sawal per AI_KEEP_MINUTES window
+AI_MAX_CHARS = 500                                  # ek sawal max itne akshar

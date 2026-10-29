@@ -26,6 +26,7 @@ import extras
 import i18n
 import fam
 import payouts
+import ai
 import util
 
 log = logging.getLogger("api")
@@ -114,7 +115,7 @@ def cfg(request):
             "tasks_daily": None if request["u"]["id"] in config.ADMIN_IDS else util.plan(request["u"])["tasks"],
             "free_wd_hours": config.WITHDRAW_EXPIRE_HOURS, "free_wd": 1, "free_tasks": config.FREE_TASKS_DAILY, "free_members": config.FREE_TASK_MEMBERS, "payout_link": config.PAYOUT_CHANNEL_LINK, "app_name": config.APP_NAME,
             "refer_reward": util.plan(request["u"])["ref"], "min_tasks": config.MIN_TASKS_FOR_WITHDRAW, "min_ref_tasks": config.MIN_TASKS_FOR_REFER, "order_expiry_min": config.ORDER_EXPIRY_MIN,
-            "upi_id": config.FAM_UPI_ID, "max_deposit": config.MAX_DEPOSIT_COINS, "fam_ttl": config.FAM_TTL, "usdt_ttl": config.USDT_TTL,
+            "upi_id": config.FAM_UPI_ID, "max_deposit": config.MAX_DEPOSIT_COINS, "fam_ttl": config.FAM_TTL, "usdt_ttl": config.USDT_TTL, "ai_on": ai.enabled(), "ai_keep": config.AI_KEEP_MINUTES, "ai_max": config.AI_MAX_CHARS,
             "usdt_on": config.USDT_ON, "usdt_rate": float(config.USDT_INR_RATE), "usdt_fee": float(config.USDT_FEE_PCT),
             "usdt_min": float(config.USDT_MIN), "usdt_max": float(config.USDT_MAX)}
 
@@ -124,7 +125,7 @@ _rl = {}
 _rl_gc = [0.0]
 # Device verify ke bina sirf ye endpoints chalte hain (baaki sab server par block)
 OPEN_PATHS = {"/api/me", "/api/lang", "/api/verify", "/api/support", "/api/support/send", "/api/support/photo", "/api/wallet",
-              "/api/order", "/api/order/active", "/api/tasks", "/api/news", "/api/streak/seen"}
+              "/api/order", "/api/order/active", "/api/ai", "/api/ai/send", "/api/tasks", "/api/news", "/api/streak/seen"}
 _cd = {}
 _giftfail = {}
 
@@ -502,6 +503,53 @@ async def api_usdt_order(request):
         return err("Abhi bahut log payment kar rahe hain. 1 minute baad try karo.")
     extras.feed(f"💵 USDT {('Premium L%s' % level) if kind == 'premium' else 'Deposit'} order {pay} USDT — {extras.uname(u)}")
     return ok(**usdt_payload(order_id, kind, pay, usdt, coins, config.USDT_TTL, config.USDT_WALLET))
+
+
+_ai_busy = set()
+
+
+def _ai_json(rows):
+    return [{"role": r["role"], "text": r["text"], "at": iso(r["created_at"])} for r in rows]
+
+
+@routes.get("/api/ai")
+async def api_ai(request):
+    if not ai.enabled():
+        return err("AI support abhi available nahi.")
+    return ok(msgs=_ai_json(await db.ai_recent(request["u"]["id"])))
+
+
+@routes.post("/api/ai/send")
+async def api_ai_send(request):
+    """AI support: sawal bhejo, jawab lo. Chat 1 ghante baad delete hoti hai."""
+    u = request["u"]
+    uid = u["id"]
+    if not ai.enabled():
+        return err("AI support abhi available nahi.")
+    d = await body(request)
+    text = str(d.get("text") or "").strip()[:config.AI_MAX_CHARS]
+    if not text:
+        return err("Sawal likho.")
+    if uid in _ai_busy:
+        return err("Pehle jawab aane do.")
+    if not cooldown(uid, "ai", 3):
+        return too_fast()
+    if await db.ai_count_user(uid) >= config.AI_HOURLY_LIMIT:
+        return err("Abhi ke liye limit poori ho gayi. Thodi der baad poochho ya Customer service me likho.")
+    _ai_busy.add(uid)
+    try:
+        hist = [(r["role"], r["text"]) for r in await db.ai_recent(uid, 10)]
+        while hist and hist[0][0] != "user":
+            hist.pop(0)
+        try:
+            ans = await asyncio.wait_for(ai.ask(hist, text, u), 35)
+        except Exception as e:
+            logging.getLogger("api").warning("ai ask failed: %s", e)
+            return err("AI abhi busy hai. Thodi der baad try karo ya Customer service me likho.")
+        await db.ai_add_pair(uid, text, ans)
+        return ok(answer=ans)
+    finally:
+        _ai_busy.discard(uid)
 
 
 @routes.get("/api/order/active")

@@ -82,6 +82,11 @@ CREATE TABLE IF NOT EXISTS gift_codes(
   code TEXT PRIMARY KEY, coins INT NOT NULL, max_uses INT NOT NULL, used INT NOT NULL DEFAULT 0,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS ai_msgs(
+  id BIGSERIAL PRIMARY KEY, user_id BIGINT NOT NULL, role TEXT NOT NULL, text TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ai_msgs_user ON ai_msgs(user_id, id);
 CREATE TABLE IF NOT EXISTS support_msgs(
   id BIGSERIAL PRIMARY KEY, user_id BIGINT NOT NULL, sender TEXT NOT NULL, text TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -1712,3 +1717,27 @@ async def adm_cancel(kind, tid):
     owner = await pool.fetchval("SELECT owner_id FROM botworks WHERE id=$1", tid)
     return None if owner is None else await bw_cancel(tid, owner)
 
+
+
+# ---------- AI support chat (sirf AI_KEEP_MINUTES tak) ----------
+async def ai_recent(uid, n=40):
+    rows = await pool.fetch(
+        """SELECT role, text, created_at FROM ai_msgs WHERE user_id=$1 AND created_at > now() - make_interval(mins => $2)
+           ORDER BY id DESC LIMIT $3""", uid, config.AI_KEEP_MINUTES, n)
+    return list(reversed(rows))
+
+
+async def ai_count_user(uid):
+    return await pool.fetchval(
+        "SELECT count(*) FROM ai_msgs WHERE user_id=$1 AND role='user' AND created_at > now() - make_interval(mins => $2)",
+        uid, config.AI_KEEP_MINUTES)
+
+
+async def ai_add_pair(uid, q, a):
+    async with pool.acquire() as c, c.transaction():
+        await c.execute("INSERT INTO ai_msgs(user_id,role,text) VALUES($1,'user',$2)", uid, q)
+        await c.execute("INSERT INTO ai_msgs(user_id,role,text) VALUES($1,'assistant',$2)", uid, a)
+
+
+async def ai_cleanup():
+    await pool.execute("DELETE FROM ai_msgs WHERE created_at < now() - make_interval(mins => $1)", config.AI_KEEP_MINUTES)

@@ -666,6 +666,7 @@ async def job_cleanup(ctx):
 
 async def job_support_clean(ctx):
     await db.sup_cleanup()
+    await db.ai_cleanup()
 
 
 async def ping_cmd(update: Update, ctx):
@@ -779,7 +780,7 @@ def register(app):
     app.job_queue.run_repeating(job_refs, interval=60, first=70)
     app.job_queue.run_repeating(job_prem, interval=120, first=80)
     app.job_queue.run_repeating(job_cleanup, interval=86400, first=600)
-    app.job_queue.run_repeating(job_support_clean, interval=3600, first=120)
+    app.job_queue.run_repeating(job_support_clean, interval=600, first=120)
     app.job_queue.run_repeating(extras.job_bcast, interval=30, first=40)
     app.job_queue.run_daily(extras.job_backup, time=datetime.time(hour=21, minute=30, tzinfo=datetime.timezone.utc))  # ~3:00 AM IST
     app.job_queue.run_repeating(job_wd_stuck, interval=120, first=45)
