@@ -409,42 +409,51 @@ def _lb_rows(rows, uid):
 
 @routes.post("/ads/callback")
 async def ads_callback(request):
-    """Ads Galaxy server-to-server reward callback (Telegram auth nahi, secret key se)."""
-    import hmac
-    if not config.ADS_ON or not hmac.compare_digest(request.query.get("key", ""), config.ADS_CB_KEY):
+    """Ads Galaxy server-to-server reward callback. Signature: HMAC-SHA256(secret, timestamp.event_id.rawBody)."""
+    if not config.ADS_ON:
         return web.json_response({"ok": False}, status=403)
+    raw = await request.read()
+    h = request.headers
+    ts, eid, sig = h.get("x-adsgalaxy-timestamp", ""), h.get("x-adsgalaxy-event-id", ""), h.get("x-adsgalaxy-signature", "")
     try:
-        d = await request.json()
-        rid = str(d.get("request_id") or "")[:100]
+        fresh = abs(time.time() - float(ts)) <= config.ADS_TS_TOL
+    except ValueError:
+        fresh = False
+    exp = hmac.new(config.ADS_SIGN_SECRET.encode(), ts.encode() + b"." + eid.encode() + b"." + raw, hashlib.sha256).hexdigest()
+    if not (ts and eid and fresh and hmac.compare_digest(sig, exp)):
+        return web.json_response({"ok": False}, status=401)
+    try:
+        d = json.loads(raw)
+        rid = str(d.get("request_id") or "")
         uid = int(d.get("user_id"))
         st = str(d.get("status") or "")[:20]
+        if str(d.get("event_id") or "") != eid:
+            raise ValueError("event id mismatch")
     except Exception:
         return web.json_response({"ok": False}, status=400)
     if not re.fullmatch(r"[\w.\-]{3,100}", rid):
         return web.json_response({"ok": False}, status=400)
-    await db.ad_event(rid, str(d.get("event_id") or "")[:100], uid, st)
-    return web.json_response({"ok": True})
+    res = await db.ad_credit(rid, eid[:100], uid, st, config.ADS_REWARD, config.ADS_DAILY)   # DB error => 500 => Ads Galaxy retry karega
+    return web.json_response({"ok": True, "result": res})
 
 
 @routes.post("/api/ads/claim")
 async def api_ads_claim(request):
+    """Sirf status poll: coins callback se mil chuke hain ya nahi."""
     u = request["u"]
     if not config.ADS_ON:
         return err("Ads abhi available nahi.")
-    if not u["device_ok"]:
-        return err("🔐 Pehle Profile me device verify karo.")
     if not cooldown(u["id"], "ads", 1):
         return too_fast()
     rid = str((await body(request)).get("rid") or "")
     if not re.fullmatch(r"[\w.\-]{3,100}", rid):
         return err("Ad verify nahi hua.")
-    res = await db.ad_claim(u["id"], rid, config.ADS_REWARD, config.ADS_DAILY)
+    res = await db.ad_check(u["id"], rid)
     if res == "ok":
         return ok(msg=f"Ad complete! +{config.ADS_REWARD} coins mil gaye", reward=config.ADS_REWARD)
     if res == "wait":
         return web.json_response({"ok": False, "code": "wait", "msg": i18n.tr("Ad verify ho raha hai, thoda ruko...")})
-    return err({"dup": "Is ad ke coins pehle hi mil chuke.", "bad": "Ad poori nahi dekhi, coins nahi mile.",
-                "limit": "Aaj ki ad limit poori ho gayi. Kal dobara aana."}[res])
+    return err({"bad": "Ad poori nahi dekhi, coins nahi mile.", "limit": "Aaj ki ad limit poori ho gayi. Kal dobara aana."}[res])
 
 
 @routes.get("/api/leaderboard")

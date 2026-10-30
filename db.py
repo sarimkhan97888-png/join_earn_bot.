@@ -478,29 +478,20 @@ async def lock_next(uid):
 
 
 # ---------- ads (Ads Galaxy rewarded) ----------
-async def ad_event(request_id, event_id, uid, status):
-    """Ads Galaxy ka server callback: request_id ek hi baar record hota hai."""
-    await pool.execute(
-        "INSERT INTO ad_views(request_id,event_id,user_id,status) VALUES($1,$2,$3,$4) ON CONFLICT(request_id) DO NOTHING",
-        request_id, event_id, uid, status)
-
-
-async def ads_today(uid):
-    return int(await pool.fetchval(
-        f"SELECT count(*) FROM ad_views WHERE user_id=$1 AND claimed AND claimed_at >= {IST_DAY}", uid) or 0)
-
-
-async def ad_claim(uid, request_id, reward, daily):
-    """'ok' | 'wait' (callback abhi nahi aaya) | 'dup' | 'bad' | 'limit'"""
+async def ad_credit(request_id, event_id, uid, status, reward, daily):
+    """Ads Galaxy ka verified callback: coins yahin milte hain (event/request ek hi baar).
+    'ok' | 'dup' | 'bad' | 'skip' | 'limit'"""
     async with pool.acquire() as c, c.transaction():
-        await c.fetchval("SELECT id FROM users WHERE id=$1 FOR UPDATE", uid)
-        r = await c.fetchrow("SELECT claimed, status FROM ad_views WHERE request_id=$1 AND user_id=$2 FOR UPDATE", request_id, uid)
-        if not r:
-            return "wait"
-        if r["claimed"]:
+        ins = await c.fetchval(
+            "INSERT INTO ad_views(request_id,event_id,user_id,status) VALUES($1,$2,$3,$4) ON CONFLICT(request_id) DO NOTHING RETURNING request_id",
+            request_id, event_id, uid, status)
+        if ins is None:
             return "dup"
-        if r["status"] != "completed":
+        if status != "completed":
             return "bad"
+        u = await c.fetchrow("SELECT id, banned FROM users WHERE id=$1 FOR UPDATE", uid)
+        if not u or u["banned"]:
+            return "skip"
         n = await c.fetchval(f"SELECT count(*) FROM ad_views WHERE user_id=$1 AND claimed AND claimed_at >= {IST_DAY}", uid)
         if n >= daily:
             return "limit"
@@ -509,6 +500,21 @@ async def ad_claim(uid, request_id, reward, daily):
         await led(c, uid, "ad", reward, request_id)
         await lb_add(c, uid, earned=reward)
         return "ok"
+
+
+async def ad_check(uid, request_id):
+    """Frontend poll: 'ok' (credit ho gaya) | 'wait' (callback abhi nahi aaya) | 'bad' | 'limit'"""
+    r = await pool.fetchrow("SELECT claimed, status FROM ad_views WHERE request_id=$1 AND user_id=$2", request_id, uid)
+    if not r:
+        return "wait"
+    if r["claimed"]:
+        return "ok"
+    return "bad" if r["status"] != "completed" else "limit"
+
+
+async def ads_today(uid):
+    return int(await pool.fetchval(
+        f"SELECT count(*) FROM ad_views WHERE user_id=$1 AND claimed AND claimed_at >= {IST_DAY}", uid) or 0)
 
 
 async def ad_prune():
