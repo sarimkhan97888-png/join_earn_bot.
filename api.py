@@ -327,6 +327,9 @@ async def api_me(request):
     hist = [{"kind": r["kind"], "amount": r["amount"], "at": iso(r["created_at"])} for r in led]
     me = pub(u)
     me["streak"] = await db.streak_info(u["id"])
+    lk, _ = (0, 0) if u["id"] in config.ADMIN_IDS else await db.lock_info(u["id"])
+    me["locked"] = lk
+    me["lock_next"] = await db.lock_next(u["id"]) if lk else 0
     me["news_unread"] = int(await db.news_unread(u["id"]) or 0)
     ao = await db.active_order(u["id"])
     me["active"] = None if not ao else {"method": ao["method"], "left": int(ao["left_s"]),
@@ -361,8 +364,6 @@ async def api_check(request):
         return err("🔐 Pehle Profile me device verify karo.")
     if not cooldown(uid, "check", 1.5):
         return too_fast()
-    if await db.is_blocked(uid):
-        return err("🚫 Tum blocked ho. Pehle left channel rejoin karo.")
     t = await db.get_task(tid)
     if not t or t["status"] != "active":
         return err("Ye task ab available nahi.")
@@ -378,7 +379,7 @@ async def api_check(request):
         extras.feed(f"✅ Task #{tid} join verified — {extras.uname(request['u'])}")
         extras.sfeed(f"✅ Task #{tid} join verified — {extras.uname(request['u'])}")
         st = db.pop_streak(uid)
-        return ok(msg=f"Join verified! +{t['reward']} coins ({config.HOLD_HOURS}h hold me)",
+        return ok(msg=f"Join verified! +{t['reward']} coins mil gaye",
                   streak=({"day": st[0], "reward": st[1]} if st else None))
     return err({"dup": "Ye task tum pehle kar chuke ho.", "own": "Apne channel se coin nahi mil sakta.",
                 "closed": "Task full ho gaya."}[res])
@@ -394,9 +395,25 @@ async def api_rejoin(request):
             got += await db.unblock(r["chat_id"], uid) or 0
     if await db.left_chats(uid):
         return err("❌ Abhi bhi kuch channels join nahi kiye.")
-    if got:
-        return ok(msg=f"Unblocked! Ab tasks kar sakte ho. {got} coins ({config.REJOIN_PERCENT}%) {config.HOLD_HOURS}h hold me mile.")
     return ok(msg="Unblocked! Ab tasks kar sakte ho.")
+
+
+def _lb_rows(rows, uid):
+    out = []
+    for i, r in enumerate(rows):
+        nm = (r["first_name"] or "User").strip()[:14] or "User"
+        out.append({"rank": i + 1, "name": nm, "score": int(r["score"]), "me": r["user_id"] == uid})
+    return out
+
+
+@routes.get("/api/leaderboard")
+async def api_leaderboard(request):
+    uid = request["u"]["id"]
+    rr, cr, (rs, rk), (cs, ck), left = await asyncio.gather(
+        db.lb_top("refer", 20), db.lb_top("coin", 20), db.lb_me(uid, "refer"), db.lb_me(uid, "coin"), db.lb_secs_left())
+    return ok(refer={"rows": _lb_rows(rr, uid), "me": {"score": rs, "rank": rk}, "prizes": config.LB_PRIZES["refer"]},
+              coin={"rows": _lb_rows(cr, uid), "me": {"score": cs, "rank": ck}, "prizes": config.LB_PRIZES["coin"]},
+              left=left)
 
 
 # ---------------- wallet ----------------
@@ -672,6 +689,13 @@ async def api_order(request):
     return ok(status=row["status"])
 
 
+def lock_msg(lk, bal, pct, nxt):
+    free = max(0, bal - lk)
+    mx = free * 100 // (100 + pct) // 100 * 100
+    return (f"⏳ {lk} coins abhi 24 ghante ke andar kamaye hain, ye {nxt // 3600} ghante {nxt % 3600 // 60} min baad withdraw honge. "
+            f"Abhi max withdraw: {mx} coins.")
+
+
 @routes.post("/api/withdraw")
 async def api_withdraw(request):
     u = request["u"]
@@ -686,8 +710,6 @@ async def api_withdraw(request):
         return err("🔐 Withdraw ke liye pehle device verify karo.")
     if not cooldown(uid, "wd", 8):
         return too_fast()
-    if await db.is_blocked(uid):
-        return err("🚫 Tum blocked ho. Pehle left channel rejoin karo.")
     if usdt_wd:
         if not config.USDT_ON:
             return err("❌ USDT withdraw abhi available nahi.")
@@ -695,9 +717,6 @@ async def api_withdraw(request):
             return err("BEP20 (BSC) wallet address sahi daalo: 0x se shuru, 42 characters.")
     elif not u["upi"]:
         return err("Pehle Profile me apna UPI ID set karo.")
-    if u.get("debt", 0) > 0:
-        return err(f"⚠️ Tumne pehle channel leave kiya tha, {u['debt']} coins ka hisaab baaki hai. "
-                   f"Agle channel rewards se ye kat-ta rahega; poora kat-ne ke baad withdraw khulega.")
     pl = util.plan(u)
     is_admin_u = uid in config.ADMIN_IDS
     if not is_admin_u and pl["wd"] is not None and await db.wd_today(uid) >= pl["wd"]:
@@ -721,13 +740,20 @@ async def api_withdraw(request):
         return err(f"Min {config.MIN_WITHDRAW_COINS} coins aur 100 ke multiple me daalo.")
     pct = pl["fee"]
     need = coins + db.wd_fee(coins, pct)
+    lk, lk_left = (0, 0) if is_admin_u else await db.lock_info(uid)
+    if lk and need > u["balance"] - lk and need <= u["balance"]:
+        return err(lock_msg(lk, u["balance"], pct, await db.lock_next(uid)))
     if need > u["balance"]:
         mx = u["balance"] * 100 // (100 + pct) // 100 * 100
         return err(f"{coins} coins + {db.wd_fee(coins, pct)} tax = {need} coins chahiye, balance {u['balance']}. "
                    f"Max withdraw: {mx} coins.")
     usdt_amt = (Decimal(coins) / config.COIN_PER_INR / config.USDT_INR_RATE).quantize(Decimal("0.0001"), ROUND_DOWN) if usdt_wd else None
     r = await db.request_withdraw(uid, coins, pct, pl["level"] if not is_admin_u else 0, pl["wd_hours"],
-                                  None if is_admin_u else pl["wd"], gplay=gplay, amazon=amazon, addr=addr if usdt_wd else None, usdt=usdt_amt)
+                                  None if is_admin_u else pl["wd"], gplay=gplay, amazon=amazon, addr=addr if usdt_wd else None, usdt=usdt_amt,
+                                  lock=not is_admin_u)
+    if r == "locked":
+        lk, _ = await db.lock_info(uid)
+        return err(lock_msg(lk, u["balance"], pl["fee"], await db.lock_next(uid)))
     if r == "limit":
         return err(f"⚠️ Aaj ke {pl['wd']} withdraw ho chuke. Kal dobara karo.")
     if not r:
@@ -1320,8 +1346,6 @@ async def api_bw_submit(request):
         return err("🔐 Pehle Profile me device verify karo.")
     if not cooldown(uid, "bw", 10):
         return too_fast()
-    if await db.is_blocked(uid):
-        return err("🚫 Tum blocked ho. Pehle left channel rejoin karo.")
     fields, photos = {}, {}
     try:
         reader = await request.multipart()

@@ -110,7 +110,7 @@ async def start(update: Update, ctx):
         await db.ref_add(tu.id, int(ctx.args[0][1:]))  # sirf bilkul naya user refer ban sakta hai
     await intro_anim(update)  # har /start par chhota "PROFITIX" animation (naya ho ya purana)
     app = html.escape(config.APP_NAME)
-    if left:
+    if False and left:
         rows = [[B(T(f"➕ Join {r['title'][:28]}"), url=r["link"])] for r in left if r["link"]]
         rows.append([B(T("🚀 Open App"), web_app=WebAppInfo(url=f"{config.BASE_URL}/app"))])
         names = "\n".join("• " + html.escape(r["title"]) for r in left)
@@ -505,43 +505,24 @@ async def assign_cmd(update: Update, ctx):
 
 
 # ---------------- chat member events ----------------
-def rejoin_msg(got):
-    if got:
-        return (f"✅ Rejoin ho gaya. <b>{got}</b> coins ({config.REJOIN_PERCENT}%) {config.HOLD_HOURS}h hold me mile. "
-                f"Agar koi aur channel leave kiya hai to unhe bhi rejoin karo.")
-    return "✅ Rejoin ho gaya. (Is channel ka reward ek baar hi milta hai.) Agar koi aur channel leave kiya hai to unhe bhi rejoin karo."
-
-
 async def on_chat_member(update: Update, ctx):
+    """Join record karte hain (auto-check ke liye). Leave par koi coin cut / block nahi."""
     cm = update.chat_member
     uid = cm.new_chat_member.user.id
     cid = cm.chat.id
     was, now = util.in_chat(cm.old_chat_member), util.in_chat(cm.new_chat_member)
     if now and not was:
         await db.record_join(cid, uid)
-        got = await db.unblock(cid, uid)
-        if got is not None:
-            await util.notify(ctx.bot, uid, rejoin_msg(got))
     elif was and not now:
-        for r in await db.revoke_by_chat(cid, uid):
-            extras.feed(f"🚪 Channel leave — coins cut {r['reward']} (user <code>{uid}</code>)")
-            await util.notify(ctx.bot, uid, f"🚫 Tumne channel leave kiya. {r['reward']} coins cut ho gaye aur tasks "
-                                            f"block hain jab tak dobara join na karo. Dobara join karne par sirf "
-                                            f"{config.REJOIN_PERCENT}% coins milenge ({config.HOLD_HOURS}h hold me).")
+        await db.pool.execute(
+            "UPDATE completions SET left_at=now() WHERE chat_id=$1 AND user_id=$2 AND left_at IS NULL", cid, uid)
 
 
 # ---------------- background jobs ----------------
 async def _release_one(ctx, r):
-    st = await util.member_status(ctx.bot, r["chat_id"], r["user_id"])
-    if st is None:
-        # verify nahi hua (bot hata / API error): is row ko peeche karo taaki baaki holds na ruken
-        await db.pool.execute("UPDATE completions SET last_checked=now() WHERE id=$1", r["id"])
-        return
-    if st:
-        if await db.release(r["id"]):
-            await util.notify(ctx.bot, r["user_id"], f"✅ {r['reward']} coins released! Ab withdraw kar sakte ho.")
-    elif await db.revoke(r["id"]):
-        await util.notify(ctx.bot, r["user_id"], "🚫 Channel leave kiya, coins cut. Rejoin karo.")
+    """Purane 'hold' rows (hold hatane se pehle ke) bina penalty ke release."""
+    if await db.release(r["id"]):
+        await util.notify(ctx.bot, r["user_id"], f"✅ {r['reward']} coins release ho gaye!")
 
 
 async def _in_batches(rows, fn, size=10, pause=0.4):
@@ -562,17 +543,29 @@ async def job_release(ctx):
 
 async def _recheck_one(ctx, r):
     st = await util.member_status(ctx.bot, r["chat_id"], r["user_id"])
-    await db.pool.execute("UPDATE completions SET last_checked=now() WHERE id=$1", r["id"])
-    if st is False and await db.revoke(r["id"]):
-        await util.notify(ctx.bot, r["user_id"], "🚫 Tumne channel leave kiya. Coins cut ho gaye, tasks block hain "
-                                                 "jab tak rejoin na karo.")
+    await db.pool.execute("UPDATE completions SET last_checked=now(), left_at=CASE WHEN $2::bool THEN COALESCE(left_at, now()) ELSE left_at END WHERE id=$1",
+                          r["id"], st is False)
 
 
 async def job_recheck(ctx):
+    """Sirf pehle RECHECK_DAYS din tak (sirf record, koi penalty nahi)."""
     rows = await db.pool.fetch(
-        """SELECT id, chat_id, user_id FROM completions WHERE status IN ('hold','ok')
-           ORDER BY last_checked LIMIT 200""")  # hamesha track: koi time limit nahi
+        """SELECT id, chat_id, user_id FROM completions WHERE status='ok' AND left_at IS NULL
+           AND created_at > now() - make_interval(days => $1) ORDER BY last_checked LIMIT 200""", config.RECHECK_DAYS)
     await _in_batches(rows, lambda r: _recheck_one(ctx, r))
+
+
+async def job_leaderboard(ctx):
+    """Pichhle mahine ke top-3 ko prize (ek hi baar)."""
+    try:
+        done = await db.lb_pay_prev(config.LB_PRIZES)
+    except Exception:
+        log.exception("lb prize failed")
+        return
+    for uid, board, rank, prize in done:
+        nm = "Refer" if board == "refer" else "Coin"
+        await util.notify(ctx.bot, uid, f"🏆 Leaderboard ({nm}) me tumhara rank #{rank} raha! "
+                                        f"{prize} coins Ad Balance me add ho gaye.")
 
 
 async def job_orders(ctx):
@@ -775,6 +768,7 @@ def register(app):
     app.add_error_handler(on_error)
     app.job_queue.run_repeating(job_release, interval=120, first=60)
     app.job_queue.run_repeating(job_recheck, interval=300, first=120)
+    app.job_queue.run_repeating(job_leaderboard, interval=3600, first=180)
     app.job_queue.run_repeating(botwork.job, interval=900, first=180)
     app.job_queue.run_repeating(job_orders, interval=120, first=90)
     app.job_queue.run_repeating(job_refs, interval=60, first=70)

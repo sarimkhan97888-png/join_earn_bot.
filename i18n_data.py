@@ -288,3 +288,12 @@ _add({
 "Abhi ke liye limit poori ho gayi. Thodi der baad poochho ya Customer service me likho.": ("अभी के लिए लिमिट पूरी हो गई। थोड़ी देर बाद पूछो या Customer service में लिखो।", "Limit reached for now. Ask again later or write to Customer service."),
 "AI abhi busy hai. Thodi der baad try karo ya Customer service me likho.": ("AI अभी बिज़ी है। थोड़ी देर बाद कोशिश करो या Customer service में लिखो।", "The AI is busy right now. Try again later or write to Customer service."),
 })
+
+# ---------------- hold hata / leaderboard ----------------
+_add({
+    "Join verified! +{} coins mil gaye": ("जॉइन वेरिफाई हुआ! +{} कॉइन्स मिल गए", "Join verified! +{} coins added"),
+    "⏳ {} coins abhi 24 ghante ke andar kamaye hain, ye {} ghante {} min baad withdraw honge. Abhi max withdraw: {} coins.": ("⏳ {} कॉइन्स अभी 24 घंटे के अंदर कमाए हैं, ये {} घंटे {} मिनट बाद विड्रॉ होंगे। अभी ज़्यादा से ज़्यादा विड्रॉ: {} कॉइन्स।", "⏳ {} coins were earned in the last 24 hours and can be withdrawn in {} h {} min. Max you can withdraw now: {} coins."),
+    "🏆 Leaderboard (Refer) me tumhara rank #{} raha! {} coins Ad Balance me add ho gaye.": ("🏆 लीडरबोर्ड (रेफ़र) में तुम्हारी रैंक #{} रही! {} कॉइन्स एड बैलेंस में जुड़ गए।", "🏆 You finished #{} on the Refer leaderboard! {} coins added to your Ad Balance."),
+    "🏆 Leaderboard (Coin) me tumhara rank #{} raha! {} coins Ad Balance me add ho gaye.": ("🏆 लीडरबोर्ड (कॉइन) में तुम्हारी रैंक #{} रही! {} कॉइन्स एड बैलेंस में जुड़ गए।", "🏆 You finished #{} on the Coin leaderboard! {} coins added to your Ad Balance."),
+    "✅ {} coins release ho gaye!": ("✅ {} कॉइन्स रिलीज़ हो गए!", "✅ {} coins released!"),
+})

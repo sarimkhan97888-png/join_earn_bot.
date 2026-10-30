@@ -56,6 +56,8 @@ MAX_DEPOSIT_COINS = 200000  # = Rs 2000
 MIN_WITHDRAW_COINS = 1500   # = Rs 15 (tax ke baad Rs 13.50)
 WITHDRAW_TAX_PERCENT = 10   # withdraw par tax (coins me kat-ta hai)
 HOLD_HOURS = 24
+WD_LOCK_HOURS = 24           # channel-join se kamaye coins itne ghante baad withdraw hote hain
+RECHECK_DAYS = 7
 REJOIN_PERCENT = 50         # channel leave ke baad rejoin par (sirf ek baar) itna % reward wapas, 24h hold me
 MAX_DEVICE_CHANGES = 3     # device badalne par re-verify kitni baar allowed
 # Premium levels. None = unlimited. fee None = normal WITHDRAW_TAX_PERCENT. wd_hours = pending withdraw itne ghante me admin ne
@@ -160,3 +162,14 @@ AI_BASE_URL = os.getenv("AI_BASE_URL", "").strip().rstrip("/") or ("https://api.
 AI_KEEP_MINUTES = _int("AI_KEEP_MINUTES", 60)       # AI chat itne minute baad delete
 AI_HOURLY_LIMIT = _int("AI_HOURLY_LIMIT", 20)       # ek user ke itne sawal per AI_KEEP_MINUTES window
 AI_MAX_CHARS = 500                                  # ek sawal max itne akshar
+
+def _prizes(name, default):
+    import os
+    try:
+        v = [int(x) for x in os.getenv(name, default).split(",") if x.strip()]
+    except ValueError:
+        v = [int(x) for x in default.split(",")]
+    return (v + [0, 0, 0])[:3]
+
+
+LB_PRIZES = {"refer": _prizes("LB_REFER_PRIZES", "1000,600,300"), "coin": _prizes("LB_COIN_PRIZES", "600,400,200")}

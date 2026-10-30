@@ -138,6 +138,19 @@ ALTER TABLE support_msgs ADD COLUMN IF NOT EXISTS has_photo BOOLEAN NOT NULL DEF
 ALTER TABLE support_msgs ADD COLUMN IF NOT EXISTS has_voice BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE completions ADD COLUMN IF NOT EXISTS rejoin_paid BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS debt BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE completions ADD COLUMN IF NOT EXISTS left_at TIMESTAMPTZ;
+UPDATE completions SET status='ok' WHERE status='left';
+UPDATE users SET debt=0 WHERE debt<>0;
+CREATE TABLE IF NOT EXISTS lb_week(
+  week DATE NOT NULL, user_id BIGINT NOT NULL, earned BIGINT NOT NULL DEFAULT 0, refs INT NOT NULL DEFAULT 0,
+  PRIMARY KEY(week, user_id)
+);
+CREATE INDEX IF NOT EXISTS lb_week_earned ON lb_week(week, earned DESC);
+CREATE INDEX IF NOT EXISTS lb_week_refs ON lb_week(week, refs DESC);
+CREATE TABLE IF NOT EXISTS lb_paid(
+  week DATE NOT NULL, board TEXT NOT NULL, rank INT NOT NULL, user_id BIGINT NOT NULL, prize INT NOT NULL,
+  PRIMARY KEY(week, board, rank)
+);
 ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS last_alert TIMESTAMPTZ;
 ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS bk_msgs TEXT;
 ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS level SMALLINT NOT NULL DEFAULT 0;
@@ -418,18 +431,99 @@ async def claim(task_id, uid):
             """INSERT INTO completions(task_id,user_id,chat_id,reward,release_at)
                VALUES($1,$2,$3,$4, now() + make_interval(hours => $5))
                ON CONFLICT(chat_id,user_id) DO NOTHING RETURNING id""",
-            task_id, uid, t["chat_id"], t["reward"], config.HOLD_HOURS)
+            task_id, uid, t["chat_id"], t["reward"], config.WD_LOCK_HOURS)
         if cid is None:
             return "dup"
         new_joined = t["joined"] + 1
         await c.execute("UPDATE tasks SET joined=$1, status=$2 WHERE id=$3",
                         new_joined, "done" if new_joined >= t["target"] else "active", task_id)
-        await c.execute("UPDATE users SET hold=hold+$1 WHERE id=$2", t["reward"], uid)
-        await led(c, uid, "hold", t["reward"], cid)
+        await c.execute("UPDATE completions SET status='ok' WHERE id=$1", cid)
+        await c.execute("UPDATE users SET balance=balance+$1, total_earned=total_earned+$1 WHERE id=$2", t["reward"], uid)
+        await led(c, uid, "join", t["reward"], cid)
+        await lb_add(c, uid, earned=t["reward"])
         if not t["free"]:
             await led(c, 0, "fee", t["cost_per"] - t["reward"], cid)
         await streak_tick(c, uid)
         return "ok"
+
+
+# ---------- 24h withdraw lock ----------
+async def locked_coins(c, uid):
+    """Pichhle WD_LOCK_HOURS me channel-join se kamaye coins (withdraw ke liye abhi lock)."""
+    return int(await c.fetchval(
+        "SELECT COALESCE(sum(reward),0) FROM completions WHERE user_id=$1 AND status='ok' AND release_at>now()", uid) or 0)
+
+
+async def lock_info(uid):
+    """(locked_coins, seconds_until_all_unlocked)"""
+    r = await pool.fetchrow(
+        """SELECT COALESCE(sum(reward),0) AS s, COALESCE(EXTRACT(EPOCH FROM (max(release_at)-now())),0) AS left_s
+           FROM completions WHERE user_id=$1 AND status='ok' AND release_at>now()""", uid)
+    return int(r["s"]), int(r["left_s"])
+
+
+async def lock_next(uid):
+    """Sabse jaldi unlock hone wale coins ke liye seconds."""
+    v = await pool.fetchval(
+        "SELECT EXTRACT(EPOCH FROM (min(release_at)-now())) FROM completions WHERE user_id=$1 AND status='ok' AND release_at>now()", uid)
+    return int(v or 0)
+
+
+# ---------- leaderboard (monthly, IST 1 tareekh reset; column 'week' = mahine ki pehli tareekh) ----------
+_EXCL = ",".join(str(int(x)) for x in [0] + list(config.ADMIN_IDS) + list(config.SUPPORT_IDS))
+WEEK_SQL = "(date_trunc('month', now() AT TIME ZONE 'Asia/Kolkata'))::date"
+
+
+async def lb_add(c, uid, earned=0, refs=0):
+    await c.execute(
+        f"""INSERT INTO lb_week(week,user_id,earned,refs) VALUES({WEEK_SQL},$1,$2,$3)
+            ON CONFLICT(week,user_id) DO UPDATE SET earned=lb_week.earned+$2, refs=lb_week.refs+$3""", uid, earned, refs)
+
+
+async def lb_secs_left():
+    return int(await pool.fetchval(
+        f"SELECT EXTRACT(EPOCH FROM (({WEEK_SQL} + interval '1 month')::timestamp - (now() AT TIME ZONE 'Asia/Kolkata')))") or 0)
+
+
+async def lb_top(board, limit=20, prev=False):
+    col = "refs" if board == "refer" else "earned"
+    wk = f"(({WEEK_SQL} - interval '1 month')::date)" if prev else WEEK_SQL
+    return await pool.fetch(
+        f"""SELECT l.user_id, l.{col} AS score, u.first_name FROM lb_week l JOIN users u ON u.id=l.user_id
+            WHERE l.week={wk} AND l.{col}>0 AND NOT u.banned AND u.id NOT IN ({_EXCL})
+            ORDER BY l.{col} DESC, l.user_id LIMIT $1""", limit)
+
+
+async def lb_me(uid, board):
+    col = "refs" if board == "refer" else "earned"
+    r = await pool.fetchrow(f"SELECT {col} AS score FROM lb_week WHERE week={WEEK_SQL} AND user_id=$1", uid)
+    score = int(r["score"]) if r else 0
+    if score <= 0:
+        return 0, 0
+    rank = await pool.fetchval(
+        f"""SELECT count(*)+1 FROM lb_week l JOIN users u ON u.id=l.user_id WHERE l.week={WEEK_SQL} AND l.{col}>$1
+            AND NOT u.banned AND u.id NOT IN ({_EXCL})""", score)
+    return score, int(rank)
+
+
+async def lb_pay_prev(prizes):
+    """Pichhle mahine ke top-3 ko ad_balance me prize (ek hi baar). prizes = {'refer':[..],'coin':[..]}. Return [(uid,board,rank,prize)]."""
+    out = []
+    for board, lst in prizes.items():
+        rows = await lb_top("refer" if board == "refer" else "coin", len(lst), prev=True)
+        for i, r in enumerate(rows):
+            prize = lst[i]
+            async with pool.acquire() as c, c.transaction():
+                wk = await c.fetchval(f"SELECT ({WEEK_SQL} - interval '1 month')::date")
+                ins = await c.fetchval(
+                    "INSERT INTO lb_paid(week,board,rank,user_id,prize) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING RETURNING rank",
+                    wk, board, i + 1, r["user_id"], prize)
+                if ins is None:
+                    continue
+                await c.execute("UPDATE users SET ad_balance=ad_balance+$1, total_earned=total_earned+$1 WHERE id=$2", prize, r["user_id"])
+                await led(c, r["user_id"], "lb_prize", prize, f"{board}{i + 1}")
+                out.append((r["user_id"], board, i + 1, prize))
+    return out
 
 
 # ---------- joins / membership ----------
@@ -446,10 +540,11 @@ async def joined_after(chat_id, uid, since):
 
 
 async def is_blocked(uid):
-    return await pool.fetchval("SELECT EXISTS(SELECT 1 FROM completions WHERE user_id=$1 AND status='left')", uid)
+    return False  # channel leave par ab koi block / coin cut nahi
 
 
 async def left_chats(uid):
+    return []  # (block hata diya)
     return await pool.fetch(
         """SELECT DISTINCT ON (c.chat_id) c.chat_id, t.title, t.link FROM completions c
            JOIN tasks t ON t.id=c.task_id WHERE c.user_id=$1 AND c.status='left'""", uid)
@@ -497,6 +592,7 @@ async def revoke(comp_id):
 
 
 async def revoke_by_chat(chat_id, uid):
+    return []  # leave par coins nahi kat-te
     ids = await pool.fetch(
         "SELECT id FROM completions WHERE chat_id=$1 AND user_id=$2 AND status IN ('hold','ok')", chat_id, uid)
     out = []
@@ -921,7 +1017,7 @@ def is_code(upi):
     return upi in (GPLAY, AMAZON)
 
 
-async def request_withdraw(uid, coins, pct=None, level=0, hours=None, max_day=None, gplay=False, addr=None, usdt=None, amazon=False):
+async def request_withdraw(uid, coins, pct=None, level=0, hours=None, max_day=None, gplay=False, addr=None, usdt=None, amazon=False, lock=True):
     """coins = jitne ka paisa user ko milega. Tax upar se: balance se coins + tax kat-ta hai.
     Return (wid, upi, fee_coins, net_inr). withdrawals.coins = kul kata hua (coins+fee) taaki refund poora ho."""
     fee = wd_fee(coins, pct)
@@ -935,10 +1031,14 @@ async def request_withdraw(uid, coins, pct=None, level=0, hours=None, max_day=No
                 "AND status NOT IN ('rejected','expired','failed')", uid)
             if n >= max_day:
                 return "limit"
+        await c.fetchval("SELECT id FROM users WHERE id=$1 FOR UPDATE", uid)
+        locked = 0 if not lock else await locked_coins(c, uid)
         u = await c.fetchrow(
-            """UPDATE users SET balance=balance-$1 WHERE id=$2 AND balance>=$1
-               AND device_ok AND NOT banned AND debt=0 AND ($3::bool OR upi IS NOT NULL) RETURNING upi""", total, uid, addr is not None)
+            """UPDATE users SET balance=balance-$1 WHERE id=$2 AND balance-$4>=$1
+               AND device_ok AND NOT banned AND debt=0 AND ($3::bool OR upi IS NOT NULL) RETURNING upi""", total, uid, addr is not None, locked)
         if not u:
+            if locked and await c.fetchval("SELECT balance>=$1 FROM users WHERE id=$2", total, uid):
+                return "locked"
             return None
         wid = await c.fetchval(
             "INSERT INTO withdrawals(user_id,coins,amount_inr,fee_coins,upi,level,expire_hours,method,usdt) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id",
@@ -1197,6 +1297,7 @@ async def _bw_lock(c, sid):
 async def _bw_pay(c, s):
     await c.execute("UPDATE users SET balance=balance+$1, total_earned=total_earned+$1 WHERE id=$2",
                     s["reward"], s["worker_id"])
+    await lb_add(c, s["worker_id"], earned=s["reward"])
     await c.execute("UPDATE bw_subs SET status='approved', decided_at=now() WHERE id=$1", s["id"])
     await led(c, s["worker_id"], "bw_reward", s["reward"], s["id"])
     await streak_tick(c, s["worker_id"])
@@ -1527,6 +1628,7 @@ async def ref_complete(referred):
         await c.execute("UPDATE users SET ad_balance=ad_balance+$1, total_earned=total_earned+$1 WHERE id=$2",
                         reward, r["referrer_id"])
         await led(c, r["referrer_id"], "referral", reward, referred)
+        await lb_add(c, r["referrer_id"], refs=1)
         # milestone bonus: referrer row lock ke baad count (do saath me complete hone par bhi bonus ek hi baar)
         await c.fetchval("SELECT id FROM users WHERE id=$1 FOR UPDATE", r["referrer_id"])
         done = await c.fetchval("SELECT count(*) FROM referrals WHERE referrer_id=$1 AND status='done'", r["referrer_id"])
