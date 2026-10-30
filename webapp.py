@@ -21,7 +21,11 @@ async def health(request):
 def load_index():
     """index.html ek baar memory me (har open par disk read nahi), app ka naam andar daal ke."""
     with open(INDEX, encoding="utf-8") as f:
-        return f.read().replace("__APP_NAME__", html.escape(config.APP_NAME)).encode("utf-8")
+        s = f.read().replace("__APP_NAME__", html.escape(config.APP_NAME))
+    z = html.escape(config.MT_ZONE, quote=True)
+    mt = (f"<script src='https://libtl.com/sdk.js' data-zone='{z}' data-sdk='show_{z}' "
+          f"onload='window.__mtLoad=1' onerror='window.__mtErr=1'></script>") if config.MT_ON else ""
+    return s.replace("<!--__MT__-->", mt).encode("utf-8")
 
 
 FRAME = "frame-ancestors 'self' https://web.telegram.org https://*.telegram.org"

@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
 <title>__APP_NAME__</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
+<!--__MT__-->
 <style>
 :root{
   --bg:#0a0e16;--card:#131a27;--card2:#1a2334;--line:#233049;--text:#e9eef8;--sub:#8794ac;
@@ -432,7 +433,7 @@ async function streakPop() {
 async function loadMe() {
   const j = await api('/api/me');
   if (!j.ok) { $('#view').innerHTML = `<div class="card empty"><i>⚠️</i>${esc(j.msg || 'Error')}<br><br><button class="btn" data-act="reload">Retry</button></div>`; return false; }
-  S.me = j.me; if (S.me.active) S.me.active.t0 = Date.now(); S.cfg = j.cfg; adsSdk(); S.blocked = j.blocked; S.hist = j.history; if (window.applyLang) applyLang(); setTimeout(streakPop, 600); return true;
+  S.me = j.me; if (S.me.active) S.me.active.t0 = Date.now(); S.cfg = j.cfg; S.blocked = j.blocked; S.hist = j.history; if (window.applyLang) applyLang(); setTimeout(streakPop, 600); return true;
 }
 let goSeq = 0;
 async function go(tab) {
@@ -513,12 +514,6 @@ function rHome() {
   <div class="row" style="margin:16px 0 4px"><h3 class="sp">Recent activity</h3></div><div class="card" style="padding:4px 16px">${hist}</div>`;
 }
 
-function adsSdk() {
-  if (!S.cfg || !S.cfg.ads_on) return;
-  if (S.cfg.ads_mt && !document.getElementById('adsmt')) {
-    const s = document.createElement('script'); s.id = 'adsmt'; s.src = 'https://libtl.com/sdk.js'; s.dataset.zone = S.cfg.mt_zone; s.dataset.sdk = 'show_' + S.cfg.mt_zone; document.head.appendChild(s);
-  }
-}
 /* ---------- auto-check: Join dabate hi khud verify ---------- */
 S.auto = {};
 function autoStop(id) { const a = S.auto[id]; if (a) { clearInterval(a.iv); delete S.auto[id]; } }
@@ -1150,7 +1145,12 @@ const H = {
       await window['show_' + c.mt_zone]({ ymid });
       return ymid;
     });
-    if (!srcs.length) return popup('error', 'Oops', 'Ad abhi load nahi hui. Thodi der baad try karo.');
+    if (!srcs.length) {   // SDK abhi aa raha ho to thoda ruko
+      for (let i = 0; i < 20 && typeof window['show_' + c.mt_zone] !== 'function'; i++) await new Promise(x => setTimeout(x, 200));
+      if (typeof window['show_' + c.mt_zone] === 'function') return H.watchad();
+      const why = window.__mtErr ? 'sdk blocked' : window.__mtLoad ? 'sdk no fn' : 'sdk pending';
+      return popup('error', 'Oops', trUI('Ad abhi load nahi hui. Thodi der baad try karo.') + ' [' + why + ']');
+    }
     S.adBusy = true;
     let rid = null, lastErr = null;
     for (const run of srcs) {
