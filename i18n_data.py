@@ -297,3 +297,14 @@ _add({
     "🏆 Leaderboard (Coin) me tumhara rank #{} raha! {} coins Ad Balance me add ho gaye.": ("🏆 लीडरबोर्ड (कॉइन) में तुम्हारी रैंक #{} रही! {} कॉइन्स एड बैलेंस में जुड़ गए।", "🏆 You finished #{} on the Coin leaderboard! {} coins added to your Ad Balance."),
     "✅ {} coins release ho gaye!": ("✅ {} कॉइन्स रिलीज़ हो गए!", "✅ {} coins released!"),
 })
+
+# ---------------- ads ----------------
+_add({
+    "Ad complete! +{} coins mil gaye": ("विज्ञापन पूरा! +{} कॉइन्स मिल गए", "Ad complete! +{} coins added"),
+    "Ads abhi available nahi.": ("विज्ञापन अभी उपलब्ध नहीं हैं।", "Ads are not available right now."),
+    "Ad verify nahi hua.": ("विज्ञापन वेरिफाई नहीं हुआ।", "Ad could not be verified."),
+    "Ad verify ho raha hai, thoda ruko...": ("विज्ञापन वेरिफाई हो रहा है, थोड़ा रुको...", "Verifying the ad, please wait..."),
+    "Is ad ke coins pehle hi mil chuke.": ("इस विज्ञापन के कॉइन्स पहले ही मिल चुके हैं।", "You already got coins for this ad."),
+    "Ad poori nahi dekhi, coins nahi mile.": ("विज्ञापन पूरा नहीं देखा, कॉइन्स नहीं मिले।", "Ad was not watched fully, no coins."),
+    "Aaj ki ad limit poori ho gayi. Kal dobara aana.": ("आज की विज्ञापन सीमा पूरी हो गई। कल फिर आना।", "Today's ad limit is reached. Come back tomorrow."),
+})

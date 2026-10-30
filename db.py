@@ -139,6 +139,12 @@ ALTER TABLE support_msgs ADD COLUMN IF NOT EXISTS has_voice BOOLEAN NOT NULL DEF
 ALTER TABLE completions ADD COLUMN IF NOT EXISTS rejoin_paid BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS debt BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE completions ADD COLUMN IF NOT EXISTS left_at TIMESTAMPTZ;
+CREATE TABLE IF NOT EXISTS ad_views(
+  request_id TEXT PRIMARY KEY, event_id TEXT, user_id BIGINT NOT NULL, status TEXT NOT NULL,
+  claimed BOOLEAN NOT NULL DEFAULT FALSE, reward INT NOT NULL DEFAULT 0, claimed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ad_views_user ON ad_views(user_id, claimed_at);
 UPDATE completions SET status='ok' WHERE status='left';
 UPDATE users SET debt=0 WHERE debt<>0;
 CREATE TABLE IF NOT EXISTS lb_week(
@@ -447,26 +453,66 @@ async def claim(task_id, uid):
         return "ok"
 
 
-# ---------- 24h withdraw lock ----------
+# ---------- 24h withdraw lock (channel-join + ads ke coins) ----------
+_LOCK_ROWS = (f"(SELECT reward, release_at AS rel FROM completions WHERE user_id=$1 AND status='ok' AND release_at>now() "
+              f"UNION ALL SELECT reward, claimed_at + make_interval(hours => {int(config.WD_LOCK_HOURS)}) AS rel FROM ad_views "
+              f"WHERE user_id=$1 AND claimed AND claimed_at + make_interval(hours => {int(config.WD_LOCK_HOURS)}) > now()) l")
+
+
 async def locked_coins(c, uid):
-    """Pichhle WD_LOCK_HOURS me channel-join se kamaye coins (withdraw ke liye abhi lock)."""
-    return int(await c.fetchval(
-        "SELECT COALESCE(sum(reward),0) FROM completions WHERE user_id=$1 AND status='ok' AND release_at>now()", uid) or 0)
+    """Pichhle WD_LOCK_HOURS me channel-join / ad se kamaye coins (withdraw ke liye abhi lock)."""
+    return int(await c.fetchval(f"SELECT COALESCE(sum(reward),0) FROM {_LOCK_ROWS}", uid) or 0)
 
 
 async def lock_info(uid):
     """(locked_coins, seconds_until_all_unlocked)"""
     r = await pool.fetchrow(
-        """SELECT COALESCE(sum(reward),0) AS s, COALESCE(EXTRACT(EPOCH FROM (max(release_at)-now())),0) AS left_s
-           FROM completions WHERE user_id=$1 AND status='ok' AND release_at>now()""", uid)
+        f"SELECT COALESCE(sum(reward),0) AS s, COALESCE(EXTRACT(EPOCH FROM (max(rel)-now())),0) AS left_s FROM {_LOCK_ROWS}", uid)
     return int(r["s"]), int(r["left_s"])
 
 
 async def lock_next(uid):
     """Sabse jaldi unlock hone wale coins ke liye seconds."""
-    v = await pool.fetchval(
-        "SELECT EXTRACT(EPOCH FROM (min(release_at)-now())) FROM completions WHERE user_id=$1 AND status='ok' AND release_at>now()", uid)
+    v = await pool.fetchval(f"SELECT EXTRACT(EPOCH FROM (min(rel)-now())) FROM {_LOCK_ROWS}", uid)
     return int(v or 0)
+
+
+# ---------- ads (Ads Galaxy rewarded) ----------
+async def ad_event(request_id, event_id, uid, status):
+    """Ads Galaxy ka server callback: request_id ek hi baar record hota hai."""
+    await pool.execute(
+        "INSERT INTO ad_views(request_id,event_id,user_id,status) VALUES($1,$2,$3,$4) ON CONFLICT(request_id) DO NOTHING",
+        request_id, event_id, uid, status)
+
+
+async def ads_today(uid):
+    return int(await pool.fetchval(
+        f"SELECT count(*) FROM ad_views WHERE user_id=$1 AND claimed AND claimed_at >= {IST_DAY}", uid) or 0)
+
+
+async def ad_claim(uid, request_id, reward, daily):
+    """'ok' | 'wait' (callback abhi nahi aaya) | 'dup' | 'bad' | 'limit'"""
+    async with pool.acquire() as c, c.transaction():
+        await c.fetchval("SELECT id FROM users WHERE id=$1 FOR UPDATE", uid)
+        r = await c.fetchrow("SELECT claimed, status FROM ad_views WHERE request_id=$1 AND user_id=$2 FOR UPDATE", request_id, uid)
+        if not r:
+            return "wait"
+        if r["claimed"]:
+            return "dup"
+        if r["status"] != "completed":
+            return "bad"
+        n = await c.fetchval(f"SELECT count(*) FROM ad_views WHERE user_id=$1 AND claimed AND claimed_at >= {IST_DAY}", uid)
+        if n >= daily:
+            return "limit"
+        await c.execute("UPDATE ad_views SET claimed=TRUE, reward=$2, claimed_at=now() WHERE request_id=$1", request_id, reward)
+        await c.execute("UPDATE users SET balance=balance+$1, total_earned=total_earned+$1 WHERE id=$2", reward, uid)
+        await led(c, uid, "ad", reward, request_id)
+        await lb_add(c, uid, earned=reward)
+        return "ok"
+
+
+async def ad_prune():
+    await pool.execute("DELETE FROM ad_views WHERE created_at < now() - interval '3 days' AND NOT claimed")
 
 
 # ---------- leaderboard (monthly, IST 1 tareekh reset; column 'week' = mahine ki pehli tareekh) ----------

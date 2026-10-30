@@ -106,7 +106,7 @@ def cfg(request):
     return {"coin_per_inr": config.COIN_PER_INR, "join_reward": config.JOIN_REWARD, "ad_cost": config.AD_COST, "task_fee": config.TASK_FEE, "max_members": (None if request["u"]["id"] in config.ADMIN_IDS else util.plan(request["u"])["members"]),
             "min_task_members": config.MIN_TASK_MEMBERS, "max_task_members": config.MAX_TASK_MEMBERS,
             "min_deposit": config.MIN_DEPOSIT_COINS, "min_withdraw": config.MIN_WITHDRAW_COINS, "gplay_step": config.GPLAY_STEP_INR * config.COIN_PER_INR, "amazon_step": config.AMAZON_STEP_INR * config.COIN_PER_INR,
-            "hold_hours": config.HOLD_HOURS, "plans": plans_json(),
+            "hold_hours": config.HOLD_HOURS, "ads_on": config.ADS_ON, "ads_id": config.ADS_MINI_APP_ID, "ads_reward": config.ADS_REWARD, "ads_daily": config.ADS_DAILY, "plans": plans_json(),
             "bw_min_reward": config.BW_MIN_REWARD,
             "bw_min_users": config.BW_MIN_USERS, "bw_max_users": config.BW_MAX_USERS,
             "support_url": config.SUPPORT_URL, "bot_username": request.app["bot"].username,
@@ -328,6 +328,7 @@ async def api_me(request):
     me = pub(u)
     me["streak"] = await db.streak_info(u["id"])
     lk, _ = (0, 0) if u["id"] in config.ADMIN_IDS else await db.lock_info(u["id"])
+    me["ads_today"] = await db.ads_today(u["id"]) if config.ADS_ON else 0
     me["locked"] = lk
     me["lock_next"] = await db.lock_next(u["id"]) if lk else 0
     me["news_unread"] = int(await db.news_unread(u["id"]) or 0)
@@ -404,6 +405,46 @@ def _lb_rows(rows, uid):
         nm = (r["first_name"] or "User").strip()[:14] or "User"
         out.append({"rank": i + 1, "name": nm, "score": int(r["score"]), "me": r["user_id"] == uid})
     return out
+
+
+@routes.post("/ads/callback")
+async def ads_callback(request):
+    """Ads Galaxy server-to-server reward callback (Telegram auth nahi, secret key se)."""
+    import hmac
+    if not config.ADS_ON or not hmac.compare_digest(request.query.get("key", ""), config.ADS_CB_KEY):
+        return web.json_response({"ok": False}, status=403)
+    try:
+        d = await request.json()
+        rid = str(d.get("request_id") or "")[:100]
+        uid = int(d.get("user_id"))
+        st = str(d.get("status") or "")[:20]
+    except Exception:
+        return web.json_response({"ok": False}, status=400)
+    if not re.fullmatch(r"[\w.\-]{3,100}", rid):
+        return web.json_response({"ok": False}, status=400)
+    await db.ad_event(rid, str(d.get("event_id") or "")[:100], uid, st)
+    return web.json_response({"ok": True})
+
+
+@routes.post("/api/ads/claim")
+async def api_ads_claim(request):
+    u = request["u"]
+    if not config.ADS_ON:
+        return err("Ads abhi available nahi.")
+    if not u["device_ok"]:
+        return err("🔐 Pehle Profile me device verify karo.")
+    if not cooldown(u["id"], "ads", 1):
+        return too_fast()
+    rid = str((await body(request)).get("rid") or "")
+    if not re.fullmatch(r"[\w.\-]{3,100}", rid):
+        return err("Ad verify nahi hua.")
+    res = await db.ad_claim(u["id"], rid, config.ADS_REWARD, config.ADS_DAILY)
+    if res == "ok":
+        return ok(msg=f"Ad complete! +{config.ADS_REWARD} coins mil gaye", reward=config.ADS_REWARD)
+    if res == "wait":
+        return web.json_response({"ok": False, "code": "wait", "msg": i18n.tr("Ad verify ho raha hai, thoda ruko...")})
+    return err({"dup": "Is ad ke coins pehle hi mil chuke.", "bad": "Ad poori nahi dekhi, coins nahi mile.",
+                "limit": "Aaj ki ad limit poori ho gayi. Kal dobara aana."}[res])
 
 
 @routes.get("/api/leaderboard")

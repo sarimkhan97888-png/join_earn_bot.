@@ -173,3 +173,11 @@ def _prizes(name, default):
 
 
 LB_PRIZES = {"refer": _prizes("LB_REFER_PRIZES", "1000,600,300"), "coin": _prizes("LB_COIN_PRIZES", "600,400,200")}
+
+
+# ---- Ads Galaxy (rewarded ads) ----
+ADS_MINI_APP_ID = os.getenv("ADS_MINI_APP_ID", "148")
+ADS_CB_KEY = os.getenv("ADS_CB_KEY", "")        # callback URL ka secret (?key=...). Khali = ads feature band
+ADS_ON = bool(ADS_CB_KEY)
+ADS_REWARD = int(os.getenv("ADS_REWARD", "5"))   # coins per ad
+ADS_DAILY = int(os.getenv("ADS_DAILY", "10"))    # ek user roz max ads

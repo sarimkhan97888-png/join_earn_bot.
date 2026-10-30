@@ -655,6 +655,7 @@ async def job_cleanup(ctx):
     await db.sup_cleanup()
     await db.ledger_prune()
     await db.history_prune()
+    await db.ad_prune()
 
 
 async def job_support_clean(ctx):
