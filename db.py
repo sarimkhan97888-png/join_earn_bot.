@@ -477,9 +477,9 @@ async def lock_next(uid):
     return int(v or 0)
 
 
-# ---------- ads (Ads Galaxy rewarded) ----------
+# ---------- ads (Monetag rewarded) ----------
 async def ad_credit(request_id, event_id, uid, status, reward, daily):
-    """Ads Galaxy ka verified callback: coins yahin milte hain (event/request ek hi baar).
+    """Monetag postback: coins yahin milte hain (event/request ek hi baar).
     'ok' | 'dup' | 'bad' | 'skip' | 'limit'"""
     async with pool.acquire() as c, c.transaction():
         ins = await c.fetchval(
@@ -503,13 +503,13 @@ async def ad_credit(request_id, event_id, uid, status, reward, daily):
 
 
 async def ad_check(uid, request_id):
-    """Frontend poll: 'ok' (credit ho gaya) | 'wait' (callback abhi nahi aaya) | 'bad' | 'limit'"""
-    r = await pool.fetchrow("SELECT claimed, status FROM ad_views WHERE request_id=$1 AND user_id=$2", request_id, uid)
+    """Frontend poll: ('ok', reward) (credit ho gaya) | 'wait' (callback abhi nahi aaya) | 'bad' | 'limit'"""
+    r = await pool.fetchrow("SELECT claimed, status, reward FROM ad_views WHERE request_id=$1 AND user_id=$2", request_id, uid)
     if not r:
-        return "wait"
+        return "wait", 0
     if r["claimed"]:
-        return "ok"
-    return "bad" if r["status"] != "completed" else "limit"
+        return "ok", int(r["reward"])
+    return ("bad" if r["status"] != "completed" else "limit"), 0
 
 
 async def ads_today(uid):

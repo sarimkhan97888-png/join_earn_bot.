@@ -514,9 +514,10 @@ function rHome() {
 }
 
 function adsSdk() {
-  if (!S.cfg || !S.cfg.ads_on || document.getElementById('adsgx')) return;
-  const s = document.createElement('script'); s.id = 'adsgx'; s.src = 'https://app.adsgalaxy.online/sdk.js?id=' + encodeURIComponent(S.cfg.ads_id);
-  document.head.appendChild(s);
+  if (!S.cfg || !S.cfg.ads_on) return;
+  if (S.cfg.ads_mt && !document.getElementById('adsmt')) {
+    const s = document.createElement('script'); s.id = 'adsmt'; s.src = 'https://libtl.com/sdk.js'; s.dataset.zone = S.cfg.mt_zone; s.dataset.sdk = 'show_' + S.cfg.mt_zone; document.head.appendChild(s);
+  }
 }
 /* ---------- auto-check: Join dabate hi khud verify ---------- */
 S.auto = {};
@@ -1143,20 +1144,26 @@ const H = {
     const c = S.cfg;
     if (S.adBusy) return;
     if ((S.me.ads_today || 0) >= c.ads_daily) return popup('info', 'Ads', 'Aaj ki ad limit poori ho gayi. Kal dobara aana.');
-    if (typeof window.showAdsGalaxy !== 'function') return popup('error', 'Oops', 'Ad abhi load nahi hui. Thodi der baad try karo.');
+    const srcs = [];
+    if (c.ads_mt && typeof window['show_' + c.mt_zone] === 'function') srcs.push(async () => {
+      const ymid = 'u' + S.me.id + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+      await window['show_' + c.mt_zone]({ ymid });
+      return ymid;
+    });
+    if (!srcs.length) return popup('error', 'Oops', 'Ad abhi load nahi hui. Thodi der baad try karo.');
     S.adBusy = true;
-    let r = null;
-    try { r = await window.showAdsGalaxy(); }
-    catch (e) {
+    let rid = null, lastErr = null;
+    for (const run of srcs) {
+      try { rid = await run(); if (rid) break; } catch (e) { lastErr = e; }
+    }
+    if (!rid) {
       S.adBusy = false;
-      const k = e && e.code;
-      if (k === 'NO_FILL') return popup('info', 'Ads', 'Abhi koi ad available nahi hai. Thodi der baad try karo.');
+      const k = lastErr && lastErr.code;
       if (k === 'INVALID_INIT_DATA') return popup('error', 'Ads', 'Ad sirf Telegram ke andar chalti hai.');
       if (k === 'APP_NOT_READY') return popup('error', 'Ads', 'Ad system abhi taiyaar nahi hai. Thodi der baad try karo.');
+      if (k === 'NO_FILL' || lastErr) return popup('info', 'Ads', 'Abhi koi ad available nahi hai. Thodi der baad try karo.');
       return popup('info', 'Ads', 'Ad poori nahi dekhi, coins nahi mile.');
     }
-    const rid = r && r.request_id;
-    if (!rid) { S.adBusy = false; return popup('info', 'Ads', 'Ad poori nahi dekhi, coins nahi mile.'); }
     $('#loader').classList.add('open');
     let j = null;
     for (let i = 0; i < 12; i++) { j = await api('/api/ads/claim', { rid }); if (j.ok || j.code !== 'wait') break; await new Promise(x => setTimeout(x, 2000)); }

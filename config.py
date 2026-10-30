@@ -175,10 +175,16 @@ def _prizes(name, default):
 LB_PRIZES = {"refer": _prizes("LB_REFER_PRIZES", "1000,600,300"), "coin": _prizes("LB_COIN_PRIZES", "600,400,200")}
 
 
-# ---- Ads Galaxy (rewarded ads) ----
-ADS_MINI_APP_ID = os.getenv("ADS_MINI_APP_ID", "148")
-ADS_SIGN_SECRET = os.getenv("ADS_SIGN_SECRET", "")   # Ads Galaxy callback signing secret. Khali = ads feature band
-ADS_TS_TOL = int(os.getenv("ADS_TS_TOL", "300"))      # callback timestamp tolerance (seconds)
-ADS_ON = bool(ADS_SIGN_SECRET)
+# ---- Ads (Monetag) ----
 ADS_REWARD = int(os.getenv("ADS_REWARD", "5"))   # coins per ad
 ADS_DAILY = int(os.getenv("ADS_DAILY", "10"))    # ek user roz max ads
+
+# ---- Monetag (rewarded interstitial, video) ----
+MT_ZONE = os.getenv("MONETAG_ZONE", "12150359")
+MT_SECRET = os.getenv("MONETAG_SECRET", "")           # postback URL ka secret (?secret=...). Khali = Monetag band
+MT_ON = bool(MT_SECRET)
+MT_REWARD = int(os.getenv("MONETAG_REWARD", str(ADS_REWARD)))
+
+
+def ads_any():
+    return MT_ON
