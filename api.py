@@ -106,7 +106,7 @@ def cfg(request):
     return {"coin_per_inr": config.COIN_PER_INR, "join_reward": config.JOIN_REWARD, "ad_cost": config.AD_COST, "task_fee": config.TASK_FEE, "max_members": (None if request["u"]["id"] in config.ADMIN_IDS else util.plan(request["u"])["members"]),
             "min_task_members": config.MIN_TASK_MEMBERS, "max_task_members": config.MAX_TASK_MEMBERS,
             "min_deposit": config.MIN_DEPOSIT_COINS, "min_withdraw": config.MIN_WITHDRAW_COINS, "gplay_step": config.GPLAY_STEP_INR * config.COIN_PER_INR, "amazon_step": config.AMAZON_STEP_INR * config.COIN_PER_INR,
-            "hold_hours": config.HOLD_HOURS, "ads_on": config.ads_any(), "ads_mt": config.MT_ON, "mt_zone": config.MT_ZONE, "ads_reward": config.MT_REWARD, "ads_daily": config.ADS_DAILY, "plans": plans_json(),
+            "hold_hours": config.HOLD_HOURS, "ads_on": config.ads_any(), "ads_gx": config.ADS_ON, "ads_id": config.ADS_MINI_APP_ID, "ads_mt": config.MT_ON, "mt_zone": config.MT_ZONE, "ads_reward": (config.ADS_REWARD if config.ADS_ON else config.MT_REWARD), "ads_daily": config.ADS_DAILY, "plans": plans_json(),
             "bw_min_reward": config.BW_MIN_REWARD,
             "bw_min_users": config.BW_MIN_USERS, "bw_max_users": config.BW_MAX_USERS,
             "support_url": config.SUPPORT_URL, "bot_username": request.app["bot"].username,
@@ -405,6 +405,36 @@ def _lb_rows(rows, uid):
         nm = (r["first_name"] or "User").strip()[:14] or "User"
         out.append({"rank": i + 1, "name": nm, "score": int(r["score"]), "me": r["user_id"] == uid})
     return out
+
+
+@routes.post("/ads/callback")
+async def ads_callback(request):
+    """Ads Galaxy server-to-server reward callback. Signature: HMAC-SHA256(secret, timestamp.event_id.rawBody)."""
+    if not config.ADS_ON:
+        return web.json_response({"ok": False}, status=403)
+    raw = await request.read()
+    h = request.headers
+    ts, eid, sig = h.get("x-adsgalaxy-timestamp", ""), h.get("x-adsgalaxy-event-id", ""), h.get("x-adsgalaxy-signature", "")
+    try:
+        fresh = abs(time.time() - float(ts)) <= config.ADS_TS_TOL
+    except ValueError:
+        fresh = False
+    exp = hmac.new(config.ADS_SIGN_SECRET.encode(), ts.encode() + b"." + eid.encode() + b"." + raw, hashlib.sha256).hexdigest()
+    if not (ts and eid and fresh and hmac.compare_digest(sig, exp)):
+        return web.json_response({"ok": False}, status=401)
+    try:
+        d = json.loads(raw)
+        rid = str(d.get("request_id") or "")
+        uid = int(d.get("user_id"))
+        st = str(d.get("status") or "")[:20]
+        if str(d.get("event_id") or "") != eid:
+            raise ValueError("event id mismatch")
+    except Exception:
+        return web.json_response({"ok": False}, status=400)
+    if not re.fullmatch(r"[\w.\-]{3,100}", rid):
+        return web.json_response({"ok": False}, status=400)
+    res = await db.ad_credit(rid, eid[:100], uid, st, config.ADS_REWARD, config.ADS_DAILY)   # DB error => 500 => Ads Galaxy retry karega
+    return web.json_response({"ok": True, "result": res})
 
 
 @routes.get("/ads/monetag")

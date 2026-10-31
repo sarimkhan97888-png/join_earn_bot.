@@ -433,7 +433,7 @@ async function streakPop() {
 async function loadMe() {
   const j = await api('/api/me');
   if (!j.ok) { $('#view').innerHTML = `<div class="card empty"><i>⚠️</i>${esc(j.msg || 'Error')}<br><br><button class="btn" data-act="reload">Retry</button></div>`; return false; }
-  S.me = j.me; if (S.me.active) S.me.active.t0 = Date.now(); S.cfg = j.cfg; S.blocked = j.blocked; S.hist = j.history; if (window.applyLang) applyLang(); setTimeout(streakPop, 600); return true;
+  S.me = j.me; if (S.me.active) S.me.active.t0 = Date.now(); S.cfg = j.cfg; adsSdk(); S.blocked = j.blocked; S.hist = j.history; if (window.applyLang) applyLang(); setTimeout(streakPop, 600); return true;
 }
 let goSeq = 0;
 async function go(tab) {
@@ -514,6 +514,10 @@ function rHome() {
   <div class="row" style="margin:16px 0 4px"><h3 class="sp">Recent activity</h3></div><div class="card" style="padding:4px 16px">${hist}</div>`;
 }
 
+function adsSdk() {
+  if (!S.cfg || !S.cfg.ads_gx || document.getElementById('adsgx')) return;
+  const s = document.createElement('script'); s.id = 'adsgx'; s.src = 'https://app.adsgalaxy.online/sdk.js?id=' + encodeURIComponent(S.cfg.ads_id); document.head.appendChild(s);
+}
 /* ---------- auto-check: Join dabate hi khud verify ---------- */
 S.auto = {};
 function autoStop(id) { const a = S.auto[id]; if (a) { clearInterval(a.iv); delete S.auto[id]; } }
@@ -1139,17 +1143,19 @@ const H = {
     const c = S.cfg;
     if (S.adBusy) return;
     if ((S.me.ads_today || 0) >= c.ads_daily) return popup('info', 'Ads', 'Aaj ki ad limit poori ho gayi. Kal dobara aana.');
-    const srcs = [];
-    if (c.ads_mt && typeof window['show_' + c.mt_zone] === 'function') srcs.push(async () => {
+    const mtFn = () => window['show_' + c.mt_zone];
+    const have = () => (c.ads_gx && typeof window.showAdsGalaxy === 'function') || (c.ads_mt && typeof mtFn() === 'function');
+    if (!have()) {   // SDK abhi aa raha ho to thoda ruko
+      for (let i = 0; i < 20 && !have(); i++) await new Promise(x => setTimeout(x, 200));
+      if (!have()) return popup('error', 'Oops', 'Ad load nahi hui. Apna DNS / ad-blocker band karke dobara try karo.');
+    }
+    const srcs = [];   // pehle Ads Galaxy, na chale to Monetag
+    if (c.ads_gx && typeof window.showAdsGalaxy === 'function') srcs.push(async () => { const r = await window.showAdsGalaxy(); return r && r.request_id; });
+    if (c.ads_mt && typeof mtFn() === 'function') srcs.push(async () => {
       const ymid = 'u' + S.me.id + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-      await window['show_' + c.mt_zone]({ ymid });
+      await mtFn()({ ymid });
       return ymid;
     });
-    if (!srcs.length) {   // SDK abhi aa raha ho to thoda ruko
-      for (let i = 0; i < 20 && typeof window['show_' + c.mt_zone] !== 'function'; i++) await new Promise(x => setTimeout(x, 200));
-      if (typeof window['show_' + c.mt_zone] === 'function') return H.watchad();
-      return popup('error', 'Oops', 'Ad load nahi hui. Apna DNS / ad-blocker band karke dobara try karo.');
-    }
     S.adBusy = true;
     let rid = null, lastErr = null;
     for (const run of srcs) {
@@ -1158,6 +1164,7 @@ const H = {
     if (!rid) {
       S.adBusy = false;
       const k = lastErr && lastErr.code;
+      if (k === 'NO_FILL') return popup('info', 'Ads', 'Abhi koi ad available nahi hai. Thodi der baad try karo.');
       if (k === 'INVALID_INIT_DATA') return popup('error', 'Ads', 'Ad sirf Telegram ke andar chalti hai.');
       if (k === 'APP_NOT_READY') return popup('error', 'Ads', 'Ad system abhi taiyaar nahi hai. Thodi der baad try karo.');
       if (lastErr) {
