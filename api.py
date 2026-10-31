@@ -421,6 +421,7 @@ async def ads_callback(request):
         fresh = False
     exp = hmac.new(config.ADS_SIGN_SECRET.encode(), ts.encode() + b"." + eid.encode() + b"." + raw, hashlib.sha256).hexdigest()
     if not (ts and eid and fresh and hmac.compare_digest(sig, exp)):
+        log.warning("ads callback REJECTED: headers=%s fresh=%s sig_ok=%s", bool(ts and eid), fresh, hmac.compare_digest(sig, exp))
         return web.json_response({"ok": False}, status=401)
     try:
         d = json.loads(raw)
@@ -434,6 +435,7 @@ async def ads_callback(request):
     if not re.fullmatch(r"[\w.\-]{3,100}", rid):
         return web.json_response({"ok": False}, status=400)
     res = await db.ad_credit(rid, eid[:100], uid, st, config.ADS_REWARD, config.ADS_DAILY)   # DB error => 500 => Ads Galaxy retry karega
+    log.info("ads callback uid=%s status=%s result=%s", uid, st, res)
     return web.json_response({"ok": True, "result": res})
 
 
@@ -456,6 +458,7 @@ async def monetag_postback(request):
     if tg_id and tg_id != str(uid):
         return web.json_response({"ok": True, "result": "ignored"})
     res = await db.ad_credit(ymid, "mt", uid, "completed", config.MT_REWARD, config.ADS_DAILY)   # DB error => 500 => Monetag retry
+    log.info("monetag postback uid=%s result=%s", uid, res)
     return web.json_response({"ok": True, "result": res})
 
 
