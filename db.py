@@ -201,6 +201,7 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS ip TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS dev_bypass BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS fp_ok BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS notify BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS welcome_at TIMESTAMPTZ;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS notified BOOLEAN NOT NULL DEFAULT TRUE;
 ALTER TABLE tasks ALTER COLUMN notified SET DEFAULT FALSE;
 ALTER TABLE botworks ADD COLUMN IF NOT EXISTS notified BOOLEAN NOT NULL DEFAULT TRUE;
@@ -519,6 +520,25 @@ async def ads_today(uid):
 
 async def ad_prune():
     await pool.execute("DELETE FROM ad_views WHERE created_at < now() - interval '3 days' AND NOT claimed")
+
+
+async def welcome_batch(n=30):
+    """Welcome bonus: jis user ko abhi tak nahi mila (naye aur pehle se maujood sab) use ek baar WELCOME_COINS. Naye users pehle.
+    Har user ek hi baar (welcome_at NULL se set hota hai). Return: jinko abhi diya gaya unki id ki list."""
+    amt = config.WELCOME_COINS
+    if amt <= 0:
+        return []
+    rows = await pool.fetch(f"SELECT id FROM users WHERE welcome_at IS NULL AND NOT banned AND id NOT IN ({_EXCL}) "
+                            f"ORDER BY created_at DESC LIMIT {int(n)}")
+    out = []
+    for r in rows:
+        async with pool.acquire() as c, c.transaction():
+            got = await c.fetchval("UPDATE users SET welcome_at=now(), balance=balance+$1, total_earned=total_earned+$1 "
+                                   "WHERE id=$2 AND welcome_at IS NULL AND NOT banned RETURNING id", amt, r["id"])
+            if got:
+                await led(c, r["id"], "welcome", amt, "")
+                out.append(r["id"])
+    return out
 
 
 # ---------- leaderboard (monthly, IST 1 tareekh reset; column 'week' = mahine ki pehli tareekh) ----------

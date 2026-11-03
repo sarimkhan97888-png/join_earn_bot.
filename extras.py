@@ -206,17 +206,41 @@ _feed_q = None
 _feed_task = None
 
 
+_fb = {"bot": None}
+
+
+async def feed_bot():
+    """Alag 'feed' bot (env FEED_BOT_TOKEN). Token na ho ya galat ho to None (tab main bot se jaata hai)."""
+    if not config.FEED_BOT_TOKEN:
+        return None
+    if _fb["bot"] is None:
+        try:
+            b = Bot(config.FEED_BOT_TOKEN)
+            await b.initialize()
+            _fb["bot"] = b
+        except Exception:
+            log.warning("FEED_BOT_TOKEN galat lagta hai, feed main bot se jaayegi")
+            return None
+    return _fb["bot"]
+
+
+async def to_admin(txt, **kw):
+    """Admin ko khabar: pehle feed bot se, wo na chale (token nahi / admin ne us bot ko /start nahi kiya) to main bot se."""
+    fb, main = await feed_bot(), util.main_bot
+    for aid in config.ADMIN_IDS:
+        sent = bool(fb) and await util.notify(fb, aid, txt, **kw)
+        if not sent and main:
+            await util.notify(main, aid, txt, **kw)
+
+
 async def _feed_worker():
     while True:
         lines = [await _feed_q.get()]
         while not _feed_q.empty() and len(lines) < 12:
             lines.append(_feed_q.get_nowait())
-        bot = util.main_bot
-        if not bot:
+        if not (util.main_bot or config.FEED_BOT_TOKEN):
             continue
-        txt = "\n".join(lines)
-        for aid in config.ADMIN_IDS:
-            await util.notify(bot, aid, txt, disable_notification=True)
+        await to_admin("\n".join(lines), disable_notification=True)
         await asyncio.sleep(0.4)
 
 

@@ -582,6 +582,21 @@ async def job_leaderboard(ctx):
                                         f"{prize} coins Ad Balance me add ho gaye.")
 
 
+async def job_welcome(ctx):
+    """Welcome bonus (naye + purane users): ek-ek karke coins + DM. Chhote batch, taaki Telegram flood limit na lage."""
+    try:
+        got = await db.welcome_batch(25)
+    except Exception:
+        log.exception("welcome bonus failed")
+        return
+    for uid in got:
+        await util.notify(ctx.bot, uid, f"🎁 Welcome bonus! Tumhe {config.WELCOME_COINS} coins free mile hain. Tasks karo aur kamao 🚀",
+                          disable_notification=True)
+        await asyncio.sleep(0.05)
+    if got:
+        extras.feed(f"🎁 Welcome bonus diya: {len(got)} user")
+
+
 async def job_orders(ctx):
     """Purane unpaid Fam / Stars orders band karo."""
     await db.fam_expire_old()
@@ -785,6 +800,7 @@ def register(app):
     app.job_queue.run_repeating(job_release, interval=120, first=60)
     app.job_queue.run_repeating(job_recheck, interval=300, first=120)
     app.job_queue.run_repeating(job_leaderboard, interval=3600, first=180)
+    app.job_queue.run_repeating(job_welcome, interval=20, first=30)
     app.job_queue.run_repeating(botwork.job, interval=900, first=180)
     app.job_queue.run_repeating(job_orders, interval=120, first=90)
     app.job_queue.run_repeating(job_refs, interval=60, first=70)

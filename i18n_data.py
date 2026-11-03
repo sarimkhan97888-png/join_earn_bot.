@@ -308,3 +308,8 @@ _add({
     "Ad poori nahi dekhi, coins nahi mile.": ("विज्ञापन पूरा नहीं देखा, कॉइन्स नहीं मिले।", "Ad was not watched fully, no coins."),
     "Aaj ki ad limit poori ho gayi. Kal dobara aana.": ("आज की विज्ञापन सीमा पूरी हो गई। कल फिर आना।", "Today's ad limit is reached. Come back tomorrow."),
 })
+
+# ---------------- welcome bonus ----------------
+_add({
+    "🎁 Welcome bonus! Tumhe {} coins free mile hain. Tasks karo aur kamao 🚀": ("🎁 वेलकम बोनस! तुम्हें {} कॉइन्स फ्री मिले हैं। टास्क करो और कमाओ 🚀", "🎁 Welcome bonus! You got {} free coins. Do tasks and earn more 🚀"),
+})

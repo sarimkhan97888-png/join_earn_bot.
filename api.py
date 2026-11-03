@@ -125,7 +125,7 @@ _rl = {}
 _rl_gc = [0.0]
 # Device verify ke bina sirf ye endpoints chalte hain (baaki sab server par block)
 OPEN_PATHS = {"/api/me", "/api/lang", "/api/verify", "/api/support", "/api/support/send", "/api/support/photo", "/api/wallet",
-              "/api/order", "/api/order/active", "/api/ai", "/api/ai/send", "/api/tasks", "/api/news", "/api/streak/seen"}
+              "/api/order", "/api/order/active", "/api/ai", "/api/ai/send", "/api/tasks", "/api/news", "/api/streak/seen", "/api/clientlog"}
 _cd = {}
 _giftfail = {}
 
@@ -208,7 +208,7 @@ async def with_device(u, dev, fp):
 
 _fj = {}          # uid -> (member?, time)
 _fj_warn = [-1e9]
-FORCE_OPEN = {"/api/me", "/api/verify", "/api/lang", "/api/force/check", "/api/streak/seen"}
+FORCE_OPEN = {"/api/me", "/api/verify", "/api/lang", "/api/force/check", "/api/streak/seen", "/api/clientlog"}
 
 
 async def force_ok(bot, uid, fresh=False):
@@ -231,6 +231,47 @@ async def force_ok(bot, uid, fresh=False):
     return st
 
 
+_errseen = {}
+_ERR_QUIET = ("wait", "need_join", "need_verify")   # ye normal flow hain, error nahi
+
+
+def report_err(request, msg, kind="⚠️ User error", extra="", tg=None):
+    """User ko dikhne wala har error admin ko (dusre bot se): kaun, kis action me, kya msg. Same user+action+msg 30 sec me dobara
+    aaye to ek hi baar bhejta hai aur agli baar '(+N baar aur)' likhta hai (flood se bachne ke liye). Kabhi raise nahi karta."""
+    try:
+        u = tg or request.get("tg") or {}
+        uid = u.get("id") or 0
+        if uid in config.ADMIN_IDS:
+            return
+        key = (uid, request.path, str(msg)[:80])
+        t = time.monotonic()
+        s = _errseen.get(key)
+        if s and t - s[0] < 30:
+            s[1] += 1
+            return
+        more = f" (+{s[1]} baar aur)" if s and s[1] else ""
+        if len(_errseen) > 4000:
+            _errseen.clear()
+        _errseen[key] = [t, 0]
+        who = extras.uname({"id": uid, "username": u.get("username"), "first_name": u.get("first_name")})
+        extras.feed(f"{kind} {who}\n📍 <code>{html.escape(request.method + ' ' + request.path)}</code>\n"
+                    f"💬 {html.escape(str(msg)[:300])}{more}" + (f"\n🔎 {html.escape(str(extra)[:300])}" if extra else ""))
+    except Exception:
+        pass
+
+
+def _watch(request, resp, tg=None):
+    """Response me {"ok": false} ho to admin ko batao."""
+    try:
+        if resp.content_type != "application/json" or not resp.body:
+            return
+        d = json.loads(resp.body)
+        if isinstance(d, dict) and d.get("ok") is False and d.get("code") not in _ERR_QUIET:
+            report_err(request, d.get("msg") or d.get("code") or "?", extra=f"HTTP {resp.status}" if resp.status >= 400 else "", tg=tg)
+    except Exception:
+        pass
+
+
 @web.middleware
 async def auth_mw(request, handler):
     if not request.path.startswith("/api/"):
@@ -239,6 +280,7 @@ async def auth_mw(request, handler):
     if not user:
         return web.json_response({"ok": False, "msg": "Session invalid. Bot se app dobara kholo."}, status=401)
     if not rate_ok(user["id"]):
+        report_err(request, "Bahut tez! (rate limit, 429)", "⏱ Too fast", tg=user)
         return web.json_response({"ok": False, "msg": "Bahut tez! Thoda ruko."}, status=429)
     try:
         u = await db.ensure_user(types.SimpleNamespace(
@@ -258,17 +300,42 @@ async def auth_mw(request, handler):
         u["need_join"] = need_join
         request["u"] = u
         request["tg"] = user
-        return await handler(request)
+        resp = await handler(request)
+        _watch(request, resp)
+        return resp
     except web.HTTPException:
         raise
-    except Exception:
+    except Exception as e:
         log.exception("api error %s", request.path)
+        report_err(request, "Server error (exception)", "💥 Server error", extra=f"{type(e).__name__}: {e}", tg=user)
         return err("⚠️ Server error. Thodi der baad try karo.")
 
 
 def client_ip(request):
     xf = request.headers.get("X-Forwarded-For", "")
     return (xf.split(",")[0].strip() if xf else (request.remote or ""))[:64]
+
+
+_clog_n = {}
+
+
+@routes.post("/api/clientlog")
+async def api_clientlog(request):
+    """App (phone) ke andar ka JS error / network fail: admin ko batao. Har user ghante me max 20."""
+    uid = request["u"]["id"]
+    t = int(time.time() // 3600)
+    n = _clog_n.get(uid)
+    if not n or n[0] != t:
+        n = _clog_n[uid] = [t, 0]
+        if len(_clog_n) > 20000:
+            _clog_n.clear()
+    n[1] += 1
+    if n[1] > 20:
+        return ok()
+    d = await body(request)
+    k = {"js": "🐞 App JS error", "net": "📡 Network/Server fail"}.get(str(d.get("k")), "🐞 App error")
+    report_err(request, str(d.get("m") or "?")[:300], k, extra=f"{str(d.get('w') or '')[:120]} | {request.headers.get('User-Agent', '')[:90]}")
+    return ok()
 
 
 @routes.get("/api/news")
@@ -407,6 +474,9 @@ def _lb_rows(rows, uid):
     return out
 
 
+_cb_warn = [-1e9]
+
+
 @routes.post("/ads/callback")
 async def ads_callback(request):
     """Ads Galaxy server-to-server reward callback. Signature: HMAC-SHA256(secret, timestamp.event_id.rawBody)."""
@@ -422,6 +492,9 @@ async def ads_callback(request):
     exp = hmac.new(config.ADS_SIGN_SECRET.encode(), ts.encode() + b"." + eid.encode() + b"." + raw, hashlib.sha256).hexdigest()
     if not (ts and eid and fresh and hmac.compare_digest(sig, exp)):
         log.warning("ads callback REJECTED: headers=%s fresh=%s sig_ok=%s", bool(ts and eid), fresh, hmac.compare_digest(sig, exp))
+        if ts and eid and time.monotonic() - _cb_warn[0] > 600:   # asli Ads Galaxy callback jaisa dikha par reject: admin ko 10 min me ek baar batao
+            _cb_warn[0] = time.monotonic()
+            extras.feed(f"🚨 Ads Galaxy callback reject hua (signature ok={hmac.compare_digest(sig, exp)}, fresh={fresh}). Render me ADS_SIGN_SECRET check karo.")
         return web.json_response({"ok": False}, status=401)
     try:
         d = json.loads(raw)
@@ -1108,6 +1181,11 @@ async def api_support_send(request):
         name = f"@{tg['username']}" if tg.get("username") else (tg.get("first_name") or str(uid))
         kb = M([[B("💬 Open chat", web_app=WebAppInfo(url=f"{config.BASE_URL}/app?support={uid}"))]])
         for a in dict.fromkeys(list(config.ADMIN_IDS) + list(config.SUPPORT_IDS)):
+            fb = await extras.feed_bot() if a in config.ADMIN_IDS else None
+            if fb:   # admin ko feed bot se (usme web_app button main bot ke login ke bina chalta nahi, isliye sirf khabar)
+                if await util.notify(fb, a, f"🎧 <b>Naya support message</b> [{util.tag(util.real_level(request['u']))}]\nFrom: {html.escape(name)} (<code>{uid}</code>)\n"
+                                            f"Reply ke liye main bot me app kholo: Support."):
+                    continue
             try:
                 m = await request.app["bot"].send_message(
                     a, f"🎧 <b>Naya support message</b> [{util.tag(util.real_level(request['u']))}]\nFrom: {html.escape(name)} (<code>{uid}</code>)\n"
