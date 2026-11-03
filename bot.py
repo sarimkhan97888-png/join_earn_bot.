@@ -50,7 +50,7 @@ ADMIN_CMDS = [
     ("gpcode", "🎁 Gift code bhejo: /gpcode ID code"), ("assign", "🔗 Fam payment assign"),
     ("uassign", "🔗 USDT payment assign"), ("bwinfo", "🤖 Bot work submission status"),
     ("g", "📺 Ads: Ads Galaxy chalu"), ("m", "📺 Ads: Monetag chalu"), ("feedtest", "🔔 Feed/khabar test"),
-    ("promo", "📣 Channel promo abhi / on / off"), ("offer", "🎯 Offer: /offer 24h text"),
+    ("promo", "📣 Channel promo abhi / on / off"), ("offer", "🎯 Offer: /offer refer 10 500 24h x10"), ("ai", "🤖 /ai offer Hinglish me likho"),
     ("bypass", "✅ Device verify bypass"), ("unbypass", "↩️ Bypass hatao"), ("allowdev", "📱 Device allow"),
     ("resetdev", "♻️ Device reset"), ("ban", "🚫 User ban"), ("unban", "✅ User unban"),
     ("language", "🌐 Bhasha badlo"), ("start", "🏠 Start"),
@@ -366,21 +366,98 @@ async def promo_cmd(update: Update, ctx):
     await update.message.reply_text(f"✅ Channel me post gaya ({info})." if ok_ else f"❌ Post nahi gaya: {info}\nBot ko {config.FORCE_CHANNEL} me Admin banao (Post messages allowed).")
 
 
+async def _make_offer(ctx, kind, target, bonus, hours, win, wallet):
+    who = f"pehle {win} users" if win else "jo bhi"
+    txt = (f"{who} {target} dost refer karke complete karwayenge unko {bonus} coins bonus" if kind == "refer"
+           else f"{who} {target} coins kamayenge unko {bonus} coins bonus")
+    oid = await db.offer_new(kind, target, bonus, hours, win, wallet, txt)
+    ok_, info = await promo.post(ctx.bot, force_offer=True)
+    return (f"✅ Offer #{oid} chalu ({hours:.1f}h): {txt}.\nBonus apne aap {'Wallet' if wallet else 'Ad Balance'} me jayega, user ko DM aayega. " +
+            (f"Channel post ho gaya ({info})." if ok_ else f"❌ Channel post nahi gaya: {info}."))
+
+
+_AI_OFFER_SYS = ("You convert an admin's Hinglish request into ONE offer as strict JSON, nothing else. Keys: "
+                 "kind ('refer' = users must refer N friends, 'coin' = users must earn N coins), target (int N), bonus (int coins), "
+                 "winners (int, first-N users limit, 0 if none), wallet (true only if bonus must go to wallet, else false), "
+                 "until (end time 'YYYY-MM-DD HH:MM' in IST 24h; 'raat 12 baje' = next 00:00; if no time given use now+24h). "
+                 "If the request is not a refer/coin offer, output {\"error\":\"short reason\"}. Never invent numbers not in the request.")
+
+
+async def ai_cmd(update: Update, ctx):
+    """Admin: /ai <hinglish me offer batao> -> AI samajh kar offer bana deta hai. Jaise: /ai aaj raat 12 tak pehle 10 user jo 10 refer karein unko 500 bonus"""
+    if update.effective_user.id not in config.ADMIN_IDS or not update.message:
+        return
+    parts = (update.message.text or "").split(None, 1)
+    if len(parts) < 2:
+        return await update.message.reply_text("Aise likho:\n/ai ek offer banao aaj 12 baje raat tak, pehle 10 user jo 10 refer karenge unko 500 bonus")
+    import ai as _ai
+    if not _ai.enabled():
+        return await update.message.reply_text("❌ AI key set nahi. Seedha likho: /offer refer 10 500 24h x10")
+    ist = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+    now = datetime.datetime.now(ist)
+    try:
+        raw = await _ai.generate(_AI_OFFER_SYS, f"Now (IST): {now:%Y-%m-%d %H:%M}\nRequest: {parts[1][:500]}", 200, 0)
+        j = json.loads(re.search(r"\{.*\}", raw, re.S).group(0))
+        if j.get("error"):
+            return await update.message.reply_text(f"❌ Samajh nahi aaya: {j['error']}\nSeedha likho: /offer refer 10 500 24h x10")
+        kind = "refer" if j["kind"] == "refer" else "coin"
+        target, bonus, win = int(j["target"]), int(j["bonus"]), int(j.get("winners") or 0)
+        until = datetime.datetime.strptime(str(j["until"])[:16], "%Y-%m-%d %H:%M").replace(tzinfo=ist)
+        hours = (until - now).total_seconds() / 3600
+        if not (1 <= target <= 1000000 and 1 <= bonus <= 100000 and 0 <= win <= 100000 and 0.05 <= hours <= 24 * 14):
+            raise ValueError("range")
+    except Exception as e:
+        log.warning("ai offer parse failed: %s", e)
+        return await update.message.reply_text("❌ Offer samajh nahi aaya. Thoda saaf likho (kitne refer/coin, kitna bonus, kab tak) ya /offer refer 10 500 24h x10 use karo.")
+    await update.message.reply_text(
+        f"🤖 Samjha: {kind} {target} → {bonus} coins" + (f", pehle {win} log" if win else "") + f", {until:%d %b %H:%M} IST tak.")
+    await update.message.reply_text(await _make_offer(ctx, kind, target, bonus, hours, win, bool(j.get("wallet"))))
+
+
 async def offer_cmd(update: Update, ctx):
-    """Admin: /offer [24h|2d] text = offer announce (channel me turant + hourly posts me). /offer off = band. /offer = abhi ka offer.
-    Sirf batata hai: offer ke coins bot apne aap nahi deta, tum khud dena."""
+    """Admin:
+    /offer refer 10 500 [24h|2d] [x10] [wallet]  = 10 refer pure karne wale (pehle 10 log) ko 500 coins bonus, apne aap
+    /offer coin 500 500 [24h] [x10] [wallet]     = 500 coins kamane wale ko 500 bonus, apne aap
+    /offer text...                               = sirf announcement (coins khud dene hain)
+    /offer off [id]  = band.  /offer = chalte offers.  Bonus default Ad Balance me, 'wallet' likho to Wallet me."""
     if update.effective_user.id not in config.ADMIN_IDS or not update.message:
         return
     parts = (update.message.text or "").split(None, 1)
     arg = parts[1].strip() if len(parts) > 1 else ""
     if not arg:
+        offs = await db.offers_active()
         cur = await promo.active_offer()
+        lines = [f"#{o['id']} {o['kind']} {o['target']} → {o['bonus']} coins | winners {o['winners']}" +
+                 (f"/{o['max_winners']}" if o['max_winners'] else "") +
+                 f" | khatam {time.strftime('%d %b %H:%M', time.gmtime(o['ends_ts'] + 19800))} IST" for o in offs]
+        if cur and not offs:
+            lines.append(f"(sirf text) {cur[0]}")
         return await update.message.reply_text(
-            f"Abhi offer: {cur[0]}\nKhatam: {time.strftime('%d %b %H:%M', time.gmtime(cur[1] + 19800))} IST" if cur else
-            "Koi offer chalu nahi.\nUsage: /offer 24h Aaj pehle 10 users jo 10 refer karenge unko 500 coins bonus")
-    if arg.lower() == "off":
+            "\n".join(lines) if lines else
+            "Koi offer chalu nahi.\nUsage:\n/offer refer 10 500 24h x10\n/offer coin 500 500 24h x10\n(10 refer / 500 coin kamane par 500 bonus, pehle 10 log)\n/offer off")
+    low = arg.lower()
+    if low.split()[0] == "off":
+        rest = low.split()[1:]
+        n = await db.offer_close(int(rest[0]) if rest and rest[0].isdigit() else None)
         await promo.clear_offer()
-        return await update.message.reply_text("✅ Offer band.")
+        return await update.message.reply_text(f"✅ Offer band ({n}).")
+    m = re.match(r"^(refer|coin|coins)\s+(\d+)\s+(\d+)(.*)$", arg, re.I)
+    if m:
+        kind = "refer" if m.group(1).lower() == "refer" else "coin"
+        target, bonus, rest = int(m.group(2)), int(m.group(3)), m.group(4).lower()
+        hours, win, wallet = 24, 0, False
+        for t in rest.split():
+            h = re.fullmatch(r"(\d{1,3})([hd])", t)
+            w = re.fullmatch(r"x(\d{1,5})", t)
+            if h:
+                hours = min(int(h.group(1)) * (24 if h.group(2) == "d" else 1), 24 * 14)
+            elif w:
+                win = int(w.group(1))
+            elif t == "wallet":
+                wallet = True
+        if not (1 <= target <= 1000000 and 1 <= bonus <= 100000):
+            return await update.message.reply_text("❌ Target/bonus sahi likho. Jaise: /offer refer 10 500 24h x10")
+        return await update.message.reply_text(await _make_offer(ctx, kind, target, bonus, hours, win, wallet))
     hours = 24
     m = re.match(r"^(\d{1,3})([hd])\s+(.+)$", arg, re.S | re.I)
     if m:
@@ -389,8 +466,24 @@ async def offer_cmd(update: Update, ctx):
     await promo.set_offer(arg[:400], hours)
     ok_, info = await promo.post(ctx.bot, force_offer=True)
     await update.message.reply_text(
-        f"✅ Offer set ({hours}h). " + (f"Channel me post ho gaya ({info}). " if ok_ else f"❌ Channel post nahi gaya: {info}. ") +
-        "Ab har doosre hourly post me bhi aayega.\n⚠️ Offer ke coins bot apne aap nahi deta, jisne jeeta usko tum khud do.")
+        f"✅ Text offer set ({hours}h). " + (f"Channel me post ho gaya ({info}). " if ok_ else f"❌ Channel post nahi gaya: {info}. ") +
+        "⚠️ Ye sirf announcement hai, coins khud dene honge. Apne aap bonus ke liye: /offer refer 10 500 24h x10")
+
+
+async def job_offer_wins(ctx):
+    """Offer jeetne walon ko DM + admin feed."""
+    try:
+        rows = await db.offer_wins_pending(30)
+    except Exception:
+        log.exception("offer wins fetch failed")
+        return
+    for r in rows:
+        where = "Wallet" if r["to_wallet"] else "Ad Balance"
+        await util.notify(ctx.bot, r["user_id"], f"🎉 Offer jeet liya! Tumhe {r['bonus']} coins bonus mile ({where} me). Aise hi kamate raho 🚀")
+        await db.offer_win_mark(r["offer_id"], r["user_id"])
+        extras.feed(f"🎯 Offer #{r['offer_id']} winner <code>{r['user_id']}</code> +{r['bonus']} (winners {r['winners']}" +
+                    (f"/{r['max_winners']}" if r["max_winners"] else "") + ")")
+        await asyncio.sleep(0.05)
 
 
 async def job_promo(ctx):
@@ -860,6 +953,7 @@ def register(app):
     app.add_handler(CommandHandler("feedtest", feedtest_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("promo", promo_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("offer", offer_cmd, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("ai", ai_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("bc", bc_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(MessageHandler((filters.PHOTO | filters.Document.IMAGE) & filters.CaptionRegex(r"^/bc") & filters.ChatType.PRIVATE, bc_cmd))
     app.add_handler(CommandHandler("assign", assign_cmd, filters=filters.ChatType.PRIVATE))
@@ -878,6 +972,7 @@ def register(app):
     app.job_queue.run_repeating(job_recheck, interval=300, first=120)
     app.job_queue.run_repeating(job_leaderboard, interval=3600, first=180)
     app.job_queue.run_repeating(job_welcome, interval=20, first=30)
+    app.job_queue.run_repeating(job_offer_wins, interval=15, first=40)
     app.job_queue.run_repeating(job_promo, interval=300, first=150)
     app.job_queue.run_repeating(botwork.job, interval=900, first=180)
     app.job_queue.run_repeating(job_orders, interval=120, first=90)

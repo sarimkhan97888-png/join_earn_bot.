@@ -396,6 +396,10 @@ async def api_me(request):
     me["streak"] = await db.streak_info(u["id"])
     lk, _ = (0, 0) if u["id"] in config.ADMIN_IDS else await db.lock_info(u["id"])
     me["ads_today"] = await db.ads_today(u["id"]) if config.ads_any() else 0
+    try:
+        me["offers"] = await db.offers_for(u["id"])
+    except Exception:
+        me["offers"] = []
     me["locked"] = lk
     me["lock_next"] = await db.lock_next(u["id"]) if lk else 0
     me["news_unread"] = int(await db.news_unread(u["id"]) or 0)

@@ -1,5 +1,5 @@
 """Force-join channel me har ~1 ghante AI se naya promotion / offer post (har baar alag topic + alag style).
-Offer admin /offer se deta hai: bot sirf announce karta hai, offer ke coins admin khud deta hai (bot automatic nahi deta)."""
+Offer admin /offer se deta hai: refer/coin offers ka bonus db.offer_track se apne aap milta hai."""
 import html
 import json
 import logging
@@ -81,7 +81,17 @@ async def _meta(k, default=""):
 
 
 async def active_offer():
-    """(text, until_epoch) ya None."""
+    """(text, until_epoch) ya None. Pehle /offer refer|coin wale (db), phir sirf-text offer."""
+    try:
+        offs = await db.offers_active()
+    except Exception:
+        offs = []
+    if offs:
+        o = offs[-1]
+        t = o["text"] or (f"{o['target']} {o['kind']} par {o['bonus']} coins bonus")
+        if o["max_winners"]:
+            t += f" (sirf {o['max_winners'] - o['winners']} jagah baaki)"
+        return t, float(o["ends_ts"])
     t = await _meta("offer_text")
     try:
         until = float(await _meta("offer_until", "0"))

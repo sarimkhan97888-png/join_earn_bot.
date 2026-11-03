@@ -203,6 +203,19 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS dev_bypass BOOLEAN NOT NULL DEFAULT F
 ALTER TABLE users ADD COLUMN IF NOT EXISTS fp_ok BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS notify BOOLEAN NOT NULL DEFAULT TRUE;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS welcome_at TIMESTAMPTZ;
+CREATE TABLE IF NOT EXISTS offers(
+  id SERIAL PRIMARY KEY, kind TEXT NOT NULL, target INT NOT NULL DEFAULT 0, bonus INT NOT NULL DEFAULT 0, text TEXT,
+  to_wallet BOOLEAN NOT NULL DEFAULT FALSE, max_winners INT NOT NULL DEFAULT 0, winners INT NOT NULL DEFAULT 0,
+  starts_at TIMESTAMPTZ NOT NULL DEFAULT now(), ends_at TIMESTAMPTZ NOT NULL, active BOOLEAN NOT NULL DEFAULT TRUE
+);
+CREATE TABLE IF NOT EXISTS offer_prog(
+  offer_id INT NOT NULL, user_id BIGINT NOT NULL, earned BIGINT NOT NULL DEFAULT 0, refs INT NOT NULL DEFAULT 0,
+  PRIMARY KEY(offer_id, user_id)
+);
+CREATE TABLE IF NOT EXISTS offer_wins(
+  offer_id INT NOT NULL, user_id BIGINT NOT NULL, bonus INT NOT NULL, at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  notified BOOLEAN NOT NULL DEFAULT FALSE, PRIMARY KEY(offer_id, user_id)
+);
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS notified BOOLEAN NOT NULL DEFAULT TRUE;
 ALTER TABLE tasks ALTER COLUMN notified SET DEFAULT FALSE;
 ALTER TABLE botworks ADD COLUMN IF NOT EXISTS notified BOOLEAN NOT NULL DEFAULT TRUE;
@@ -557,6 +570,89 @@ async def lb_add(c, uid, earned=0, refs=0):
     await c.execute(
         f"""INSERT INTO lb_week(week,user_id,earned,refs) VALUES({WEEK_SQL},$1,$2,$3)
             ON CONFLICT(week,user_id) DO UPDATE SET earned=lb_week.earned+$2, refs=lb_week.refs+$3""", uid, earned, refs)
+    await offer_track(c, uid, earned, refs)   # chalte offers me progress (leaderboard jaisi hi ginti)
+
+
+# ---------- offers: /offer refer|coin <target> <bonus> ----------
+async def offer_new(kind, target, bonus, hours, max_winners=0, to_wallet=False, text=None):
+    return await pool.fetchval(
+        "INSERT INTO offers(kind,target,bonus,text,to_wallet,max_winners,ends_at) "
+        "VALUES($1,$2,$3,$4,$5,$6, now() + $7::float8 * interval '1 hour') RETURNING id",
+        kind, target, bonus, text, to_wallet, max_winners, float(hours))
+
+
+async def offers_active():
+    """Chalte offers (khatam nahi hue, winner slots baaki)."""
+    return await pool.fetch(
+        "SELECT *, EXTRACT(EPOCH FROM ends_at)::float8 AS ends_ts FROM offers WHERE active AND ends_at > now() "
+        "AND (max_winners=0 OR winners<max_winners) ORDER BY id")
+
+
+async def offer_close(oid=None):
+    if oid is None:
+        return len(await pool.fetch("UPDATE offers SET active=FALSE WHERE active RETURNING id"))
+    return len(await pool.fetch("UPDATE offers SET active=FALSE WHERE active AND id=$1 RETURNING id", oid))
+
+
+async def offer_track(c, uid, earned, refs):
+    """Earning ke transaction ke andar: har chalte offer me is user ka progress; target pura to bonus (ek baar, winners limit ke andar)."""
+    if uid in config.ADMIN_IDS or uid in config.SUPPORT_IDS or not (earned or refs):
+        return
+    offs = await c.fetch("SELECT id, kind, target, bonus, to_wallet, max_winners FROM offers WHERE active AND kind IN ('coin','refer') "
+                         "AND starts_at <= now() AND ends_at > now() AND (max_winners=0 OR winners<max_winners)")
+    for o in offs:
+        de = earned if o["kind"] == "coin" else 0
+        dr = refs if o["kind"] == "refer" else 0
+        if not (de or dr):
+            continue
+        p = await c.fetchrow(
+            "INSERT INTO offer_prog(offer_id,user_id,earned,refs) VALUES($1,$2,$3,$4) "
+            "ON CONFLICT(offer_id,user_id) DO UPDATE SET earned=offer_prog.earned+$3, refs=offer_prog.refs+$4 RETURNING earned, refs",
+            o["id"], uid, de, dr)
+        if (p["earned"] if o["kind"] == "coin" else p["refs"]) >= o["target"]:
+            await _offer_win(c, o, uid)
+
+
+async def _offer_win(c, o, uid):
+    w = await c.fetchval("INSERT INTO offer_wins(offer_id,user_id,bonus) VALUES($1,$2,$3) ON CONFLICT DO NOTHING RETURNING offer_id",
+                         o["id"], uid, o["bonus"])
+    if w is None:
+        return    # is user ko pehle mil chuka
+    if o["max_winners"]:
+        got = await c.fetchval("UPDATE offers SET winners=winners+1 WHERE id=$1 AND winners<$2 RETURNING winners", o["id"], o["max_winners"])
+        if got is None:   # slots bhar gaye (race)
+            await c.execute("DELETE FROM offer_wins WHERE offer_id=$1 AND user_id=$2", o["id"], uid)
+            return
+    else:
+        await c.execute("UPDATE offers SET winners=winners+1 WHERE id=$1", o["id"])
+    col = "balance" if o["to_wallet"] else "ad_balance"
+    await c.execute(f"UPDATE users SET {col}={col}+$1, total_earned=total_earned+$1 WHERE id=$2", o["bonus"], uid)
+    await led(c, uid, "offer", o["bonus"], f"offer{o['id']}")
+
+
+async def offer_wins_pending(n=30):
+    return await pool.fetch(
+        "SELECT w.offer_id, w.user_id, w.bonus, o.to_wallet, o.winners, o.max_winners FROM offer_wins w JOIN offers o ON o.id=w.offer_id "
+        f"WHERE NOT w.notified ORDER BY w.at LIMIT {int(n)}")
+
+
+async def offer_win_mark(oid, uid):
+    await pool.execute("UPDATE offer_wins SET notified=TRUE WHERE offer_id=$1 AND user_id=$2", oid, uid)
+
+
+async def offers_for(uid):
+    """App ke Home card ke liye: chalte coin/refer offers + is user ka progress (jeete hue 1 din tak dikhte hain)."""
+    rows = await pool.fetch(
+        """SELECT o.id, o.kind, o.target, o.bonus, o.max_winners, o.winners, EXTRACT(EPOCH FROM (o.ends_at - now())) AS left_s,
+                  COALESCE(p.earned,0) AS earned, COALESCE(p.refs,0) AS refs, (w.user_id IS NOT NULL) AS won
+           FROM offers o LEFT JOIN offer_prog p ON p.offer_id=o.id AND p.user_id=$1
+                         LEFT JOIN offer_wins w ON w.offer_id=o.id AND w.user_id=$1
+           WHERE o.kind IN ('coin','refer') AND ((o.active AND o.ends_at > now() AND (o.max_winners=0 OR o.winners<o.max_winners))
+                 OR (w.user_id IS NOT NULL AND w.at > now() - interval '1 day'))
+           ORDER BY o.id DESC LIMIT 3""", uid)
+    return [{"id": r["id"], "kind": r["kind"], "target": r["target"], "bonus": r["bonus"], "won": bool(r["won"]),
+             "left_s": max(0, int(r["left_s"] or 0)), "progress": int(r["earned"] if r["kind"] == "coin" else r["refs"]),
+             "slots": (r["max_winners"] - r["winners"]) if r["max_winners"] else None} for r in rows]
 
 
 async def lb_secs_left():
