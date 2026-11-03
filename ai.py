@@ -98,10 +98,8 @@ async def user_context(u):
     return "USER ACCOUNT SUMMARY (this user only):\n" + "\n".join(lines)
 
 
-async def ask(history, text, u):
-    """history = [(role, text)...] purana (role: user/assistant). Return AI ka jawab (str). Error par Exception."""
-    system = system_prompt() + "\n\n" + await user_context(u)
-    msgs = [{"role": r, "content": t} for r, t in history] + [{"role": "user", "content": text}]
+async def _call(system, msgs, max_tokens=400, temperature=0.3, limit=1500):
+    """AI provider ko ek call (keys rotate, limit/quota par agli key). Return text. Error par Exception."""
     keys = config.AI_KEYS or [config.AI_API_KEY]
     n = len(keys)
     start = next(_rr)
@@ -112,11 +110,11 @@ async def ask(history, text, u):
     for key in order:
         if config.AI_PROVIDER == "openai":
             url = config.AI_BASE_URL + "/chat/completions"
-            body = {"model": config.AI_MODEL, "max_tokens": 400, "temperature": 0.3, "messages": [{"role": "system", "content": system}] + msgs}
+            body = {"model": config.AI_MODEL, "max_tokens": max_tokens, "temperature": temperature, "messages": [{"role": "system", "content": system}] + msgs}
             headers = {"Authorization": "Bearer " + key}
         else:
             url = config.AI_BASE_URL + "/v1/messages"
-            body = {"model": config.AI_MODEL, "max_tokens": 400, "temperature": 0.3, "system": system, "messages": msgs}
+            body = {"model": config.AI_MODEL, "max_tokens": max_tokens, "temperature": temperature, "system": system, "messages": msgs}
             headers = {"x-api-key": key, "anthropic-version": "2023-06-01"}
         try:
             async with _session().post(url, json=body, headers=headers) as r:
@@ -142,4 +140,16 @@ async def ask(history, text, u):
         out = "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text").strip()
     if not out:
         raise RuntimeError("ai empty")
-    return out[:1500]
+    return out[:limit]
+
+
+async def ask(history, text, u):
+    """history = [(role, text)...] purana (role: user/assistant). Return AI ka jawab (str). Error par Exception."""
+    system = system_prompt() + "\n\n" + await user_context(u)
+    msgs = [{"role": r, "content": t} for r, t in history] + [{"role": "user", "content": text}]
+    return await _call(system, msgs)
+
+
+async def generate(system, prompt, max_tokens=500, temperature=0.95):
+    """Ek baar ka text banwao (channel promo post waghera). Error par Exception."""
+    return await _call(system, [{"role": "user", "content": prompt}], max_tokens, temperature, 2000)

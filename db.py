@@ -87,6 +87,7 @@ CREATE TABLE IF NOT EXISTS ai_msgs(
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS ai_msgs_user ON ai_msgs(user_id, id);
+ALTER TABLE ai_msgs ADD COLUMN IF NOT EXISTS cleared BOOLEAN NOT NULL DEFAULT FALSE;
 CREATE TABLE IF NOT EXISTS support_msgs(
   id BIGSERIAL PRIMARY KEY, user_id BIGINT NOT NULL, sender TEXT NOT NULL, text TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -511,6 +512,12 @@ async def ad_check(uid, request_id):
     if r["claimed"]:
         return "ok", int(r["reward"])
     return ("bad" if r["status"] != "completed" else "limit"), 0
+
+
+async def ad_recent(uid, minutes=10):
+    """Pichhle N minute me is user ke kitne ad credit hue (shak pakadne ke liye)."""
+    return int(await pool.fetchval(
+        "SELECT count(*) FROM ad_views WHERE user_id=$1 AND claimed AND claimed_at > now() - make_interval(mins => $2)", uid, minutes) or 0)
 
 
 async def ads_today(uid):
@@ -1911,7 +1918,7 @@ async def adm_cancel(kind, tid):
 # ---------- AI support chat (sirf AI_KEEP_MINUTES tak) ----------
 async def ai_recent(uid, n=40):
     rows = await pool.fetch(
-        """SELECT role, text, created_at FROM ai_msgs WHERE user_id=$1 AND created_at > now() - make_interval(mins => $2)
+        """SELECT role, text, created_at FROM ai_msgs WHERE user_id=$1 AND NOT cleared AND created_at > now() - make_interval(mins => $2)
            ORDER BY id DESC LIMIT $3""", uid, config.AI_KEEP_MINUTES, n)
     return list(reversed(rows))
 
@@ -1926,6 +1933,11 @@ async def ai_add_pair(uid, q, a):
     async with pool.acquire() as c, c.transaction():
         await c.execute("INSERT INTO ai_msgs(user_id,role,text) VALUES($1,'user',$2)", uid, q)
         await c.execute("INSERT INTO ai_msgs(user_id,role,text) VALUES($1,'assistant',$2)", uid, a)
+
+
+async def ai_clear(uid):
+    """User ne AI chat band ki: poori chat ka text turant delete. Rows sirf ginti (hourly limit) ke liye bachti hain, text khali."""
+    await pool.execute("UPDATE ai_msgs SET text='', cleared=TRUE WHERE user_id=$1 AND NOT cleared", uid)
 
 
 async def ai_cleanup():

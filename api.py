@@ -125,7 +125,7 @@ _rl = {}
 _rl_gc = [0.0]
 # Device verify ke bina sirf ye endpoints chalte hain (baaki sab server par block)
 OPEN_PATHS = {"/api/me", "/api/lang", "/api/verify", "/api/support", "/api/support/send", "/api/support/photo", "/api/wallet",
-              "/api/order", "/api/order/active", "/api/ai", "/api/ai/send", "/api/tasks", "/api/news", "/api/streak/seen", "/api/clientlog"}
+              "/api/order", "/api/order/active", "/api/ai", "/api/ai/send", "/api/ai/clear", "/api/tasks", "/api/news", "/api/streak/seen", "/api/clientlog"}
 _cd = {}
 _giftfail = {}
 
@@ -477,6 +477,35 @@ def _lb_rows(rows, uid):
 _cb_warn = [-1e9]
 
 
+async def _ad_feed(uid, res, src, reward):
+    """Ad ka nateeja admin ko: kisne pura dekha, limit par fir bhi dekha, shak wale (device match / 10 min me bahut ads). Kabhi raise nahi."""
+    try:
+        if res == "dup":
+            return
+        u = await db.get_user(uid)
+        who = extras.uname(u) if u else f"<code>{uid}</code>"
+        n = await db.ads_today(uid)
+        flags = []
+        if u and u["suspect"]:
+            flags.append("device kisi aur account se match")
+        if res == "ok":
+            r10 = await db.ad_recent(uid, 10)
+            if r10 >= 4:
+                flags.append(f"10 min me {r10} ads")
+            line = f"📺 Ad pura dekha ✅ {who} +{reward} ({n}/{config.ADS_DAILY}) [{src}]"
+        elif res == "limit":
+            line = f"🚫 Daily limit ke baad bhi ad {who} ({n}/{config.ADS_DAILY}) [{src}]"
+            flags.append("limit cross karne ki koshish")
+        elif res == "skip":
+            line = f"🚫 Ad: banned/unknown user <code>{uid}</code> [{src}]"
+            flags.append("banned ya account nahi mila")
+        else:
+            line = f"⚠️ Ad adhura/fail {who} [{src}]"
+        extras.feed(line + (f"\n⚠️ <b>Shak:</b> {', '.join(flags)}" if flags else ""))
+    except Exception:
+        pass
+
+
 @routes.post("/ads/callback")
 async def ads_callback(request):
     """Ads Galaxy server-to-server reward callback. Signature: HMAC-SHA256(secret, timestamp.event_id.rawBody)."""
@@ -509,6 +538,7 @@ async def ads_callback(request):
         return web.json_response({"ok": False}, status=400)
     res = await db.ad_credit(rid, eid[:100], uid, st, config.ADS_REWARD, config.ADS_DAILY)   # DB error => 500 => Ads Galaxy retry karega
     log.info("ads callback uid=%s status=%s result=%s", uid, st, res)
+    await _ad_feed(uid, res, "Galaxy", config.ADS_REWARD)
     return web.json_response({"ok": True, "result": res})
 
 
@@ -532,6 +562,7 @@ async def monetag_postback(request):
         return web.json_response({"ok": True, "result": "ignored"})
     res = await db.ad_credit(ymid, "mt", uid, "completed", config.MT_REWARD, config.ADS_DAILY)   # DB error => 500 => Monetag retry
     log.info("monetag postback uid=%s result=%s", uid, res)
+    await _ad_feed(uid, res, "Monetag", config.MT_REWARD)
     return web.json_response({"ok": True, "result": res})
 
 
@@ -684,9 +715,16 @@ async def api_ai(request):
     return ok(msgs=_ai_json(await db.ai_recent(request["u"]["id"])))
 
 
+@routes.post("/api/ai/clear")
+async def api_ai_clear(request):
+    """User ne AI chat band ki: poori chat delete."""
+    await db.ai_clear(request["u"]["id"])
+    return ok()
+
+
 @routes.post("/api/ai/send")
 async def api_ai_send(request):
-    """AI support: sawal bhejo, jawab lo. Chat 1 ghante baad delete hoti hai."""
+    """AI support: sawal bhejo, jawab lo. Chat band karte hi delete (/api/ai/clear), na ho to 1 ghante baad."""
     u = request["u"]
     uid = u["id"]
     if not ai.enabled():
@@ -702,6 +740,9 @@ async def api_ai_send(request):
     if await db.ai_count_user(uid) >= config.AI_HOURLY_LIMIT:
         return err("Abhi ke liye limit poori ho gayi. Thodi der baad poochho ya Customer service me likho.")
     _ai_busy.add(uid)
+    who = extras.uname(u)
+    if uid not in config.ADMIN_IDS:
+        extras.feed(f"🤖 <b>AI sawal</b> {who}\n❓ {html.escape(text[:400])}")
     try:
         hist = [(r["role"], r["text"]) for r in await db.ai_recent(uid, 10)]
         while hist and hist[0][0] != "user":
@@ -712,6 +753,8 @@ async def api_ai_send(request):
             logging.getLogger("api").warning("ai ask failed: %s", e)
             return err("AI abhi busy hai. Thodi der baad try karo ya Customer service me likho.")
         await db.ai_add_pair(uid, text, ans)
+        if uid not in config.ADMIN_IDS:
+            extras.feed(f"🤖 <b>AI jawab</b> → {who}\n💬 {html.escape(str(ans)[:500])}")
         return ok(answer=ans)
     finally:
         _ai_busy.discard(uid)

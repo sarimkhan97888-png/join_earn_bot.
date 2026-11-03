@@ -191,6 +191,8 @@ MT_REWARD = int(os.getenv("MONETAG_REWARD", str(ADS_REWARD)))
 
 
 FEED_BOT_TOKEN = os.getenv("FEED_BOT_TOKEN", "")   # alag bot: admin ko live feed + errors + support alert. Khali = main bot se. Admin ko is bot ko ek baar /start karna hai
+PROMO_ON = _int("PROMO_ON", 1) == 1                   # force-join channel me AI promo posts (admin /promo off se bhi band hota hai)
+PROMO_EVERY_MIN = _int("PROMO_EVERY_MIN", 60)       # kitne minute me ek post
 WELCOME_COINS = int(os.getenv("WELCOME_COINS", "200"))   # naye (aur pehle ke) har user ko ek baar free coins. 0 = band
 
 ADS_SRC = os.getenv("ADS_SRC", "gx")   # kaunsa provider chale: gx = Ads Galaxy, mt = Monetag. Admin /g aur /m se badalta hai

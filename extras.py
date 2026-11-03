@@ -230,7 +230,9 @@ async def to_admin(txt, **kw):
     for aid in config.ADMIN_IDS:
         sent = bool(fb) and await util.notify(fb, aid, txt, **kw)
         if not sent and main:
-            await util.notify(main, aid, txt, **kw)
+            sent = await util.notify(main, aid, txt, **kw)
+        if not sent:
+            log.warning("admin %s ko khabar nahi gayi (feed bot token=%s). Bot ko /start kiya? /feedtest chalao", aid, bool(config.FEED_BOT_TOKEN))
 
 
 async def _feed_worker():

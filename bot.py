@@ -19,6 +19,7 @@ import extras
 import i18n
 import payments
 import payouts
+import promo
 import util
 
 log = logging.getLogger("bot")
@@ -48,7 +49,8 @@ ADMIN_CMDS = [
     ("send", "✉️ User ko msg: /send USER_ID msg"), ("txid", "💵 USDT TxID bhejo: /txid ID TxHash"),
     ("gpcode", "🎁 Gift code bhejo: /gpcode ID code"), ("assign", "🔗 Fam payment assign"),
     ("uassign", "🔗 USDT payment assign"), ("bwinfo", "🤖 Bot work submission status"),
-    ("g", "📺 Ads: Ads Galaxy chalu"), ("m", "📺 Ads: Monetag chalu"),
+    ("g", "📺 Ads: Ads Galaxy chalu"), ("m", "📺 Ads: Monetag chalu"), ("feedtest", "🔔 Feed/khabar test"),
+    ("promo", "📣 Channel promo abhi / on / off"), ("offer", "🎯 Offer: /offer 24h text"),
     ("bypass", "✅ Device verify bypass"), ("unbypass", "↩️ Bypass hatao"), ("allowdev", "📱 Device allow"),
     ("resetdev", "♻️ Device reset"), ("ban", "🚫 User ban"), ("unban", "✅ User unban"),
     ("language", "🌐 Bhasha badlo"), ("start", "🏠 Start"),
@@ -327,6 +329,78 @@ async def uassign_cmd(update: Update, ctx):
         return await update.message.reply_text("Usage: /uassign <tx_hash> <user_id>")
     _, msg = await adminops.usdt_assign(util.main_bot or ctx.bot, a[0].lower(), int(a[1]))
     await update.message.reply_text(msg)
+
+
+async def feedtest_cmd(update: Update, ctx):
+    """Admin: feed (khabar) kyu nahi aa rahi? Seedha test + wajah bataata hai."""
+    uid = update.effective_user.id
+    if uid not in config.ADMIN_IDS or not update.message:
+        return
+    L = [f"ADMIN_FEED = {config.ADMIN_FEED} ({'on' if config.ADMIN_FEED else 'BAND: Render me ADMIN_FEED=1 karo'})",
+         f"ADMIN_IDS me tum ho: {'haan' if uid in config.ADMIN_IDS else 'nahi'}"]
+    if not config.FEED_BOT_TOKEN:
+        L.append("FEED_BOT_TOKEN: khali, feed main bot par aayegi")
+    else:
+        fb = await extras.feed_bot()
+        if not fb:
+            L.append("❌ FEED_BOT_TOKEN galat hai (bot start nahi hua). BotFather se token dobara copy karke Render me daalo.")
+        else:
+            try:
+                await fb.send_message(uid, "✅ Feed bot test: ye message aa gaya to feed isi bot par aayegi.")
+                L.append(f"✅ Feed bot @{fb.username} se message gaya")
+            except Exception as e:
+                L.append(f"❌ @{fb.username} se message nahi gaya: {type(e).__name__}: {e}\n→ Us bot ko Telegram me kholo aur /start dabao.")
+    extras.feed("🔔 Feed test (queue se, 1-2 sec me aana chahiye)")
+    await update.message.reply_text("\n".join(L))
+
+
+async def promo_cmd(update: Update, ctx):
+    """Admin: /promo = abhi ek post, /promo off = band, /promo on = chalu."""
+    if update.effective_user.id not in config.ADMIN_IDS or not update.message:
+        return
+    a = (ctx.args[0].lower() if ctx.args else "")
+    if a in ("on", "off"):
+        await db.usdt_meta_set("promo_on", "1" if a == "on" else "0")
+        return await update.message.reply_text(f"✅ Channel promo {'chalu' if a == 'on' else 'band'}.")
+    ok_, info = await promo.post(ctx.bot)
+    await update.message.reply_text(f"✅ Channel me post gaya ({info})." if ok_ else f"❌ Post nahi gaya: {info}\nBot ko {config.FORCE_CHANNEL} me Admin banao (Post messages allowed).")
+
+
+async def offer_cmd(update: Update, ctx):
+    """Admin: /offer [24h|2d] text = offer announce (channel me turant + hourly posts me). /offer off = band. /offer = abhi ka offer.
+    Sirf batata hai: offer ke coins bot apne aap nahi deta, tum khud dena."""
+    if update.effective_user.id not in config.ADMIN_IDS or not update.message:
+        return
+    parts = (update.message.text or "").split(None, 1)
+    arg = parts[1].strip() if len(parts) > 1 else ""
+    if not arg:
+        cur = await promo.active_offer()
+        return await update.message.reply_text(
+            f"Abhi offer: {cur[0]}\nKhatam: {time.strftime('%d %b %H:%M', time.gmtime(cur[1] + 19800))} IST" if cur else
+            "Koi offer chalu nahi.\nUsage: /offer 24h Aaj pehle 10 users jo 10 refer karenge unko 500 coins bonus")
+    if arg.lower() == "off":
+        await promo.clear_offer()
+        return await update.message.reply_text("✅ Offer band.")
+    hours = 24
+    m = re.match(r"^(\d{1,3})([hd])\s+(.+)$", arg, re.S | re.I)
+    if m:
+        hours = min(int(m.group(1)) * (24 if m.group(2).lower() == "d" else 1), 24 * 14)
+        arg = m.group(3).strip()
+    await promo.set_offer(arg[:400], hours)
+    ok_, info = await promo.post(ctx.bot, force_offer=True)
+    await update.message.reply_text(
+        f"✅ Offer set ({hours}h). " + (f"Channel me post ho gaya ({info}). " if ok_ else f"❌ Channel post nahi gaya: {info}. ") +
+        "Ab har doosre hourly post me bhi aayega.\n⚠️ Offer ke coins bot apne aap nahi deta, jisne jeeta usko tum khud do.")
+
+
+async def job_promo(ctx):
+    try:
+        r = await promo.tick(ctx.bot)
+    except Exception:
+        log.exception("promo tick failed")
+        return
+    if r and not r[0]:
+        extras.feed(f"⚠️ Channel promo post nahi gaya: {html.escape(r[1][:200])}")
 
 
 async def ads_src_cmd(update: Update, ctx):
@@ -783,6 +857,9 @@ def register(app):
     app.add_handler(CallbackQueryHandler(on_usdt_ignore, pattern=r"^uign:"))
     app.add_handler(CommandHandler("uassign", uassign_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler(["g", "m"], ads_src_cmd, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("feedtest", feedtest_cmd, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("promo", promo_cmd, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("offer", offer_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("bc", bc_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(MessageHandler((filters.PHOTO | filters.Document.IMAGE) & filters.CaptionRegex(r"^/bc") & filters.ChatType.PRIVATE, bc_cmd))
     app.add_handler(CommandHandler("assign", assign_cmd, filters=filters.ChatType.PRIVATE))
@@ -801,6 +878,7 @@ def register(app):
     app.job_queue.run_repeating(job_recheck, interval=300, first=120)
     app.job_queue.run_repeating(job_leaderboard, interval=3600, first=180)
     app.job_queue.run_repeating(job_welcome, interval=20, first=30)
+    app.job_queue.run_repeating(job_promo, interval=300, first=150)
     app.job_queue.run_repeating(botwork.job, interval=900, first=180)
     app.job_queue.run_repeating(job_orders, interval=120, first=90)
     app.job_queue.run_repeating(job_refs, interval=60, first=70)
