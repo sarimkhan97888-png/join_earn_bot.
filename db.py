@@ -755,6 +755,18 @@ async def usdt_meta_set(k, v):
     await pool.execute("INSERT INTO fam_meta(k,v) VALUES($1,$2) ON CONFLICT(k) DO UPDATE SET v=EXCLUDED.v", k, str(v))
 
 
+async def ads_src_load():
+    """Admin ne /g ya /m se jo ad provider chuna tha (gx = Ads Galaxy, mt = Monetag), restart par wapas load."""
+    v = await pool.fetchval("SELECT v FROM fam_meta WHERE k='ads_src'")
+    if v in ("gx", "mt"):
+        config.ADS_SRC = v
+
+
+async def ads_src_set(v):
+    await usdt_meta_set("ads_src", v)
+    config.ADS_SRC = v
+
+
 async def usdt_process(tx, idx, amount, sender, block):
     """Wallet me aaya ek USDT transfer. Order match -> credit. Return None (pehle dekha) ya dict(done|None, unmatched)."""
     async with pool.acquire() as c, c.transaction():
@@ -877,17 +889,20 @@ async def cancel_pending(uid):
 
 
 async def fam_new_order(order_id, uid, kind, coins, base_paise, level=None, mode=None):
-    """Sequential amount: base+1, base+2 ... (sabse chhota khali paisa), max 99 ek saath. Return pay_paise ya None (busy).
+    """Pehla order exact base amount (jaise 20.00), phir base+1, base+2 ... paise (sabse chhota khali), max 100 ek saath.
+    Max (Rs 2000, Fam limit) par ulta: 2000.00, 1999.99, 1999.98 ... Return pay_paise ya None (busy).
     Cancel/expire hue order ka slot TTL+grace tak band rehta hai (der se aaya payment kisi aur ke order se match na ho)."""
     await fam_expire_old()
     await cancel_pending(uid)
     hold = config.FAM_TTL + config.FAM_GRACE + 60
+    top = config.MAX_DEPOSIT_COINS     # coins = paise; Fam 2000 se zyada receive nahi karta
+    cands = [base_paise - i for i in range(100)] if base_paise >= top else [base_paise + i for i in range(100) if base_paise + i <= top]
     for _ in range(4):
         used = {r["pay_paise"] for r in await pool.fetch(
             "SELECT pay_paise FROM orders WHERE method='fam' AND pay_paise BETWEEN $1 AND $2 "
             "AND (status='pending' OR (status='failed' AND created_at > now() - make_interval(secs => $3)))",
-            base_paise + 1, base_paise + 99, hold)}
-        free = [x for x in range(base_paise + 1, base_paise + 100) if x not in used]
+            min(cands), max(cands), hold)}
+        free = [x for x in cands if x not in used]
         if not free:
             return None
         pay = free[0]
@@ -919,7 +934,7 @@ async def fam_process(p, ts):
                AND to_timestamp($2) <= created_at + make_interval(secs => $3) FOR UPDATE""",
             p["paise"], float(ts), config.FAM_TTL + config.FAM_GRACE)
         if order:
-            done = await _complete_c(c, order["order_id"], p["paise"] / 100)
+            done = await _complete_c(c, order["order_id"], None)   # order exact pay_paise se match hua, amount check ki zarurat nahi (max par amount base se kam bhi ho sakta hai)
             if done:
                 await c.execute("UPDATE fam_payments SET status='credited', order_id=$2, user_id=$3 WHERE txn_id=$1",
                                 p["txn"], order["order_id"], done["user_id"])

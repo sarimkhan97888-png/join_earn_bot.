@@ -20,6 +20,7 @@ for _n in ("httpx", "httpcore"):
 
 async def main():
     await db.init()
+    await db.ads_src_load()
     try:
         import time
         t = time.monotonic()

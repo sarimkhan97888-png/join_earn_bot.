@@ -106,7 +106,7 @@ def cfg(request):
     return {"coin_per_inr": config.COIN_PER_INR, "join_reward": config.JOIN_REWARD, "ad_cost": config.AD_COST, "task_fee": config.TASK_FEE, "max_members": (None if request["u"]["id"] in config.ADMIN_IDS else util.plan(request["u"])["members"]),
             "min_task_members": config.MIN_TASK_MEMBERS, "max_task_members": config.MAX_TASK_MEMBERS,
             "min_deposit": config.MIN_DEPOSIT_COINS, "min_withdraw": config.MIN_WITHDRAW_COINS, "gplay_step": config.GPLAY_STEP_INR * config.COIN_PER_INR, "amazon_step": config.AMAZON_STEP_INR * config.COIN_PER_INR,
-            "hold_hours": config.HOLD_HOURS, "ads_on": config.ads_any(), "ads_gx": config.ADS_ON, "ads_id": config.ADS_MINI_APP_ID, "ads_mt": config.MT_ON, "mt_zone": config.MT_ZONE, "ads_reward": (config.ADS_REWARD if config.ADS_ON else config.MT_REWARD), "ads_daily": config.ADS_DAILY, "plans": plans_json(),
+            "hold_hours": config.HOLD_HOURS, "ads_on": config.ads_any(), "ads_gx": config.gx_active(), "ads_id": config.ADS_MINI_APP_ID, "ads_mt": config.mt_active(), "mt_zone": config.MT_ZONE, "ads_reward": config.ads_reward(), "ads_daily": config.ADS_DAILY, "plans": plans_json(),
             "bw_min_reward": config.BW_MIN_REWARD,
             "bw_min_users": config.BW_MIN_USERS, "bw_max_users": config.BW_MAX_USERS,
             "support_url": config.SUPPORT_URL, "bot_username": request.app["bot"].username,

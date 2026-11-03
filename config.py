@@ -190,5 +190,21 @@ MT_ON = bool(MT_SECRET)
 MT_REWARD = int(os.getenv("MONETAG_REWARD", str(ADS_REWARD)))
 
 
+ADS_SRC = os.getenv("ADS_SRC", "gx")   # kaunsa provider chale: gx = Ads Galaxy, mt = Monetag. Admin /g aur /m se badalta hai
+
+
 def ads_any():
+    """Kisi bhi provider ka callback/postback accept karna (switch ke baad pending callbacks bhi credit hon)."""
     return ADS_ON or MT_ON
+
+
+def gx_active():
+    return ADS_ON and (ADS_SRC == "gx" or not MT_ON)
+
+
+def mt_active():
+    return MT_ON and (ADS_SRC == "mt" or not ADS_ON)
+
+
+def ads_reward():
+    return ADS_REWARD if gx_active() else MT_REWARD

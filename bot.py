@@ -48,6 +48,7 @@ ADMIN_CMDS = [
     ("send", "✉️ User ko msg: /send USER_ID msg"), ("txid", "💵 USDT TxID bhejo: /txid ID TxHash"),
     ("gpcode", "🎁 Gift code bhejo: /gpcode ID code"), ("assign", "🔗 Fam payment assign"),
     ("uassign", "🔗 USDT payment assign"), ("bwinfo", "🤖 Bot work submission status"),
+    ("g", "📺 Ads: Ads Galaxy chalu"), ("m", "📺 Ads: Monetag chalu"),
     ("bypass", "✅ Device verify bypass"), ("unbypass", "↩️ Bypass hatao"), ("allowdev", "📱 Device allow"),
     ("resetdev", "♻️ Device reset"), ("ban", "🚫 User ban"), ("unban", "✅ User unban"),
     ("language", "🌐 Bhasha badlo"), ("start", "🏠 Start"),
@@ -326,6 +327,19 @@ async def uassign_cmd(update: Update, ctx):
         return await update.message.reply_text("Usage: /uassign <tx_hash> <user_id>")
     _, msg = await adminops.usdt_assign(util.main_bot or ctx.bot, a[0].lower(), int(a[1]))
     await update.message.reply_text(msg)
+
+
+async def ads_src_cmd(update: Update, ctx):
+    """Admin: /g = Ads Galaxy, /m = Monetag. Users ko agli baar app kholne par ye provider dikhega (pending callbacks dono ke credit hote rehte hain)."""
+    if update.effective_user.id not in config.ADMIN_IDS or not update.message:
+        return
+    cmd = (update.message.text or "").split()[0].lstrip("/").split("@")[0].lower()
+    want = "mt" if cmd == "m" else "gx"
+    name = "Monetag" if want == "mt" else "Ads Galaxy"
+    if (want == "mt" and not config.MT_ON) or (want == "gx" and not config.ADS_ON):
+        return await update.message.reply_text(f"❌ {name} Render env me set nahi hai ({'MONETAG_SECRET' if want == 'mt' else 'ADS_SIGN_SECRET'} khali).")
+    await db.ads_src_set(want)
+    await update.message.reply_text(f"✅ Ads ab {name} se chalenge. Users ke liye agli baar app kholne par lagu.")
 
 
 async def bc_cmd(update: Update, ctx):
@@ -753,6 +767,7 @@ def register(app):
     app.add_handler(CallbackQueryHandler(on_ignore, pattern=r"^ign:"))
     app.add_handler(CallbackQueryHandler(on_usdt_ignore, pattern=r"^uign:"))
     app.add_handler(CommandHandler("uassign", uassign_cmd, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler(["g", "m"], ads_src_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("bc", bc_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(MessageHandler((filters.PHOTO | filters.Document.IMAGE) & filters.CaptionRegex(r"^/bc") & filters.ChatType.PRIVATE, bc_cmd))
     app.add_handler(CommandHandler("assign", assign_cmd, filters=filters.ChatType.PRIVATE))
