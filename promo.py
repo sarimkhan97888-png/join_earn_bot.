@@ -1,5 +1,6 @@
 """Force-join channel me har ~1 ghante AI se naya promotion / offer post (har baar alag topic + alag style).
 Offer admin /offer se deta hai: refer/coin offers ka bonus db.offer_track se apne aap milta hai."""
+import asyncio
 import html
 import json
 import logging
@@ -10,6 +11,7 @@ import time
 from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as M
 
 import ai
+import banner
 import config
 import db
 
@@ -91,13 +93,13 @@ async def active_offer():
         t = o["text"] or (f"{o['target']} {o['kind']} par {o['bonus']} coins bonus")
         if o["max_winners"]:
             t += f" (sirf {o['max_winners'] - o['winners']} jagah baaki)"
-        return t, float(o["ends_ts"])
+        return t, float(o["ends_ts"]), f"+{o['bonus']} COINS"
     t = await _meta("offer_text")
     try:
         until = float(await _meta("offer_until", "0"))
     except ValueError:
         until = 0
-    return (t, until) if t and until > time.time() else None
+    return (t, until, None) if t and until > time.time() else None
 
 
 async def set_offer(text, hours):
@@ -110,44 +112,63 @@ async def clear_offer():
     await db.usdt_meta_set("offer_until", 0)
 
 
-def _clean(txt):
-    """AI ka text safe HTML banao: markdown hatao, pehli line bold. Galat/ jhoote daave dikhe to ValueError."""
-    t = re.sub(r"[*_`#]+", "", txt).strip()
-    t = re.sub(r"^(post|text|output)\s*:\s*", "", t, flags=re.I).strip()
-    if not t or len(t) > 700 or _BAD.search(t):
-        raise ValueError("ai post rejected")
-    head, _, rest = t.partition("\n")
-    return f"<b>{html.escape(head.strip())}</b>" + (f"\n{html.escape(rest.strip())}" if rest.strip() else "")
+BADGES = {"welcome": "{wb} COINS FREE", "refer": "+{ref} COINS / REFER", "tasks": "JOIN & EARN", "ads": "+{ar} COINS / AD", "withdraw": "MIN {mw} COINS",
+          "streak": "DAILY STREAK", "lb": "MONTHLY PRIZES", "addtask": "REAL MEMBERS", "premium": "FROM Rs {p1}", "rules": "FAIR PLAY",
+          "howto": "3 SIMPLE STEPS", "deposit": "UPI DEPOSIT"}
+FRAMES = ["◇💎◇", "✨", "🚀", "🔥", "💫"]
+DOTS = ["💸", "🎯", "👥", "🎁", "💰", "📣"]
+
+
+def _txt(s, n=90):
+    """AI ke ek field ko saaf plain text: markdown/emoji-html hatao, jhoote daave/links dikhe to ValueError."""
+    t = re.sub(r"[*_`#<>]+", "", str(s or "")).strip()
+    t = re.sub(r"\s+", " ", t)
+    if len(t) > n or _BAD.search(t):
+        raise ValueError("ai field rejected")
+    return t
+
+
+def _split(tmpl):
+    """Template ("<b>head</b>\nbody") -> (headline, [points])."""
+    head, _, rest = tmpl.partition("\n")
+    head = re.sub(r"<[^>]+>", "", head).strip()
+    pts = [s.strip() for s in re.split(r"(?<=[.!?])\s+|\n", re.sub(r"<[^>]+>", "", rest)) if s.strip()][:3]
+    return head, pts
 
 
 def _fallback(idx, offer):
     f = _facts()
     f["ss2"] = 2 * f["ss"]
     if offer:
-        return f"🎯 <b>Aaj ka offer</b>\n{html.escape(offer)}\n\n{f['name']} bot kholo aur hissa lo."
-    return ANGLES[idx % len(ANGLES)][2].format(**f)
+        return {"headline": "🎯 Aaj ka offer", "badge": None, "points": [offer], "cta": f"{f['name']} kholo, hissa lo"}
+    k, _, tmpl = ANGLES[idx % len(ANGLES)]
+    head, pts = _split(tmpl.format(**f))
+    return {"headline": head, "badge": BADGES[k].format(**f), "points": pts, "cta": f"Abhi {f['name']} kholo"}
 
 
-async def compose(idx, offer=None):
-    """Return (html_text, 'ai' | 'fallback')."""
+async def compose(idx, offer=None, badge=None):
+    """Return (dict(headline, badge, points[], cta), 'ai' | 'fallback')."""
     if not ai.enabled():
-        return _fallback(idx, offer), "fallback"
+        r = _fallback(idx, offer)
+        if offer:
+            r["badge"] = badge
+        return r, "fallback"
     f = _facts()
-    angle = ANGLES[idx % len(ANGLES)][1].format(**f)
+    k, angle_t, _ = ANGLES[idx % len(ANGLES)]
+    angle = angle_t.format(**f)
     try:
         hist = json.loads(await _meta("promo_hist", "[]"))
     except ValueError:
         hist = []
     style = random.choice(STYLES)
-    system = (f"You write ONE short Telegram channel post in Hinglish (Hindi written in Roman letters mixed with simple English) for \"{f['name']}\", "
-              "an earn-by-tasks Telegram Mini App.\nRules:\n"
-              "- Use ONLY the facts given. Never invent numbers, payouts, testimonials, names, deadlines or income claims.\n"
+    system = (f"You write ONE Telegram channel post in Hinglish (Hindi in Roman letters + simple English) for \"{f['name']}\", "
+              "an earn-by-tasks Telegram Mini App. Output STRICT JSON only, no other text:\n"
+              '{"headline": "max 5 words, catchy", "badge": "max 3 words, only if a number/fact is given, else empty", '
+              '"points": ["3 short lines, each max 12 words"], "cta": "max 6 words call to action"}\n'
+              "Rules:\n- Use ONLY the facts given. Never invent numbers, payouts, testimonials, names, deadlines or income claims.\n"
               "- Never promise guaranteed/easy/daily income. Never say best, no.1, 100%, pakka, lakhs, crores.\n"
-              "- 30 to 70 words. Line 1 is a catchy headline (max 8 words, with 1 emoji). Then the body. Max 5 emojis in total.\n"
-              "- Plain text only: no markdown, no asterisks, no hashtags, no links, no @mentions, no OTP/password/PIN talk.\n"
-              "- End with a short call to action to open the bot (a button is attached automatically; never write a link).\n"
-              "- Be fresh and not boring: do NOT reuse the headline, wording or emoji pattern of the previous posts listed.\n"
-              "Output ONLY the post text.")
+              "- Plain text in every field: no emoji, no markdown, no hashtags, no links, no @mentions, no OTP/password/PIN talk.\n"
+              "- Be fresh and not boring: do NOT reuse the headline or wording of the previous posts listed.")
     prompt = f"FACTS:\n{angle}\n\nSTYLE: {style}\n"
     if offer:
         prompt = (f"MAIN POINT (must be in the post, keep every number and condition exactly as written, add nothing new): {offer}\n\n"
@@ -155,32 +176,76 @@ async def compose(idx, offer=None):
     if hist:
         prompt += "\nPREVIOUS POSTS (do not repeat their wording):\n" + "\n".join("- " + h for h in hist[-6:])
     try:
-        out = _clean(await ai.generate(system, prompt))
+        raw = await ai.generate(system, prompt, max_tokens=300)
+        j = json.loads(re.search(r"\{.*\}", raw, re.S).group(0))
+        pts = [_txt(x, 110) for x in (j.get("points") or [])][:3]
+        out = {"headline": _txt(j.get("headline"), 50), "badge": _txt(j.get("badge"), 22) or None, "points": [x for x in pts if x],
+               "cta": _txt(j.get("cta"), 45)}
+        if not out["headline"] or not out["points"]:
+            raise ValueError("empty")
         if offer:   # offer ke saare numbers post me hone chahiye, nahi to AI ne badal diya: template
-            plain = re.sub(r"<[^>]+>", "", out)
-            if any(n not in plain for n in re.findall(r"\d+", offer)):
+            allt = " ".join([out["headline"], out["badge"] or "", out["cta"]] + out["points"])
+            if any(n not in allt for n in re.findall(r"\d+", offer)):
                 raise ValueError("offer numbers changed")
+            out["badge"] = badge or out["badge"]
+        elif not out["badge"]:
+            out["badge"] = BADGES[k].format(**f)
         return out, "ai"
     except Exception as e:
         log.warning("promo ai failed, template: %s", e)
-        return _fallback(idx, offer), "fallback"
+        r = _fallback(idx, offer)
+        if offer:
+            r["badge"] = badge
+        return r, "fallback"
+
+
+def caption(c, bot_username, until=None, idx=0):
+    """Post ka sundar HTML caption. 5 alag design (har post alag), sab me headline, bot, points, CTA."""
+    e = html.escape
+    H = e(re.sub(r"\s+", " ", c["headline"]).upper())
+    h = e(re.sub(r"\s+", " ", c["headline"]))
+    cta = e((c["cta"] or "Abhi shuru karo").upper())
+    pts = [e(x) for x in c["points"]]
+    bot = "@" + e(bot_username)
+    dots = DOTS[idx % len(DOTS):] + DOTS[:idx % len(DOTS)]
+    off = f"⏳ <b>Offer {time.strftime('%d %b', time.gmtime(until + 19800))} tak</b>" if until else ""
+    st = idx % 5
+    if st == 0:     # box header + bullets (user ka sample jaisa)
+        L = [f"<b>◇💎◇ {H} ◇💎◇</b>", "", f"🤖 <b>BOT:</b> {bot}", ""] + [f"{dots[i % 6]} {x}" for i, x in enumerate(pts)]
+        L += ([""] + [off] if off else []) + ["", "━━━━━━━━━━━━━━", f"🔥 <b>{cta}</b> 🔥"]
+    elif st == 1:   # sparkle + tick
+        L = [f"✨ <b>{h}</b> ✨", ""] + [f"✅ {x}" for x in pts] + ([""] + [off] if off else []) + ["", f"👉 <b>{cta}</b>", f"🤖 {bot}"]
+    elif st == 2:   # bars header
+        L = ["▰▰▰▰▰▰▰▰▰▰▰▰", f"<b>{H}</b>", "▰▰▰▰▰▰▰▰▰▰▰▰", ""] + [f"▸ {x}" for x in pts] + ([""] + [off] if off else []) + ["", f"🚀 <b>{cta}</b>", f"🤖 {bot}"]
+    elif st == 3:   # alert style
+        L = [f"🚨 <b>{H}</b> 🚨", ""] + [f"{dots[i % 6]} <i>{x}</i>" for i, x in enumerate(pts)] + ([""] + [off] if off else []) + ["", "┈┈┈┈┈┈┈┈┈┈┈┈┈┈", f"💥 <b>{cta}</b> 💥", bot]
+    else:           # quote style
+        L = [f"💬 <b>{h}</b>", ""] + [f"┃ {x}" for x in pts] + ([""] + [off] if off else []) + ["", f"🎯 <b>{cta}</b> → {bot}"]
+    return "\n".join(L)[:1024]
 
 
 async def post(bot, force_offer=False):
-    """Channel me ek post. Return (ok, info)."""
+    """Channel me ek post (banner image + caption). Return (ok, info)."""
     if not config.FORCE_CHANNEL:
         return False, "FORCE_CHANNEL set nahi"
     n = int(await _meta("promo_n", "0") or 0)
     off = await active_offer()
     use_offer = bool(off) and (force_offer or n % 2 == 1)   # offer chalu ho to har doosra post offer ka
-    text, src = await compose(n, off[0] if use_offer else None)
-    if use_offer:
-        text += f"\n\n⏳ Offer {time.strftime('%d %b', time.gmtime(off[1] + 19800))} tak"
+    c, src = await compose(n, off[0] if use_offer else None, off[2] if use_offer else None)
+    cap = caption(c, bot.username, off[1] if use_offer else None, n)
     await db.usdt_meta_set("promo_n", n + 1)
     await db.usdt_meta_set("promo_last", time.time())
+    kb = M([[B(f"🚀 Open {config.APP_NAME}", url=f"https://t.me/{bot.username}")]])
+    img = None
     try:
-        await bot.send_message(config.FORCE_CHANNEL, text, parse_mode="HTML",
-                               reply_markup=M([[B(f"🚀 Open {config.APP_NAME}", url=f"https://t.me/{bot.username}")]]))
+        img = await asyncio.to_thread(banner.render, c["headline"], c["badge"], c["points"][0] if use_offer else None, bot.username, config.APP_NAME, n)
+    except Exception as e:
+        log.warning("banner render failed, text post: %s", e)
+    try:
+        if img:
+            await bot.send_photo(config.FORCE_CHANNEL, img, caption=cap, parse_mode="HTML", reply_markup=kb)
+        else:
+            await bot.send_message(config.FORCE_CHANNEL, cap, parse_mode="HTML", reply_markup=kb)
     except Exception as e:
         log.warning("promo post failed: %s", e)
         return False, f"{type(e).__name__}: {e}"
@@ -188,9 +253,9 @@ async def post(bot, force_offer=False):
         hist = json.loads(await _meta("promo_hist", "[]"))
     except ValueError:
         hist = []
-    hist.append(re.sub(r"<[^>]+>", "", text).replace("\n", " ")[:110])
+    hist.append((c["headline"] + " | " + " ".join(c["points"]))[:110])
     await db.usdt_meta_set("promo_hist", json.dumps(hist[-6:]))
-    return True, f"{src}{' + offer' if use_offer else ''}"
+    return True, f"{src}{' + offer' if use_offer else ''}{'' if img else ' (text)'}"
 
 
 async def tick(bot):
