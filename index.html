@@ -1468,8 +1468,9 @@ async function admUser(id) {
 async function admWd() {
   const j = await api('/api/admin/withdraws'); if (!j.ok) return esc(j.msg);
   admTabs({ wd_pending: j.pending.length });
-  const row = (w, btns) => `<div class="card"><div class="row"><div class="sp"><b>#${w.id} · ${inrf(w.inr)}</b><span class="sub">User ${w.user} · L${w.level} · ${when(w.at)}<br>${w.amz ? '🛒 ' : ''}${w.usdt ? w.usdt + ' USDT (BEP20) → ' : ''}${esc(w.upi)}</span></div><span class="chip ${w.status === 'paid' ? 'g' : w.status === 'pending' || w.status === 'sending' ? 'y' : 'r'}">${esc(w.status)}</span></div>${btns}</div>`;
-  const b = w => w.usdt ? `<div class="adm-r"><button class="btn ok" data-act="admtx" data-id="${w.id}">🔗 TxID bhejo</button><button class="btn bad" data-act="admwd" data-id="${w.id}" data-a="no">❌ Reject</button></div>` : w.gp ? `<div class="adm-r"><button class="btn ok" data-act="admgp" data-id="${w.id}"${w.amz ? ' data-amz="1"' : ''}>${w.amz ? '🛒' : '🎁'} Code bhejo</button><button class="btn bad" data-act="admwd" data-id="${w.id}" data-a="no">❌ Reject</button></div>` : `<div class="adm-r"><button class="btn ok" data-act="admwd" data-id="${w.id}" data-a="ok">✅ Approve</button><button class="btn bad" data-act="admwd" data-id="${w.id}" data-a="no">❌ Reject</button></div>`;
+  AD.wdmap = {}; [...j.pending, ...j.recent].forEach(w => { AD.wdmap[w.id] = w; });
+  const row = (w, btns) => `<div class="card"><div class="row"${w.status === 'pending' ? ` data-act="admwdopen" data-id="${w.id}" style="cursor:pointer"` : ''}><div class="sp"><b>#${w.id} · ${inrf(w.inr)}</b><span class="sub">User ${w.user} · L${w.level} · ${when(w.at)}<br>${w.amz ? '🛒 ' : ''}${w.usdt ? w.usdt + ' USDT (BEP20) → ' : ''}${esc(w.upi)}</span></div><span class="chip ${w.status === 'paid' ? 'g' : w.status === 'pending' || w.status === 'sending' ? 'y' : 'r'}">${esc(w.status)}</span></div>${btns}</div>`;
+  const b = w => `<div class="adm-r"><button class="btn ok" data-act="admwdopen" data-id="${w.id}">👆 Kholo / Process</button></div>`;
   const f = w => `<div class="adm-r"><button class="btn ok" data-act="admwd" data-id="${w.id}" data-a="paid">✅ Mark paid</button><button class="btn bad" data-act="admwd" data-id="${w.id}" data-a="refund">↩️ Refund</button></div>`;
   return `<h3 style="margin:4px 0 8px">Pending (${j.pending.length})</h3>${j.pending.length ? j.pending.map(w => row(w, b(w))).join('') : '<div class="card empty"><i>✅</i>Koi pending withdraw nahi</div>'}
   <h3 style="margin:14px 0 8px">Recent</h3>${j.recent.map(w => row(w, w.status === 'sending' ? f(w) : '')).join('') || '<div class="card empty">Kuch nahi</div>'}`;
@@ -1507,8 +1508,31 @@ const ADMA = {
   async admbalgo(d) {
     const j = await act('/api/admin/user/act', { id: +d.id, act: d.a, amount: +$('#admAmt').value }); if (j.ok) { closeSheet(); await popup('ok', 'Done', j.msg); admRender(); }
   },
+  admwdopen(d) {
+    const w = (AD.wdmap || {})[d.id]; if (!w) return;
+    const kind = w.usdt ? 'USDT (BEP20)' : w.amz ? 'Amazon voucher' : w.gp ? 'Google Play code' : 'UPI';
+    const sendable = !w.gp;   // gp/amazon me paise nahi bhejte, code bhejte hain
+    const what = w.usdt ? `${w.usdt} USDT` : inrf(w.inr);
+    openSheet(`<h3>Withdraw #${w.id}</h3>
+    <div class="card" style="text-align:center"><div class="sub">Bhejna hai</div><div class="big" style="margin:4px 0">${what}</div>${w.usdt ? `<div class="sub">(${inrf(w.inr)})</div>` : ''}
+    <div class="sub" style="margin-top:8px">${kind} →</div><div style="font-weight:700;word-break:break-all;margin:2px 0 8px"><code>${esc(w.upi)}</code></div>
+    <div class="sub">User ${w.user} · L${w.level} · ${when(w.at)}</div></div>
+    ${sendable ? `<label style="display:flex;gap:10px;align-items:flex-start;margin:12px 2px"><input type="checkbox" id="admSent" style="width:22px;height:22px;flex:none"><span>Maine <b>${what}</b> upar wale ${w.usdt ? 'wallet' : 'UPI'} par <b>bhej diya</b></span></label>` : `<p style="margin:10px 2px">Google Play / Amazon code user ko bhejna hai.</p>`}
+    <button class="btn ok" id="admConfirm" data-act="admwdgo" data-id="${w.id}"${sendable ? ' disabled' : ''}>✅ Confirm${w.usdt ? ' · TxID daalo' : w.gp ? ' · Code daalo' : ''}</button>
+    <button class="btn bad" data-act="admwdno" data-id="${w.id}" style="margin-top:8px">❌ Reject (refund)</button>
+    <button class="btn ghost" data-act="admwdclose" style="margin-top:8px">Cancel</button>`);
+    const cb = $('#admSent'); if (cb) cb.onchange = () => { $('#admConfirm').disabled = !cb.checked; };
+  },
+  admwdclose: () => closeSheet(),
+  async admwdgo(d) {
+    const w = (AD.wdmap || {})[d.id]; if (!w) return;
+    if (w.usdt) return ADMA.admtx(d);
+    if (w.gp) return ADMA.admgp({ id: d.id, amz: w.amz ? '1' : '' });
+    closeSheet(); await ADMA.admwd({ id: d.id, a: 'ok', skip: 1 });
+  },
+  async admwdno(d) { closeSheet(); await ADMA.admwd({ id: d.id, a: 'no' }); },
   async admwd(d) {
-    if (!await askYes({ ok: 'Approve? (pehle UPI par paise bhej do)', no: 'Reject karke coins refund karna hai?', paid: 'Paid mark karna hai?', refund: 'User ko refund karna hai?' }[d.a])) return;
+    if (!d.skip && !await askYes({ ok: 'Approve? (pehle UPI par paise bhej do)', no: 'Reject karke coins refund karna hai?', paid: 'Paid mark karna hai?', refund: 'User ko refund karna hai?' }[d.a])) return;
     const j = await act('/api/admin/withdraw/act', { id: +d.id, act: d.a }); if (j.ok) { await popup('ok', 'Done', j.msg); admRender(); } else admRender();
   },
   admgp: d => openSheet(`<h3>${d.amz ? '🛒 Amazon voucher code' : '🎁 Google Play code'}</h3><p>Withdraw #${d.id}. Code user ko bot me jayega aur uske Wallet me save hoga.</p><label>Code</label><input id="admCode" autocomplete="off" autocapitalize="characters" placeholder="XXXX-XXXX-XXXX-XXXX"><button class="btn" data-act="admgpgo" data-id="${d.id}">Code bhejo</button>`),

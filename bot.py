@@ -15,6 +15,7 @@ import adminops
 import botwork
 import config
 import db
+import engage
 import extras
 import i18n
 import payments
@@ -50,7 +51,7 @@ ADMIN_CMDS = [
     ("gpcode", "🎁 Gift code bhejo: /gpcode ID code"), ("assign", "🔗 Fam payment assign"),
     ("uassign", "🔗 USDT payment assign"), ("bwinfo", "🤖 Bot work submission status"),
     ("g", "📺 Ads: Ads Galaxy chalu"), ("m", "📺 Ads: Monetag chalu"), ("feedtest", "🔔 Feed/khabar test"),
-    ("promo", "📣 Channel promo abhi / on / off"), ("offer", "🎯 Offer: /offer refer 10 500 24h x10"), ("ai", "🤖 /ai offer Hinglish me likho"),
+    ("promo", "📣 Channel promo abhi / on / off"), ("offer", "🎯 Offer: /offer refer 10 500 24h x10"), ("ai", "🤖 /ai offer Hinglish me likho"), ("owner", "🔒 Task owner check on/off"),
     ("bypass", "✅ Device verify bypass"), ("unbypass", "↩️ Bypass hatao"), ("allowdev", "📱 Device allow"),
     ("resetdev", "♻️ Device reset"), ("ban", "🚫 User ban"), ("unban", "✅ User unban"),
     ("language", "🌐 Bhasha badlo"), ("start", "🏠 Start"),
@@ -484,6 +485,20 @@ async def job_offer_wins(ctx):
         extras.feed(f"🎯 Offer #{r['offer_id']} winner <code>{r['user_id']}</code> +{r['bonus']} (winners {r['winners']}" +
                     (f"/{r['max_winners']}" if r["max_winners"] else "") + ")")
         await asyncio.sleep(0.05)
+
+
+async def owner_cmd(update: Update, ctx):
+    """Admin: /owner on = task banane wale ko us channel/group ka admin ya owner hona zaroori. /owner off = sirf bot admin ho to chalega."""
+    if update.effective_user.id not in config.ADMIN_IDS or not update.message:
+        return
+    parts = (update.message.text or "").split()
+    arg = parts[1].lower() if len(parts) > 1 else ""
+    if arg in ("on", "off"):
+        await db.usdt_meta_set("owner_check", "1" if arg == "on" else "0")
+    on = await db.usdt_meta_get("owner_check") != "0"
+    await update.message.reply_text(
+        ("🔒 Owner check ON: task banane wala us channel/group ka admin ya owner hona chahiye." if on else
+         "🔓 Owner check OFF: sirf bot ka admin hona kaafi hai (banane wala admin ho ya na ho).") + "\n/owner on  ya  /owner off")
 
 
 async def job_promo(ctx):
@@ -954,6 +969,7 @@ def register(app):
     app.add_handler(CommandHandler("promo", promo_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("offer", offer_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("ai", ai_cmd, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("owner", owner_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("bc", bc_cmd, filters=filters.ChatType.PRIVATE))
     app.add_handler(MessageHandler((filters.PHOTO | filters.Document.IMAGE) & filters.CaptionRegex(r"^/bc") & filters.ChatType.PRIVATE, bc_cmd))
     app.add_handler(CommandHandler("assign", assign_cmd, filters=filters.ChatType.PRIVATE))
@@ -972,6 +988,11 @@ def register(app):
     app.job_queue.run_repeating(job_recheck, interval=300, first=120)
     app.job_queue.run_repeating(job_leaderboard, interval=3600, first=180)
     app.job_queue.run_repeating(job_welcome, interval=20, first=30)
+    app.job_queue.run_repeating(engage.job_offer_summary, interval=120, first=60)
+    app.job_queue.run_repeating(engage.job_streak_remind, interval=300, first=90)
+    app.job_queue.run_repeating(engage.job_reengage, interval=300, first=120)
+    app.job_queue.run_repeating(engage.job_daily_summary, interval=600, first=150)
+    app.job_queue.run_repeating(engage.job_weekly_shoutout, interval=900, first=180)
     app.job_queue.run_repeating(job_offer_wins, interval=15, first=40)
     app.job_queue.run_repeating(job_promo, interval=300, first=150)
     app.job_queue.run_repeating(botwork.job, interval=900, first=180)

@@ -392,6 +392,10 @@ async def api_me(request):
         db.left_chats(u["id"]), db.recent_ledger(u["id"]), db.created_today(u["id"]), db.wd_today(u["id"]), db.prem_queued(u["id"]))
     blocked = [{"chat_id": r["chat_id"], "title": r["title"], "link": r["link"]} for r in left]
     hist = [{"kind": r["kind"], "amount": r["amount"], "at": iso(r["created_at"])} for r in led]
+    try:
+        await db.touch(u["id"])
+    except Exception:
+        pass
     me = pub(u)
     me["streak"] = await db.streak_info(u["id"])
     lk, _ = (0, 0) if u["id"] in config.ADMIN_IDS else await db.lock_info(u["id"])
@@ -1393,12 +1397,13 @@ async def resolve_chat(request, raw, make_link):
         me = None
     if not me or me.status != "administrator":
         return f"❌ Bot is chat me Admin nahi hai. @{bot.username} ko Admin banao (Invite Users permission ke saath)."
-    try:
-        um = await bot.get_chat_member(chat.id, uid)
-    except TelegramError:
-        um = None
-    if not um or um.status not in ("creator", "administrator"):
-        return "❌ Tum is chat ke admin/owner nahi ho."
+    if await db.usdt_meta_get("owner_check") != "0":   # /owner off => sirf bot admin hona kaafi
+        try:
+            um = await bot.get_chat_member(chat.id, uid)
+        except TelegramError:
+            um = None
+        if not um or um.status not in ("creator", "administrator"):
+            return "❌ Tum is chat ke admin/owner nahi ho."
     if chat.username:
         link = f"https://t.me/{chat.username}"
     elif make_link:

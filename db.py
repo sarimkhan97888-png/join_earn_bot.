@@ -208,6 +208,10 @@ CREATE TABLE IF NOT EXISTS offers(
   to_wallet BOOLEAN NOT NULL DEFAULT FALSE, max_winners INT NOT NULL DEFAULT 0, winners INT NOT NULL DEFAULT 0,
   starts_at TIMESTAMPTZ NOT NULL DEFAULT now(), ends_at TIMESTAMPTZ NOT NULL, active BOOLEAN NOT NULL DEFAULT TRUE
 );
+ALTER TABLE offers ADD COLUMN IF NOT EXISTS summarized BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE users ADD COLUMN IF NOT EXISTS streak_rem DATE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS reeng_at TIMESTAMPTZ;
 CREATE TABLE IF NOT EXISTS offer_prog(
   offer_id INT NOT NULL, user_id BIGINT NOT NULL, earned BIGINT NOT NULL DEFAULT 0, refs INT NOT NULL DEFAULT 0,
   PRIMARY KEY(offer_id, user_id)
@@ -2038,3 +2042,71 @@ async def ai_clear(uid):
 
 async def ai_cleanup():
     await pool.execute("DELETE FROM ai_msgs WHERE created_at < now() - make_interval(mins => $1)", config.AI_KEEP_MINUTES)
+
+
+# ---------- engagement: last_seen, streak yaad, wapas lana, offer summary, daily summary ----------
+async def touch(uid):
+    """App khola: last_seen (ghante me ek baar hi likhta hai, taaki DB par bojh na pade)."""
+    await pool.execute("UPDATE users SET last_seen=now() WHERE id=$1 AND last_seen < now() - interval '1 hour'", uid)
+
+
+async def eng_streak_batch(n=25):
+    """Aaj task nahi kiya aur streak (>=2) toot'ne wali: ek din me ek hi baar. [(id, streak)]"""
+    rows = await pool.fetch(
+        f"""SELECT id FROM users WHERE streak>=2 AND streak_day = (now() AT TIME ZONE 'Asia/Kolkata')::date - 1
+            AND streak_rem IS DISTINCT FROM (now() AT TIME ZONE 'Asia/Kolkata')::date AND notify AND NOT banned
+            AND id NOT IN ({_EXCL}) LIMIT {int(n)}""")
+    out = []
+    for r in rows:
+        x = await pool.fetchrow(
+            "UPDATE users SET streak_rem=(now() AT TIME ZONE 'Asia/Kolkata')::date WHERE id=$1 AND streak_rem IS DISTINCT FROM "
+            "(now() AT TIME ZONE 'Asia/Kolkata')::date RETURNING id, streak", r["id"])
+        if x:
+            out.append((x["id"], x["streak"]))
+    return out
+
+
+async def eng_reeng_batch(n=20, days=3):
+    """3+ din se app nahi khola (par 30 din se zyada purane nahi): har user ko 7 din me ek hi baar. [id]"""
+    rows = await pool.fetch(
+        f"""SELECT id FROM users WHERE last_seen < now() - interval '{int(days)} days' AND last_seen > now() - interval '30 days'
+            AND (reeng_at IS NULL OR reeng_at < now() - interval '7 days') AND notify AND NOT banned
+            AND id NOT IN ({_EXCL}) ORDER BY last_seen DESC LIMIT {int(n)}""")
+    out = []
+    for r in rows:
+        x = await pool.fetchval("UPDATE users SET reeng_at=now() WHERE id=$1 AND (reeng_at IS NULL OR reeng_at < now() - interval '7 days') RETURNING id", r["id"])
+        if x:
+            out.append(x)
+    return out
+
+
+async def offers_to_summarize():
+    """Khatam ho chuke (time / slots bhare / admin ne band kiya) offers jinki summary abhi post nahi hui."""
+    return await pool.fetch(
+        "SELECT id, kind, target, bonus, winners, max_winners, to_wallet FROM offers WHERE NOT summarized AND "
+        "(NOT active OR ends_at <= now() OR (max_winners > 0 AND winners >= max_winners)) ORDER BY id LIMIT 5")
+
+
+async def offer_summarized(oid):
+    await pool.execute("UPDATE offers SET summarized=TRUE, active=FALSE WHERE id=$1", oid)
+
+
+async def eng_daily():
+    """Aaj (IST) ka hisaab, raat ki summary ke liye."""
+    r = await pool.fetchrow(
+        """WITH t AS (SELECT (now() AT TIME ZONE 'Asia/Kolkata')::date AS d)
+           SELECT
+             (SELECT count(*) FROM users) AS users,
+             (SELECT count(*) FROM users, t WHERE (created_at AT TIME ZONE 'Asia/Kolkata')::date = t.d) AS new_users,
+             (SELECT count(*) FROM users, t WHERE (last_seen AT TIME ZONE 'Asia/Kolkata')::date = t.d) AS active,
+             (SELECT count(*) FROM ad_views, t WHERE status='completed' AND (created_at AT TIME ZONE 'Asia/Kolkata')::date = t.d) AS ads,
+             (SELECT count(*) FROM completions, t WHERE (created_at AT TIME ZONE 'Asia/Kolkata')::date = t.d) AS joins,
+             (SELECT count(*) FROM withdrawals, t WHERE (created_at AT TIME ZONE 'Asia/Kolkata')::date = t.d) AS wd_n,
+             (SELECT coalesce(sum(amount_inr),0) FROM withdrawals, t WHERE (created_at AT TIME ZONE 'Asia/Kolkata')::date = t.d) AS wd_inr,
+             (SELECT coalesce(sum(amount_inr),0) FROM withdrawals WHERE status='pending') AS wd_pending_inr,
+             (SELECT coalesce(sum(amount_inr),0) FROM orders, t WHERE status='paid' AND (created_at AT TIME ZONE 'Asia/Kolkata')::date = t.d) AS dep_inr,
+             (SELECT coalesce(sum(amount),0) FROM ledger, t WHERE amount>0 AND kind<>'offer' AND (created_at AT TIME ZONE 'Asia/Kolkata')::date = t.d
+                AND kind IN ('join','ad','streak','welcome','referral','ref_bonus','bw_reward','lb_prize')) AS coins_out,
+             (SELECT count(*) FROM offer_wins, t WHERE (at AT TIME ZONE 'Asia/Kolkata')::date = t.d) AS offer_wins,
+             (SELECT coalesce(sum(bonus),0) FROM offer_wins, t WHERE (at AT TIME ZONE 'Asia/Kolkata')::date = t.d) AS offer_coins""")
+    return {k: (float(v) if k.endswith("_inr") else int(v)) for k, v in dict(r).items()}
