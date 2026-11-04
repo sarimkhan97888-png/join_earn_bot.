@@ -10,6 +10,8 @@ _FONT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "Popp
 W, H, S = 1280, 720, 2   # final size, supersample
 
 PALETTES = [
+    ((14, 30, 8), (60, 110, 10), (190, 240, 80)),     # lime
+    ((10, 10, 40), (50, 40, 110), (255, 210, 90)),    # indigo-gold
     ((30, 14, 4), (130, 62, 8), (255, 170, 60)),      # amber
     ((6, 26, 36), (8, 90, 110), (60, 230, 210)),      # teal
     ((30, 8, 34), (120, 24, 100), (255, 100, 200)),   # pink
@@ -106,6 +108,31 @@ def _decor(img, kind, x1, x2, rnd, ac):
         for _ in range(3):
             r = rnd.randint(46, 84) * S
             _coin(img, rnd.randint(int(x1) + r, int(x2) - r), rnd.randint(r, h - r), r)
+    elif kind == "rings":
+        cx, cy = (x1 + x2) / 2, h * .5
+        L = _layer(img)
+        dl = ImageDraw.Draw(L)
+        for i, rr in enumerate((.50, .40, .30)):
+            R = int(min(x2 - x1, h) * rr)
+            dl.ellipse((cx - R, cy - R, cx + R, cy + R), outline=ac + (200 - i * 50,), width=6 * S)
+        img.alpha_composite(L)
+        _coin(img, cx, cy, int(min(x2 - x1, h) * .2))
+        for _ in range(4):
+            r = rnd.randint(22, 38) * S
+            _coin(img, rnd.randint(int(x1) + r, int(x2) - r), rnd.choice([rnd.randint(r, int(h * .15)), rnd.randint(int(h * .85), h - r)]), r)
+    elif kind == "gifts":
+        d = ImageDraw.Draw(img)
+        for (fx, fy, sz, col) in [(.5, .62, .30, (230, 60, 90)), (.25, .72, .18, (70, 140, 255)), (.78, .74, .20, (255, 180, 40))]:
+            cx = x1 + (x2 - x1) * fx
+            sw = min(x2 - x1, h) * sz
+            top = h * fy - sw / 2
+            d.rounded_rectangle((cx - sw / 2, top, cx + sw / 2, top + sw), radius=int(sw * .1), fill=col + (255,))
+            d.rectangle((cx - sw * .08, top, cx + sw * .08, top + sw), fill=(255, 235, 170, 255))
+            d.rectangle((cx - sw / 2, top + sw * .42, cx + sw / 2, top + sw * .58), fill=(255, 235, 170, 255))
+            d.ellipse((cx - sw * .24, top - sw * .2, cx, top + sw * .04), outline=(255, 235, 170, 255), width=max(4, int(sw * .06)))
+            d.ellipse((cx, top - sw * .2, cx + sw * .24, top + sw * .04), outline=(255, 235, 170, 255), width=max(4, int(sw * .06)))
+        _coin(img, int(x1 + (x2 - x1) * .3), int(h * .22), int(min(x2 - x1, h) * .1))
+        _coin(img, int(x1 + (x2 - x1) * .75), int(h * .3), int(min(x2 - x1, h) * .07))
     else:   # bars: growth chart + coin
         d = ImageDraw.Draw(img)
         n = 5
@@ -118,16 +145,31 @@ def _decor(img, kind, x1, x2, rnd, ac):
 
 
 LAYOUTS = ["left", "center", "right"]
-DECORS = ["coins", "bigcoin", "stars", "bars"]
+DECORS = ["coins", "bigcoin", "stars", "bars", "rings", "gifts"]
+
+
+def _schedule():
+    """30 alag (palette, layout) jodiyan, ek fixed order me: lagatar do posts kabhi same palette/layout nahi."""
+    import itertools
+    combos = list(itertools.product(range(len(PALETTES)), range(3)))
+    rr = random.Random(2024)
+    while True:
+        rr.shuffle(combos)
+        if all(a[0] != b[0] and a[1] != b[1] for a, b in zip(combos, combos[1:] + combos[:1])):
+            return combos
+
+
+SCHEDULE = _schedule()
 
 
 def render(headline, badge=None, sub=None, bot="", brand="Profitix", seed=0):
     """PNG bytes. Har seed (post number) par alag palette + layout + decoration. headline/badge/sub plain text."""
     seed = int(seed or 0)
     rnd = random.Random(seed * 7919 + 13)
-    c0, c1, ac = PALETTES[(seed * 3 + rnd.randint(0, 1)) % len(PALETTES)]
-    layout = LAYOUTS[seed % 3]
-    decor = DECORS[(seed // 3 + seed) % 4]
+    pi, li = SCHEDULE[seed % len(SCHEDULE)]
+    c0, c1, ac = PALETTES[pi]
+    layout = LAYOUTS[li]
+    decor = DECORS[seed % len(DECORS)]
     w, h = W * S, H * S
     img = Image.new("RGBA", (w, h))
     px = ImageDraw.Draw(img)
