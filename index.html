@@ -1514,8 +1514,8 @@ const ADMA = {
     const sendable = !w.gp;   // gp/amazon me paise nahi bhejte, code bhejte hain
     const what = w.usdt ? `${w.usdt} USDT` : inrf(w.inr);
     openSheet(`<h3>Withdraw #${w.id}</h3>
-    <div class="card" style="text-align:center"><div class="sub">Bhejna hai</div><div class="big" style="margin:4px 0">${what}</div>${w.usdt ? `<div class="sub">(${inrf(w.inr)})</div>` : ''}
-    <div class="sub" style="margin-top:8px">${kind} →</div><div style="font-weight:700;word-break:break-all;margin:2px 0 8px"><code>${esc(w.upi)}</code></div>
+    <div class="card" style="text-align:center"><div class="sub">Bhejna hai</div><div class="row" style="justify-content:center;gap:10px;margin:4px 0"><div class="big">${what}</div><button class="btn sm ghost" id="admCpAmt" data-act="admcopy" data-k="amt" data-c="${w.usdt ? w.usdt : +Number(w.inr).toFixed(2)}" style="width:auto">📋 Copy</button></div>${w.usdt ? `<div class="sub">(${inrf(w.inr)})</div>` : ''}
+    <div class="sub" style="margin-top:8px">${kind} →</div><div class="row" style="justify-content:center;gap:10px;margin:2px 0 8px"><div style="font-weight:700;word-break:break-all"><code>${esc(w.upi)}</code></div><button class="btn sm ghost" id="admCpUpi" data-act="admcopy" data-k="upi" data-c="${esc(w.upi)}" style="width:auto;flex:none">📋 Copy</button></div>
     <div class="sub">User ${w.user} · L${w.level} · ${when(w.at)}</div></div>
     ${sendable ? `<label style="display:flex;gap:10px;align-items:flex-start;margin:12px 2px"><input type="checkbox" id="admSent" style="width:22px;height:22px;flex:none"><span>Maine <b>${what}</b> upar wale ${w.usdt ? 'wallet' : 'UPI'} par <b>bhej diya</b></span></label>` : `<p style="margin:10px 2px">Google Play / Amazon code user ko bhejna hai.</p>`}
     <button class="btn ok" id="admConfirm" data-act="admwdgo" data-id="${w.id}"${sendable ? ' disabled' : ''}>✅ Confirm${w.usdt ? ' · TxID daalo' : w.gp ? ' · Code daalo' : ''}</button>
@@ -1524,6 +1524,10 @@ const ADMA = {
     const cb = $('#admSent'); if (cb) cb.onchange = () => { $('#admConfirm').disabled = !cb.checked; };
   },
   admwdclose: () => closeSheet(),
+  async admcopy(d) {
+    const b = $(d.k === 'amt' ? '#admCpAmt' : '#admCpUpi'), ok = await copyText(d.c);
+    if (b) { b.textContent = ok ? '✓ Copied' : 'Copy nahi hua'; setTimeout(() => { b.textContent = '📋 Copy'; }, 1500); }
+  },
   async admwdgo(d) {
     const w = (AD.wdmap || {})[d.id]; if (!w) return;
     if (w.usdt) return ADMA.admtx(d);

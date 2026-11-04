@@ -53,7 +53,7 @@ MIN_TASK_MEMBERS = 10
 MAX_TASK_MEMBERS = 100000
 MIN_DEPOSIT_COINS = 2000    # = Rs 20
 MAX_DEPOSIT_COINS = 200000  # = Rs 2000
-MIN_WITHDRAW_COINS = 1500   # = Rs 15 (tax ke baad Rs 13.50)
+MIN_WITHDRAW_COINS = 1000   # = Rs 10
 WITHDRAW_TAX_PERCENT = 10   # withdraw par tax (coins me kat-ta hai)
 HOLD_HOURS = 24
 WD_LOCK_HOURS = 24           # channel-join se kamaye coins itne ghante baad withdraw hote hain
