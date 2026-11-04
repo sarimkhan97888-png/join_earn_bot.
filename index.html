@@ -577,7 +577,7 @@ function lbRender() {
   const unit = v => ref ? trUI('{} refers').replace('{}', fmt(v)) : trUI('{} coins').replace('{}', fmt(v));
   const medal = ['🥇', '🥈', '🥉'];
   const slot = i => { const r = b.rows[i]; return `<div class="p p${i + 1}"><div class="md">${medal[i]}</div><b>${r ? esc(r.name) : '—'}</b><div class="sc">${r ? unit(r.score) : '&nbsp;'}</div><div class="pz">🎁 +${fmt(b.prizes[i])}</div></div>`; };
-  const rest = b.rows.slice(3).map(r => `<div class="lbr${r.me ? ' me' : ''}"><div class="rk">${r.rank}</div><div class="sp"><b>${esc(r.name)}</b></div><b>${unit(r.score)}</b></div>`).join('');
+  const rest = b.rows.map(r => `<div class="lbr${r.me ? ' me' : ''}"><div class="rk">${medal[r.rank - 1] || r.rank}</div><div class="sp"><b>${esc(r.name)}</b></div><b>${unit(r.score)}</b></div>`).join('');
   const me = b.me.rank ? `<div class="card" style="margin:10px 0"><div class="row"><div class="ico">👤</div><div class="sp"><b>${trUI('Tumhari rank: #{}').replace('{}', b.me.rank)}</b><span class="sub">${unit(b.me.score)}</span></div></div></div>`
     : `<div class="card" style="margin:10px 0"><div class="sub">${trUI(ref ? 'Abhi tak koi refer complete nahi hua. Dost bulao aur list me aao!' : 'Abhi tak koi coin nahi kamaya. Tasks karo aur list me aao!')}</div></div>`;
   el.innerHTML = `<div class="ch-h" style="position:sticky;top:0;z-index:2"><button data-act="lbclose" aria-label="Back">‹</button><div class="sp"><b>🏆 Leaderboard</b><span>${trUI('Har mahine reset · {} din {} ghante baaki').replace('{}', d).replace('{}', h)}</span></div></div>
