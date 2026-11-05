@@ -97,9 +97,11 @@ async def job_reengage(ctx):
         log.exception("reengage")
         return
     for uid in ids:
-        extra = f"\n🎯 Abhi offer chal raha hai: {offs[-1]['bonus']} coins bonus!" if offs else ""
-        await util.notify(ctx.bot, uid, f"👋 Kaafi din ho gaye! {config.APP_NAME} me naye tasks aur ads tumhara wait kar rahe hain.{extra}\nAbhi kholo aur coins kamao 🚀",
-                          disable_notification=True)
+        if offs:
+            txt = f"👋 Kaafi din ho gaye! Naye tasks aur ads tumhara wait kar rahe hain.\n🎯 Abhi offer chal raha hai: {offs[-1]['bonus']} coins bonus!\nAbhi app kholo aur coins kamao 🚀"
+        else:
+            txt = "👋 Kaafi din ho gaye! Naye tasks aur ads tumhara wait kar rahe hain.\nAbhi app kholo aur coins kamao 🚀"
+        await util.notify(ctx.bot, uid, txt, disable_notification=True)
         await asyncio.sleep(0.05)
     if ids:
         extras.feed(f"👋 Wapas-aao DM gaye: {len(ids)} user")

@@ -313,3 +313,20 @@ _add({
 _add({
     "🎁 Welcome bonus! Tumhe {} coins free mile hain. Tasks karo aur kamao 🚀": ("🎁 वेलकम बोनस! तुम्हें {} कॉइन्स फ्री मिले हैं। टास्क करो और कमाओ 🚀", "🎁 Welcome bonus! You got {} free coins. Do tasks and earn more 🚀"),
 })
+
+
+# ---------------- offers / engage DMs ----------------
+_add({
+    "🎉 Offer jeet liya! Tumhe {} coins bonus mile ({} me). Aise hi kamate raho 🚀":
+        ("🎉 ऑफर जीत लिया! तुम्हें {} कॉइन्स बोनस मिले ({} में)। ऐसे ही कमाते रहो 🚀",
+         "🎉 You won the offer! You received {} bonus coins (in {}). Keep earning 🚀"),
+    "🔥 Tumhari {} din ki streak aaj raat toot sakti hai! Bas 1 task kar lo aur streak bachao 💪":
+        ("🔥 तुम्हारी {} दिन की स्ट्रीक आज रात टूट सकती है! बस 1 टास्क कर लो और स्ट्रीक बचाओ 💪",
+         "🔥 Your {}-day streak may break tonight! Just do 1 task and save your streak 💪"),
+    "👋 Kaafi din ho gaye! Naye tasks aur ads tumhara wait kar rahe hain.\nAbhi app kholo aur coins kamao 🚀":
+        ("👋 काफी दिन हो गए! नए टास्क और ऐड्स तुम्हारा इंतज़ार कर रहे हैं।\nअभी ऐप खोलो और कॉइन्स कमाओ 🚀",
+         "👋 It's been a while! New tasks and ads are waiting for you.\nOpen the app now and earn coins 🚀"),
+    "👋 Kaafi din ho gaye! Naye tasks aur ads tumhara wait kar rahe hain.\n🎯 Abhi offer chal raha hai: {} coins bonus!\nAbhi app kholo aur coins kamao 🚀":
+        ("👋 काफी दिन हो गए! नए टास्क और ऐड्स तुम्हारा इंतज़ार कर रहे हैं।\n🎯 अभी ऑफर चल रहा है: {} कॉइन्स बोनस!\nअभी ऐप खोलो और कॉइन्स कमाओ 🚀",
+         "👋 It's been a while! New tasks and ads are waiting for you.\n🎯 An offer is on right now: {} bonus coins!\nOpen the app now and earn coins 🚀"),
+})
