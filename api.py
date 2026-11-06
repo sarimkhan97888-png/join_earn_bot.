@@ -457,8 +457,9 @@ async def api_check(request):
         st = db.pop_streak(uid)
         return ok(msg=f"Join verified! +{t['reward']} coins mil gaye",
                   streak=({"day": st[0], "reward": st[1]} if st else None))
-    return err({"dup": "Ye task tum pehle kar chuke ho.", "own": "Apne channel se coin nahi mil sakta.",
-                "closed": "Task full ho gaya."}[res])
+    if res in ("dup", "closed"):   # app is task ko list se hata deta hai (bina error popup ke)
+        return web.json_response({"ok": False, "code": res, "msg": i18n.tr({"dup": "Ye task tum pehle kar chuke ho.", "closed": "Task full ho gaya."}[res])})
+    return err("Apne channel se coin nahi mil sakta.")
 
 
 @routes.post("/api/rejoin")

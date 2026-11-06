@@ -454,6 +454,7 @@ async function act(path, data, form) {
   $('#loader').classList.remove('open');
   if (!j.ok) {
     if (j.code === 'need_verify' || j.code === 'need_join') { if (j.code === 'need_join' && S.me) S.me.need_join = true; refresh(); return j; }
+    if (j.code === 'dup' || j.code === 'closed') return j;   // task pehle ho chuka/full: chupchap list se hata do
     await popup('error', 'Oops', j.msg || 'Kuch galat ho gaya');
   }
   return j;
@@ -618,7 +619,8 @@ async function autoTick(id, force) {
   const j = await api('/api/task/check', { id });
   a.busy = false;
   if (!S.auto[id]) return;
-  if (j && j.ok) { autoStop(id); checkOk(j); }
+  if (j && j.ok) { autoStop(id); checkOk(j, id); }
+  else if (j && (j.code === 'dup' || j.code === 'closed')) { autoStop(id); dropTask(id); refresh(); }
   else if (a.n >= 30 || (j && (j.code === 'need_join' || j.code === 'need_verify'))) autoStop(id);
 }
 function autoStart(id) {
@@ -627,7 +629,12 @@ function autoStart(id) {
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) Object.keys(S.auto).forEach(id => autoTick(+id, true)); });
 window.addEventListener('focus', () => Object.keys(S.auto).forEach(id => autoTick(+id, true)));
-async function checkOk(j) {
+function dropTask(id) {   // verify hote hi task card turant hata do (popup ke peeche atka na rahe)
+  document.querySelectorAll(`[data-act="check"][data-id="${id}"], [data-act="joinch"][data-id="${id}"]`).forEach(b => { const c = b.closest('.card'); if (c) c.remove(); });
+  if (S.tasks && S.tasks.channels) { S.tasks.channels = S.tasks.channels.filter(t => t.id !== +id); if (S.tab === 'tasks') render(); }
+}
+async function checkOk(j, id) {
+  if (id != null) dropTask(id);
   let msg = j.msg;
   if (j.streak) msg += '\n\n' + trUI('🔥 Streak Day {} complete!').replace('{}', j.streak.day) + ' +' + j.streak.reward + ' coins';
   await popup('ok', 'Success', msg); refresh();
@@ -1227,7 +1234,8 @@ const H = {
   async check(d) {
     autoStop(+d.id);
     const j = await act('/api/task/check', { id: +d.id });
-    if (j.ok) await checkOk(j);
+    if (j.ok) await checkOk(j, +d.id);
+    else if (j.code === 'dup' || j.code === 'closed') { dropTask(+d.id); refresh(); }
   },
   async watchad() {
     const c = S.cfg;
