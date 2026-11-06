@@ -714,6 +714,21 @@ async def on_chat_member(update: Update, ctx):
             "UPDATE completions SET left_at=now() WHERE chat_id=$1 AND user_id=$2 AND left_at IS NULL", cid, uid)
 
 
+async def on_my_chat_member(update: Update, ctx):
+    """Bot ko kisi channel/group me admin banaya (ya hataya): yaad rakho, taaki private chat bhi Add Task me chal sake."""
+    m = update.my_chat_member
+    if not m or m.chat.type not in ("channel", "group", "supergroup"):
+        return
+    now_admin = m.new_chat_member.status == "administrator"
+    try:
+        await db.botchat_set(m.chat.id, m.chat.title, m.chat.type, m.chat.username, m.from_user.id if m.from_user else None, now_admin)
+    except Exception:
+        log.exception("botchat_set failed")
+        return
+    if now_admin and m.from_user and m.old_chat_member.status != "administrator":
+        await util.notify(ctx.bot, m.from_user.id, f"✅ Bot ko \"{html.escape(m.chat.title or '')}\" me Admin bana diya. Ab app me Add Task me us channel ka link (private ho to invite link) daalo.")
+
+
 # ---------------- background jobs ----------------
 async def _release_one(ctx, r):
     """Purane 'hold' rows (hold hatane se pehle ke) bina penalty ke release."""
@@ -983,6 +998,7 @@ def register(app):
     app.add_handler(CallbackQueryHandler(botwork.on_cb, pattern=r"^(bws_|bwa_)"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, botwork.on_text))
     app.add_handler(ChatMemberHandler(on_chat_member, ChatMemberHandler.CHAT_MEMBER))
+    app.add_handler(ChatMemberHandler(on_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
     app.add_error_handler(on_error)
     app.job_queue.run_repeating(job_release, interval=120, first=60)
     app.job_queue.run_repeating(job_recheck, interval=300, first=120)

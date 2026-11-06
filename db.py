@@ -212,6 +212,11 @@ ALTER TABLE offers ADD COLUMN IF NOT EXISTS summarized BOOLEAN NOT NULL DEFAULT 
 ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen TIMESTAMPTZ NOT NULL DEFAULT now();
 ALTER TABLE users ADD COLUMN IF NOT EXISTS streak_rem DATE;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS reeng_at TIMESTAMPTZ;
+CREATE TABLE IF NOT EXISTS bot_chats(
+  chat_id BIGINT PRIMARY KEY, title TEXT, type TEXT, username TEXT, added_by BIGINT, is_admin BOOLEAN NOT NULL DEFAULT TRUE,
+  at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS bot_chats_by ON bot_chats(added_by, at DESC);
 CREATE TABLE IF NOT EXISTS offer_prog(
   offer_id INT NOT NULL, user_id BIGINT NOT NULL, earned BIGINT NOT NULL DEFAULT 0, refs INT NOT NULL DEFAULT 0,
   PRIMARY KEY(offer_id, user_id)
@@ -2110,3 +2115,17 @@ async def eng_daily():
              (SELECT count(*) FROM offer_wins, t WHERE (at AT TIME ZONE 'Asia/Kolkata')::date = t.d) AS offer_wins,
              (SELECT coalesce(sum(bonus),0) FROM offer_wins, t WHERE (at AT TIME ZONE 'Asia/Kolkata')::date = t.d) AS offer_coins""")
     return {k: (float(v) if k.endswith("_inr") else int(v)) for k, v in dict(r).items()}
+
+
+# ---------- private channel/group: bot jahan admin bana (my_chat_member) ----------
+async def botchat_set(cid, title, typ, username, added_by, is_admin):
+    await pool.execute(
+        "INSERT INTO bot_chats(chat_id,title,type,username,added_by,is_admin) VALUES($1,$2,$3,$4,$5,$6) "
+        "ON CONFLICT(chat_id) DO UPDATE SET title=$2, type=$3, username=$4, is_admin=$6, at=now(), "
+        "added_by=CASE WHEN $6 AND NOT bot_chats.is_admin THEN $5 ELSE COALESCE(bot_chats.added_by,$5) END",
+        cid, title, typ, username, added_by, is_admin)
+
+
+async def botchats_of(uid, limit=8):
+    """Jahan is user ne bot ko admin banaya (aur bot abhi bhi admin hai), naya pehle."""
+    return await pool.fetch("SELECT chat_id, title, type FROM bot_chats WHERE added_by=$1 AND is_admin ORDER BY at DESC LIMIT " + str(int(limit)), uid)

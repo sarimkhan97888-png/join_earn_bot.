@@ -1366,8 +1366,14 @@ async def api_verify(request):
 
 # ---------------- premium: channel task posting ----------------
 def parse_ident(s):
+    """@username / public link -> '@name'; -100.. id -> int; t.me/c/<id>/.. -> -100<id>; private invite link (t.me/+x, joinchat) -> 'INVITE'."""
     s = str(s or "").strip()
-    m = re.search(r"t\.me/([A-Za-z][A-Za-z0-9_]{3,})", s)
+    m = re.search(r"t(?:elegram)?\.me/c/(\d{5,})", s)
+    if m:
+        return int("-100" + m.group(1))
+    if re.search(r"t(?:elegram)?\.me/(?:\+|joinchat/)[\w-]{6,}", s) or re.fullmatch(r"\+[\w-]{10,}", s):
+        return "INVITE"
+    m = re.search(r"t(?:elegram)?\.me/([A-Za-z][A-Za-z0-9_]{3,})", s)
     if m:
         return "@" + m.group(1)
     if s.startswith("@") and len(s) > 4:
@@ -1379,16 +1385,29 @@ def parse_ident(s):
     return None
 
 
-async def resolve_chat(request, raw, make_link):
+async def resolve_chat(request, raw, make_link, pick=None):
+    """Return dict(chat_id,title,link) | str (error) | dict(pick=[...]) (private chat: kaunsa chunna hai)."""
     bot = request.app["bot"]
     uid = request["u"]["id"]
     ident = parse_ident(raw)
-    if ident is None:
-        return "❌ Channel ka @username ya t.me link daalo."
+    if pick:   # user ne private chat list se chuna: sirf wahi jahan usne bot ko admin banaya
+        if not any(c["chat_id"] == int(pick) for c in await db.botchats_of(uid, 20)):
+            return "❌ Ye chat tumhari list me nahi hai. Bot ko us channel me Admin banao aur dobara try karo."
+        ident = int(pick)
+    elif ident is None:
+        return "❌ Channel ka @username, t.me link, ya private channel ka invite link daalo."
+    elif ident == "INVITE":
+        cands = await db.botchats_of(uid)
+        if not cands:
+            return (f"❌ Private channel/group ke liye pehle @{bot.username} ko us chat me Admin banao (Invite Users permission ke saath), "
+                    "phir yahi invite link dobara daalo. (Ya channel ke kisi message ka link / -100.. wali ID bhi chalegi.)")
+        if len(cands) > 1:
+            return {"pick": [{"id": c["chat_id"], "title": c["title"] or str(c["chat_id"])} for c in cands]}
+        ident = cands[0]["chat_id"]
     try:
         chat = await bot.get_chat(ident)
     except TelegramError:
-        return "❌ Chat nahi mili. Bot ko pehle us channel/group me Admin banao aur sahi @username do."
+        return "❌ Chat nahi mili. Bot ko pehle us channel/group me Admin banao aur sahi @username / link do."
     if chat.type not in ("channel", "group", "supergroup"):
         return "❌ Sirf channel ya group allowed hai."
     try:
@@ -1404,8 +1423,11 @@ async def resolve_chat(request, raw, make_link):
             um = None
         if not um or um.status not in ("creator", "administrator"):
             return "❌ Tum is chat ke admin/owner nahi ho."
+    inv = re.search(r"https?://t(?:elegram)?\.me/(?:\+|joinchat/)[\w-]{6,}", str(raw or ""))
     if chat.username:
         link = f"https://t.me/{chat.username}"
+    elif inv:
+        link = inv.group(0)
     elif make_link:
         try:
             link = (await bot.create_chat_invite_link(chat.id)).invite_link
@@ -1430,9 +1452,12 @@ async def task_limit_err(u):
 
 @routes.post("/api/task/preview")
 async def api_task_preview(request):
-    r = await resolve_chat(request, (await body(request)).get("chat"), False)
+    d = await body(request)
+    r = await resolve_chat(request, d.get("chat"), False, d.get("pick"))
     if isinstance(r, str):
         return err(r)
+    if "pick" in r:
+        return ok(pick=r["pick"])
     return ok(title=r["title"])
 
 
@@ -1456,9 +1481,11 @@ async def api_task_create(request):
     cost = n * price
     if not admin and u["ad_balance"] + u["balance"] < cost:
         return err(f"Coins kam hain. Chahiye {cost}, tumhare paas {u['ad_balance'] + u['balance']} (ad balance + earnings). Wallet se deposit karo ya aur kamao.")
-    r = await resolve_chat(request, d.get("chat"), True)
+    r = await resolve_chat(request, d.get("chat"), True, d.get("pick"))
     if isinstance(r, str):
         return err(r)
+    if "pick" in r:
+        return ok(pick=r["pick"])
     tid = await db.create_task(u["id"], r["chat_id"], r["title"], r["link"], n, free=admin, price=price)
     if not tid:
         return err("Ad balance kam hai. Pehle deposit karo.")
