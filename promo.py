@@ -200,7 +200,20 @@ async def compose(idx, offer=None, badge=None):
 
 
 def caption(c, bot_username, until=None, idx=0):
-    """Post ka sundar HTML caption. 5 alag design (har post alag), sab me headline, bot, points, CTA."""
+    """Caption 1024 se lamba na ho (Telegram limit): lamba ho to akhri points ghatate hain, tag kabhi beech me nahi kat-ta."""
+    pts = list(c["points"])
+    while True:
+        out = _caption(dict(c, points=pts), bot_username, until, idx)
+        if len(out) <= 1024 or len(pts) <= 1:
+            break
+        pts.pop()
+    if len(out) > 1024:   # ek hi point bhi bada: usse chhota karo
+        pts = [pts[0][:max(40, len(pts[0]) - (len(out) - 1000))].rstrip() + "…"]
+        out = _caption(dict(c, points=pts), bot_username, until, idx)
+    return out
+
+
+def _caption(c, bot_username, until=None, idx=0):
     e = html.escape
     H = e(re.sub(r"\s+", " ", c["headline"]).upper())
     h = e(re.sub(r"\s+", " ", c["headline"]))
@@ -221,7 +234,7 @@ def caption(c, bot_username, until=None, idx=0):
         L = [f"🚨 <b>{H}</b> 🚨", ""] + [f"{dots[i % 6]} <i>{x}</i>" for i, x in enumerate(pts)] + ([""] + [off] if off else []) + ["", "┈┈┈┈┈┈┈┈┈┈┈┈┈┈", f"💥 <b>{cta}</b> 💥", bot]
     else:           # quote style
         L = [f"💬 <b>{h}</b>", ""] + [f"┃ {x}" for x in pts] + ([""] + [off] if off else []) + ["", f"🎯 <b>{cta}</b> → {bot}"]
-    return "\n".join(L)[:1024]
+    return "\n".join(L)
 
 
 async def post(bot, force_offer=False):

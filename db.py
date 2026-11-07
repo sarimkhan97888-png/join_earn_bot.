@@ -2104,7 +2104,7 @@ async def eng_daily():
              (SELECT count(*) FROM users) AS users,
              (SELECT count(*) FROM users, t WHERE (created_at AT TIME ZONE 'Asia/Kolkata')::date = t.d) AS new_users,
              (SELECT count(*) FROM users, t WHERE (last_seen AT TIME ZONE 'Asia/Kolkata')::date = t.d) AS active,
-             (SELECT count(*) FROM ad_views, t WHERE status='completed' AND (created_at AT TIME ZONE 'Asia/Kolkata')::date = t.d) AS ads,
+             (SELECT count(*) FROM ad_views, t WHERE claimed AND (claimed_at AT TIME ZONE 'Asia/Kolkata')::date = t.d) AS ads,
              (SELECT count(*) FROM completions, t WHERE (created_at AT TIME ZONE 'Asia/Kolkata')::date = t.d) AS joins,
              (SELECT count(*) FROM withdrawals, t WHERE (created_at AT TIME ZONE 'Asia/Kolkata')::date = t.d) AS wd_n,
              (SELECT coalesce(sum(amount_inr),0) FROM withdrawals, t WHERE (created_at AT TIME ZONE 'Asia/Kolkata')::date = t.d) AS wd_inr,

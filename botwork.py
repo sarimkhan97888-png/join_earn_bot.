@@ -33,6 +33,16 @@ def reason_kb(sid, lang="hn"):
     return M(rows)
 
 
+def ok_confirm_kb(sid, lang="hn"):
+    return M([[B(i18n.tr("✅ Haan, approve karo", lang), callback_data=f"bws_okc:{sid}"),
+               B(i18n.tr("↩️ Wapas", lang), callback_data=f"bws_bk:{sid}")]])
+
+
+def rej_confirm_kb(sid, k, lang="hn"):
+    return M([[B(i18n.tr("❌ Haan, reject karo", lang), callback_data=f"bws_rc{k}:{sid}"),
+               B(i18n.tr("↩️ Wapas", lang), callback_data=f"bws_no:{sid}")]])
+
+
 def main_kb(sid):
     return M([[B("✅ Done", callback_data=f"bws_ok:{sid}"), B("❌ Reject", callback_data=f"bws_no:{sid}")]])
 
@@ -67,15 +77,13 @@ async def on_text(update, ctx):
     if len(reason) < 3:
         return await update.message.reply_text(await i18n.tr_for(update.effective_user.id, "Reason thoda detail me likho (kam se kam 3 akshar)."))
     ctx.user_data.pop("bw_reason", None)
-    s = await reject_with_reason(ctx.bot, pend["sid"], update.effective_user.id, reason[:200])
-    if not s:
-        return await update.message.reply_text(await i18n.tr_for(update.effective_user.id, "Already processed ya ye task tumhara nahi hai."))
-    await update.message.reply_text(await i18n.tr_for(update.effective_user.id, "✅ Reject ho gaya, worker ko reason bhej diya."))
-    try:
-        await ctx.bot.edit_message_caption(pend["chat"], pend["mid"], caption=pend["cap"] + f"\n\n❌ <b>Rejected</b>: {h(reason[:200])}",
-                                           parse_mode="HTML", reply_markup=None)
-    except TelegramError:
-        pass
+    reason = reason[:200]
+    ctx.user_data["bw_rxok"] = {"sid": pend["sid"], "reason": reason, "chat": pend["chat"], "mid": pend["mid"], "cap": pend["cap"]}
+    ul = await i18n.lang_of(update.effective_user.id)
+    await update.message.reply_text(
+        i18n.tr("❓ Pakka reject karna hai?", ul) + f"\n📝 {h(reason)}", parse_mode="HTML",
+        reply_markup=M([[B(i18n.tr("❌ Haan, reject karo", ul), callback_data=f"bws_rxc:{pend['sid']}"),
+                         B(i18n.tr("↩️ Cancel", ul), callback_data=f"bws_rxn:{pend['sid']}")]]))
 
 
 async def mark(q, suffix):
@@ -136,7 +144,18 @@ async def on_cb(update, ctx):
             await mark(q, f"\n\n{st}")  # buttons hata do
         await popup("Ye submission pehle hi process ho chuki hai.")
 
-    if act == "bws_ok":
+    if act == "bws_ok":  # pehle confirm poochho
+        s0 = await db.bw_sub(sid)
+        if not s0 or s0["owner_id"] != uid or s0["status"] != "pending":
+            return await stale(sid, uid)
+        await q.answer(i18n.tr("Pakka approve? Worker ko coins mil jayenge.", ul))
+        try:
+            await q.edit_message_reply_markup(ok_confirm_kb(sid, ul))
+        except TelegramError:
+            pass
+        return
+
+    if act == "bws_okc":
         s = await db.bw_review(sid, uid, True)
         if not s:
             return await stale(sid, uid)
@@ -174,12 +193,52 @@ async def on_cb(update, ctx):
             await q.answer()
             await util.notify(ctx.bot, uid, "✍️ Reject ka reason ab likh ke bhejo (worker ko yahi dikhega, max 200 akshar).")
             return
-        reason = REASONS[act[5:]]
+        k = act[5:]
+        await q.answer(i18n.tr("Pakka reject? Reason:", ul) + " " + i18n.tr(REASONS[k], ul))
+        try:
+            await q.edit_message_reply_markup(rej_confirm_kb(sid, k, ul))
+        except TelegramError:
+            pass
+        return
+
+    if act in {f"bws_rc{k}" for k in REASONS}:
+        reason = REASONS[act[6:]]
         s2 = await reject_with_reason(ctx.bot, sid, uid, reason)
         if not s2:
             return await popup("Already processed ya tum is task ke owner nahi ho.")
         await popup("❌ Reject kar diya, worker ko reason bhej diya.")
         await mark(q, f"\n\n❌ <b>Rejected</b>: {h(reason)}")
+        return
+
+    if act in ("bws_rxc", "bws_rxn"):
+        pend = ctx.user_data.pop("bw_rxok", None)
+        if not pend or pend["sid"] != sid:
+            try:
+                await q.edit_message_reply_markup(None)
+            except TelegramError:
+                pass
+            return await popup("Ye request purani ho gayi, dobara Reject dabao.")
+        if act == "bws_rxn":
+            await q.answer()
+            try:
+                await q.edit_message_reply_markup(None)
+                await ctx.bot.edit_message_reply_markup(pend["chat"], pend["mid"], reply_markup=main_kb(sid))
+            except TelegramError:
+                pass
+            return
+        s2 = await reject_with_reason(ctx.bot, sid, uid, pend["reason"])
+        try:
+            await q.edit_message_reply_markup(None)
+        except TelegramError:
+            pass
+        if not s2:
+            return await popup("Already processed ya tum is task ke owner nahi ho.")
+        await popup("❌ Reject kar diya, worker ko reason bhej diya.")
+        try:
+            await ctx.bot.edit_message_caption(pend["chat"], pend["mid"], caption=pend["cap"] + f"\n\n❌ <b>Rejected</b>: {h(pend['reason'])}",
+                                               parse_mode="HTML", reply_markup=None)
+        except TelegramError:
+            pass
         return
 
     if act == "bws_rep":

@@ -369,8 +369,9 @@ async def promo_cmd(update: Update, ctx):
 
 async def _make_offer(ctx, kind, target, bonus, hours, win, wallet):
     who = f"pehle {win} users" if win else "jo bhi"
-    txt = (f"{who} {target} dost refer karke complete karwayenge unko {bonus} coins bonus" if kind == "refer"
-           else f"{who} {target} coins kamayenge unko {bonus} coins bonus")
+    where = "Wallet me" if wallet else "Ad Balance me"
+    txt = (f"{who} {target} dost refer karke complete karwayenge unko {bonus} coins bonus ({where})" if kind == "refer"
+           else f"{who} {target} coins kamayenge unko {bonus} coins bonus ({where})")
     oid = await db.offer_new(kind, target, bonus, hours, win, wallet, txt)
     ok_, info = await promo.post(ctx.bot, force_offer=True)
     return (f"✅ Offer #{oid} chalu ({hours:.1f}h): {txt}.\nBonus apne aap {'Wallet' if wallet else 'Ad Balance'} me jayega, user ko DM aayega. " +
@@ -379,7 +380,7 @@ async def _make_offer(ctx, kind, target, bonus, hours, win, wallet):
 
 _AI_OFFER_SYS = ("You convert an admin's Hinglish request into ONE offer as strict JSON, nothing else. Keys: "
                  "kind ('refer' = users must refer N friends, 'coin' = users must earn N coins), target (int N), bonus (int coins), "
-                 "winners (int, first-N users limit, 0 if none), wallet (true only if bonus must go to wallet, else false), "
+                 "winners (int, first-N users limit, 0 if none), wallet (true = bonus to Wallet, false = Ad Balance; use true unless the request says ad balance or ads balance), "
                  "until (end time 'YYYY-MM-DD HH:MM' in IST 24h; 'raat 12 baje' = next 00:00; if no time given use now+24h). "
                  "If the request is not a refer/coin offer, output {\"error\":\"short reason\"}. Never invent numbers not in the request.")
 
@@ -412,15 +413,15 @@ async def ai_cmd(update: Update, ctx):
         return await update.message.reply_text("❌ Offer samajh nahi aaya. Thoda saaf likho (kitne refer/coin, kitna bonus, kab tak) ya /offer refer 10 500 24h x10 use karo.")
     await update.message.reply_text(
         f"🤖 Samjha: {kind} {target} → {bonus} coins" + (f", pehle {win} log" if win else "") + f", {until:%d %b %H:%M} IST tak.")
-    await update.message.reply_text(await _make_offer(ctx, kind, target, bonus, hours, win, bool(j.get("wallet"))))
+    await update.message.reply_text(await _make_offer(ctx, kind, target, bonus, hours, win, j.get("wallet", True) is not False))
 
 
 async def offer_cmd(update: Update, ctx):
     """Admin:
-    /offer refer 10 500 [24h|2d] [x10] [wallet]  = 10 refer pure karne wale (pehle 10 log) ko 500 coins bonus, apne aap
-    /offer coin 500 500 [24h] [x10] [wallet]     = 500 coins kamane wale ko 500 bonus, apne aap
+    /offer refer 10 500 [24h|2d] [x10] [wallet|ad]  = 10 refer pure karne wale (pehle 10 log) ko 500 coins bonus, apne aap
+    /offer coin 500 500 [24h] [x10] [wallet|ad]   = 500 coins kamane wale ko 500 bonus, apne aap
     /offer text...                               = sirf announcement (coins khud dene hain)
-    /offer off [id]  = band.  /offer = chalte offers.  Bonus default Ad Balance me, 'wallet' likho to Wallet me."""
+    /offer off [id]  = band.  /offer = chalte offers.  Bonus default Wallet me; Ad Balance me dena ho to end me 'ad' likho (jaise /offer refer 10 500 24h x10 ad)."""
     if update.effective_user.id not in config.ADMIN_IDS or not update.message:
         return
     parts = (update.message.text or "").split(None, 1)
@@ -446,7 +447,7 @@ async def offer_cmd(update: Update, ctx):
     if m:
         kind = "refer" if m.group(1).lower() == "refer" else "coin"
         target, bonus, rest = int(m.group(2)), int(m.group(3)), m.group(4).lower()
-        hours, win, wallet = 24, 0, False
+        hours, win, wallet = 24, 0, True   # default Wallet (withdraw ho sakta hai); "ad" likho to Ad Balance
         for t in rest.split():
             h = re.fullmatch(r"(\d{1,3})([hd])", t)
             w = re.fullmatch(r"x(\d{1,5})", t)
@@ -456,6 +457,8 @@ async def offer_cmd(update: Update, ctx):
                 win = int(w.group(1))
             elif t == "wallet":
                 wallet = True
+            elif t in ("ad", "ads", "adbalance"):
+                wallet = False
         if not (1 <= target <= 1000000 and 1 <= bonus <= 100000):
             return await update.message.reply_text("❌ Target/bonus sahi likho. Jaise: /offer refer 10 500 24h x10")
         return await update.message.reply_text(await _make_offer(ctx, kind, target, bonus, hours, win, wallet))
