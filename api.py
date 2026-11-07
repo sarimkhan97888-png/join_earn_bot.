@@ -1417,6 +1417,9 @@ async def resolve_chat(request, raw, make_link, pick=None):
         me = None
     if not me or me.status != "administrator":
         return f"❌ Bot is chat me Admin nahi hai. @{bot.username} ko Admin banao (Invite Users permission ke saath)."
+    if getattr(chat, "join_by_request", False) and not getattr(me, "can_invite_users", False):
+        return (f"❌ Is chat me join request on hai. Ya to 'Approve new members' band karo, ya @{bot.username} ko Admin me "
+                "'Invite Users' permission do (tab bot requests khud approve karega).")
     if await db.usdt_meta_get("owner_check") != "0":   # /owner off => sirf bot admin hona kaafi
         try:
             um = await bot.get_chat_member(chat.id, uid)
@@ -1424,14 +1427,11 @@ async def resolve_chat(request, raw, make_link, pick=None):
             um = None
         if not um or um.status not in ("creator", "administrator"):
             return "❌ Tum is chat ke admin/owner nahi ho."
-    inv = re.search(r"https?://t(?:elegram)?\.me/(?:\+|joinchat/)[\w-]{6,}", str(raw or ""))
     if chat.username:
         link = f"https://t.me/{chat.username}"
-    elif inv:
-        link = inv.group(0)
-    elif make_link:
+    elif make_link:   # private: user ka link nahi, bot ka apna link (approval ke bina join)
         try:
-            link = (await bot.create_chat_invite_link(chat.id)).invite_link
+            link = (await bot.create_chat_invite_link(chat.id, creates_join_request=False)).invite_link
         except TelegramError:
             return "❌ Invite link nahi ban paya. Bot ko 'Invite Users' permission do."
     else:

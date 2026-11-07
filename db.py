@@ -2129,3 +2129,12 @@ async def botchat_set(cid, title, typ, username, added_by, is_admin):
 async def botchats_of(uid, limit=8):
     """Jahan is user ne bot ko admin banaya (aur bot abhi bhi admin hai), naya pehle."""
     return await pool.fetch("SELECT chat_id, title, type FROM bot_chats WHERE added_by=$1 AND is_admin ORDER BY at DESC LIMIT " + str(int(limit)), uid)
+
+
+async def task_chat_open(chat_id):
+    """Is chat ka koi chalta task hai jisme abhi members chahiye (join request auto-approve ke liye)."""
+    return bool(await pool.fetchval("SELECT EXISTS(SELECT 1 FROM tasks WHERE chat_id=$1 AND status='active' AND joined<target)", chat_id))
+
+
+async def is_banned_user(uid):
+    return bool(await pool.fetchval("SELECT banned FROM users WHERE id=$1", uid))
