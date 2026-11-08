@@ -1398,7 +1398,17 @@ async def resolve_chat(request, raw, make_link, pick=None):
     elif ident is None:
         return "❌ Channel ka @username, t.me link, ya private channel ka invite link daalo."
     elif ident == "INVITE":
-        cands = await db.botchats_of(uid)
+        cands = list(await db.botchats_of(uid))
+        if not cands:   # bot kisi aur ne/pehle admin banaya ho: jahan user khud admin hai wahi dhundo
+            for c in await db.botchats_admin():
+                try:
+                    um = await bot.get_chat_member(c["chat_id"], uid)
+                except TelegramError:
+                    continue
+                if um.status in ("creator", "administrator"):
+                    cands.append(c)
+                if len(cands) >= 8:
+                    break
         if not cands:
             return (f"❌ Private channel/group ke liye pehle @{bot.username} ko us chat me Admin banao (Invite Users permission ke saath), "
                     "phir yahi invite link dobara daalo. (Ya channel ke kisi message ka link / -100.. wali ID bhi chalegi.)")
