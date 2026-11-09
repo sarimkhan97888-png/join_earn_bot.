@@ -390,7 +390,7 @@ async def api_me(request):
     u = request["u"]
     left, led, tdone, wdone, queued = await asyncio.gather(
         db.left_chats(u["id"]), db.recent_ledger(u["id"]), db.created_today(u["id"]), db.wd_today(u["id"]), db.prem_queued(u["id"]))
-    blocked = [{"chat_id": r["chat_id"], "title": r["title"], "link": r["link"]} for r in left]
+    blocked = [{"chat_id": r["chat_id"], "title": r["title"], "link": r["link"], "coins": int(r["coins"] or 0)} for r in left]
     hist = [{"kind": r["kind"], "amount": r["amount"], "at": iso(r["created_at"])} for r in led]
     try:
         await db.touch(u["id"])

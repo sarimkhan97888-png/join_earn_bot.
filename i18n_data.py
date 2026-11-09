@@ -85,6 +85,7 @@ _add({
     '✅ Channel rejoin ho gaya. <b>+{}</b> coins wapas mil gaye.': ('✅ चैनल रीजॉइन हो गया। <b>+{}</b> कॉइन्स वापस मिल गए।', '✅ Channel rejoined. <b>+{}</b> coins are back.'),
     'Sab channel join ho gaye ✅ Coins wapas mil gaye.': ('सब चैनल जॉइन हो गए ✅ कॉइन्स वापस मिल गए।', 'All channels joined ✅ Your coins are back.'),
     '✅ "{}" mil gaya. Ab app me Add Task me wahi private invite link daalo.': ('✅ "{}" मिल गया। अब ऐप में Add Task में वही प्राइवेट इन्वाइट लिंक डालो।', '✅ Found "{}". Now paste the same private invite link in Add Task in the app.'),
+    '⚠️ Tumne channel "{}" leave kiya, isliye <b>{}</b> coins kat gaye. Channel dobara join karoge to coins wapas mil jayenge.': ('⚠️ तुमने चैनल "{}" छोड़ दिया, इसलिए <b>{}</b> कॉइन्स कट गए। चैनल दोबारा जॉइन करोगे तो कॉइन्स वापस मिल जाएंगे।', '⚠️ You left the channel "{}", so <b>{}</b> coins were deducted. Rejoin the channel and the coins will be returned.'),
     "❌ Sirf channel ya group allowed hai.": ("❌ सिर्फ़ चैनल या ग्रुप चलेगा।", "❌ Only a channel or group is allowed."),
     "❌ Bot is chat me Admin nahi hai. @{} ko Admin banao (Invite Users permission ke saath).": ("❌ बॉट इस चैट में एडमिन नहीं है। @{} को एडमिन बनाओ (Invite Users परमिशन के साथ)।", "❌ The bot is not an Admin in this chat. Make @{} an Admin (with Invite Users permission)."),
     "❌ Tum is chat ke admin/owner nahi ho.": ("❌ तुम इस चैट के एडमिन/ओनर नहीं हो।", "❌ You are not an admin/owner of this chat."),

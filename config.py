@@ -20,6 +20,13 @@ BACKUP_BOT_TOKEN = os.getenv("BACKUP_BOT_TOKEN", "")  # optional: daily data bac
 PAYOUT_CHANNEL_ID = os.getenv("PAYOUT_CHANNEL_ID", "@PROFITIXPAYOUT").strip()      # public payout proof channel (-100... ya @username); khali = band
 PAYOUT_CHANNEL_LINK = os.getenv("PAYOUT_CHANNEL_LINK", "https://t.me/PROFITIXPAYOUT").strip()  # https://t.me/... app me floating button
 ADMIN_FEED = _int("ADMIN_FEED", 1)  # 1 = main bot par har event ki khabar admins ko
+# ---- Security (sec.py) ----
+IP_HEADERS = [x.strip() for x in os.getenv("IP_HEADERS", "CF-Connecting-IP,True-Client-IP").split(",") if x.strip()]  # proxy ka set kiya asli-IP header
+IP_HOPS = max(_int("IP_HOPS", 1), 1)             # X-Forwarded-For me daayein se kaunsa entry client ka (hamare proxy ne joda)
+SEC_BAD_LIMIT = _int("SEC_BAD_LIMIT", 15)        # ek IP se itni nakli requests (10 min me) => block
+SEC_BLOCK_SECS = _int("SEC_BLOCK_SECS", 1800)    # block kitni der (sec)
+SEC_IP_ACCOUNTS = _int("SEC_IP_ACCOUNTS", 3)     # ek IP par itne account => feed alert
+SEC_USER_IPS = _int("SEC_USER_IPS", 6)           # ek user ke 24h me itne alag IP => feed alert
 LEDGER_KEEP = 10            # har user ki transaction history me itni hi entries rakhte hain
 SUPPORT_KEEP_HOURS = 24     # support text/photo/voice itne ghante baad delete
 ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()]

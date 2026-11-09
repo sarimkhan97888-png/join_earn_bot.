@@ -36,7 +36,7 @@ async def main():
     await app.initialize()
     await bot.post_init(app)
 
-    runner = web.AppRunner(make_web(app))
+    runner = web.AppRunner(make_web(app), access_log=None)  # access log band: Monetag secret URL me aata hai, log me leak na ho
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", config.PORT).start()
 

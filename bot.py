@@ -705,8 +705,11 @@ async def assign_cmd(update: Update, ctx):
 
 # ---------------- chat member events ----------------
 async def _after_leave(bot, uid, rows):
-    """Leave par withdraw cancel hua ho to user ko seedha, chhota sa message (coins wapas balance me)."""
+    """Leave par user ko DM (uski bhasha me): kitne coins kate; withdraw cancel hua ho to wo bhi."""
     for r in rows:
+        if r.get("reward"):
+            await util.notify(bot, uid, f"⚠️ Tumne channel \"{html.escape(r.get('title') or '')}\" leave kiya, isliye <b>{r['reward']}</b> coins kat gaye. "
+                                        f"Channel dobara join karoge to coins wapas mil jayenge.")
         for w in r.get("cancelled") or []:
             await util.notify(bot, uid, f"↩️ Tumhara withdraw #{w['id']} cancel ho gaya (channel leave kiya). Coins balance me wapas aa gaye. "
                                         f"Channel dobara join karo.")

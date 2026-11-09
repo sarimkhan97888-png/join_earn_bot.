@@ -9,6 +9,8 @@ from aiohttp import web
 import api
 import config
 import db
+import i18n
+import sec
 
 log = logging.getLogger("web")
 INDEX = os.path.join(os.path.dirname(os.path.abspath(__file__)), "index.html")
@@ -28,16 +30,21 @@ def load_index():
     return s.replace("<!--__MT__-->", mt).encode("utf-8")
 
 
-FRAME = "frame-ancestors 'self' https://web.telegram.org https://*.telegram.org"
+FRAME = "frame-ancestors 'self' https://web.telegram.org https://*.telegram.org; object-src 'none'; base-uri 'none'"
 
 
 @web.middleware
 async def sec_mw(request, handler):
-    """Security headers har response par; API response kabhi cache nahi hoti."""
+    """Security headers har response par; API response kabhi cache nahi hoti. Nakli requests bhejne wale IP par block."""
+    request["ip"] = sec.client_ip(request)
+    if sec.blocked(request["ip"]):
+        return web.json_response({"ok": False, "msg": i18n.tr("Bahut zyada nakli requests. Thodi der baad try karo.")}, status=429,
+                                 headers={"Retry-After": str(config.SEC_BLOCK_SECS), "Cache-Control": "no-store"})
     try:
         resp = await handler(request)
     except web.HTTPException as e:
         resp = e
+    resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
     resp.headers.setdefault("X-Content-Type-Options", "nosniff")
     resp.headers.setdefault("Referrer-Policy", "no-referrer")
     if request.path.startswith("/api/"):

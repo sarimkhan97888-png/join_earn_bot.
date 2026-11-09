@@ -730,8 +730,8 @@ async def is_blocked(uid):
 async def left_chats(uid):
     """Jin channels ko user ne (pehle RECHECK_DAYS din me) leave kiya aur abhi tak rejoin nahi kiya."""
     return await pool.fetch(
-        """SELECT DISTINCT ON (c.chat_id) c.chat_id, t.title, t.link FROM completions c
-           JOIN tasks t ON t.id=c.task_id WHERE c.user_id=$1 AND c.status='left'""", uid)
+        """SELECT c.chat_id, max(t.title) AS title, max(t.link) AS link, COALESCE(sum(c.reward),0)::bigint AS coins FROM completions c
+           JOIN tasks t ON t.id=c.task_id WHERE c.user_id=$1 AND c.status='left' GROUP BY c.chat_id""", uid)
 
 
 async def unblock(chat_id, uid):
@@ -778,6 +778,7 @@ async def revoke(comp_id):
                 bal += w["coins"]
                 cancelled.append(w)
         out = dict(r)
+        out["title"] = await c.fetchval("SELECT title FROM tasks WHERE id=$1", r["task_id"]) or ""
         out["cancelled"] = cancelled
         return out
 

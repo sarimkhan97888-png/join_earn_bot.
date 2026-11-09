@@ -11,6 +11,7 @@ import config
 import i18n
 import db
 import extras
+import sec
 import util
 
 log = logging.getLogger("botwork")
@@ -137,6 +138,8 @@ async def on_cb(update, ctx):
             await mark(q, "\n\n⚠️ Cancelled")
             return await popup("Ye submission ab maujood nahi hai (cancel ho gayi). Worker ko dobara submit karna hoga.")
         if s0 and s0["owner_id"] != uid:
+            sec.alert("🚨 <b>Dusre ke bot-work submission par Done/Reject dabaya</b> (tamper?)", uid=uid,
+                      detail=f"submission #{sid}, asli owner={s0['owner_id']} (Telegram callback me IP nahi milta)", every=300, key=("bwown", uid, sid))
             return await popup("Ye task tumhara nahi hai (sirf task ka owner Done/Reject kar sakta hai).")
         names = {"approved": "✅ Approved", "rejected": "❌ Rejected", "reported": "🚩 Reported", "closed": "🔒 Closed"}
         st = names.get(s0["status"]) if s0 else None
