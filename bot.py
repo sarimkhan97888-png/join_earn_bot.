@@ -21,6 +21,7 @@ import i18n
 import payments
 import payouts
 import promo
+import sec
 import util
 
 log = logging.getLogger("bot")
@@ -267,6 +268,8 @@ async def gift_cmd(update: Update, ctx):
 async def on_admin_wd(update: Update, ctx):
     q = update.callback_query
     if q.from_user.id not in config.ADMIN_IDS:
+        sec.alert("🚨 <b>Non-admin ne withdraw Approve/Reject button dabaya</b> (hack try?)", u={"id": q.from_user.id, "username": q.from_user.username,
+                  "first_name": q.from_user.first_name}, detail=f"data={str(q.data)[:60]} (Telegram callback me IP nahi milta)", every=300)
         return await q.answer("Not allowed", show_alert=True)
     act, wid = q.data.split(":")
     main = util.main_bot or ctx.bot  # users ko DM hamesha main bot se (callback backup bot par bhi aa sakta hai)
@@ -285,6 +288,8 @@ async def on_admin_wd(update: Update, ctx):
 async def on_admin_claim(update: Update, ctx):
     q = update.callback_query
     if q.from_user.id not in config.ADMIN_IDS:
+        sec.alert("🚨 <b>Non-admin ne deposit claim Approve/Reject button dabaya</b> (hack try?)", u={"id": q.from_user.id, "username": q.from_user.username,
+                  "first_name": q.from_user.first_name}, detail=f"data={str(q.data)[:60]} (Telegram callback me IP nahi milta)", every=300)
         return await q.answer("Not allowed", show_alert=True)
     act, cid = q.data.split(":")
     _, msg = await adminops.claim_act(util.main_bot or ctx.bot, int(cid), act == "clm_ok")

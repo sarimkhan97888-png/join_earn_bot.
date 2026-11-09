@@ -244,6 +244,12 @@ INSERT INTO support_threads(user_id,last_sender,last_text,last_at)
   SELECT DISTINCT ON (user_id) user_id, sender, left(text,80), created_at FROM support_msgs
   WHERE NOT EXISTS(SELECT 1 FROM support_threads) ORDER BY user_id, id DESC ON CONFLICT DO NOTHING;
 CREATE INDEX IF NOT EXISTS users_fp ON users(fp);
+CREATE TABLE IF NOT EXISTS user_ips(
+  user_id BIGINT NOT NULL, ip TEXT NOT NULL,
+  first_seen TIMESTAMPTZ NOT NULL DEFAULT now(), last_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+  hits INT NOT NULL DEFAULT 1, PRIMARY KEY(user_id, ip)
+);
+CREATE INDEX IF NOT EXISTS user_ips_ip ON user_ips(ip);
 """
 
 
@@ -289,6 +295,22 @@ async def init():
             await c.execute(SCHEMA)
         finally:
             await c.execute("SELECT pg_advisory_unlock(727001)")
+
+
+async def ip_touch(uid, ip):
+    """User ka IP save. Return (naya jodi?, is IP par kitne account, is user ke pichle 24h me kitne IP)."""
+    new = await pool.fetchval(
+        """INSERT INTO user_ips(user_id,ip) VALUES($1,$2)
+           ON CONFLICT(user_id,ip) DO UPDATE SET last_seen=now(), hits=user_ips.hits+1 RETURNING (xmax = 0)""", uid, ip)
+    accs = await pool.fetchval("SELECT count(*) FROM user_ips WHERE ip=$1", ip)
+    ips = await pool.fetchval("SELECT count(*) FROM user_ips WHERE user_id=$1 AND last_seen > now() - interval '24 hours'", uid)
+    return bool(new), int(accs or 0), int(ips or 0)
+
+
+async def ip_others(ip, uid, limit=5):
+    """Is IP par ye user chhodke baaki (sabse nayi) account ids."""
+    rows = await pool.fetch("SELECT user_id FROM user_ips WHERE ip=$1 AND user_id<>$2 ORDER BY last_seen DESC LIMIT $3", ip, uid, limit)
+    return [r["user_id"] for r in rows]
 
 
 async def led(c, uid, kind, amount, ref=""):

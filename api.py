@@ -27,6 +27,7 @@ import i18n
 import fam
 import payouts
 import ai
+import sec
 import util
 
 log = logging.getLogger("api")
@@ -39,23 +40,43 @@ _bg = set()  # background tasks ke references (garbage collect na ho)
 
 
 # ---------------- helpers ----------------
-def check_init_data(init_data: str):
-    """Telegram WebApp initData validate karo; user dict return karta hai."""
+def _eq(a, b):
+    """Constant-time compare. Non-ASCII/ajeeb input par bhi crash (500) nahi, bas False."""
+    try:
+        return hmac.compare_digest(str(a).encode("utf-8", "ignore"), str(b).encode("utf-8", "ignore"))
+    except Exception:
+        return False
+
+
+def check_init_data_why(init_data: str):
+    """Telegram WebApp initData validate: (user dict, why). why: '' ok | empty | nohash | forged | old | future | bad."""
+    if not init_data:
+        return None, "empty"
     data = dict(parse_qsl(init_data or "", keep_blank_values=True))
     h = data.pop("hash", None)
     if not h:
-        return None
+        return None, "nohash"
     s = "\n".join(f"{k}={v}" for k, v in sorted(data.items()))
     secret = hmac.new(b"WebAppData", config.BOT_TOKEN.encode(), hashlib.sha256).digest()
-    if not hmac.compare_digest(hmac.new(secret, s.encode(), hashlib.sha256).hexdigest(), h):
-        return None
+    if not _eq(hmac.new(secret, s.encode(), hashlib.sha256).hexdigest(), h):
+        return None, "forged"
     try:
         age = time.time() - int(data.get("auth_date", "0"))
-        if age > 6 * 3600 or age < -300:  # 6h se purana (replay) ya future date reject
-            return None
-        return json.loads(data["user"])
+        if age > 6 * 3600:  # 6h se purana (replay) reject
+            return None, "old"
+        if age < -300:      # future date reject
+            return None, "future"
+        user = json.loads(data["user"])
+        if not isinstance(user, dict) or type(user.get("id")) is not int:
+            return None, "bad"
+        return user, ""
     except Exception:
-        return None
+        return None, "bad"
+
+
+def check_init_data(init_data: str):
+    """Telegram WebApp initData validate karo; user dict return karta hai."""
+    return check_init_data_why(init_data)[0]
 
 
 def ok(**kw):
@@ -235,6 +256,39 @@ _errseen = {}
 _ERR_QUIET = ("wait", "need_join", "need_verify")   # ye normal flow hain, error nahi
 
 
+def _ip(request):
+    """Is request ka asli client IP ('' agar nahi mila)."""
+    try:
+        ip = request.get("ip") or client_ip(request)
+        return "" if ip == "?" else str(ip)
+    except Exception:
+        return ""
+
+
+def _rp(request):
+    """'METHOD /path' (alert ke liye). Kisi bhi request object par crash nahi."""
+    return f"{getattr(request, 'method', '')} {getattr(request, 'path', '')}".strip()
+
+
+def _ipl(request):
+    ip = _ip(request)
+    return f"\n🌐 IP: <code>{html.escape(ip)}</code>" if ip else ""
+
+
+def _tg(request):
+    try:
+        return request.get("tg") or {}
+    except Exception:
+        return {}
+
+
+def deny(request):
+    """Non-admin ne admin/support API call ki: user + IP ke saath feed me alert, user ko 'Not allowed'."""
+    sec.alert("🚨 <b>Non-admin ne ADMIN/SUPPORT API call ki</b> (hack try?)", u=_tg(request), ip=_ip(request),
+              path=_rp(request), every=300)
+    return err("Not allowed")
+
+
 def report_err(request, msg, kind="⚠️ User error", extra="", tg=None):
     """User ko dikhne wala har error admin ko (dusre bot se): kaun, kis action me, kya msg. Same user+action+msg 30 sec me dobara
     aaye to ek hi baar bhejta hai aur agli baar '(+N baar aur)' likhta hai (flood se bachne ke liye). Kabhi raise nahi karta."""
@@ -254,7 +308,7 @@ def report_err(request, msg, kind="⚠️ User error", extra="", tg=None):
             _errseen.clear()
         _errseen[key] = [t, 0]
         who = extras.uname({"id": uid, "username": u.get("username"), "first_name": u.get("first_name")})
-        extras.feed(f"{kind} {who}\n📍 <code>{html.escape(request.method + ' ' + request.path)}</code>\n"
+        extras.feed(f"{kind} {who}{_ipl(request)}\n📍 <code>{html.escape(request.method + ' ' + request.path)}</code>\n"
                     f"💬 {html.escape(str(msg)[:300])}{more}" + (f"\n🔎 {html.escape(str(extra)[:300])}" if extra else ""))
     except Exception:
         pass
@@ -276,8 +330,12 @@ def _watch(request, resp, tg=None):
 async def auth_mw(request, handler):
     if not request.path.startswith("/api/"):
         return await handler(request)
-    user = check_init_data(request.headers.get("X-Init-Data", ""))
+    ip = request.get("ip") or sec.client_ip(request)
+    request["ip"] = ip
+    user, why = check_init_data_why(request.headers.get("X-Init-Data", ""))
     if not user:
+        if why != "old":   # 6h+ purana session normal hai (user ne app khula chhoda). Baaki sab nakli/forged: ginti + feed
+            sec.forged(ip, f"initData {why}", f"{request.method} {request.path}", "UA: " + str(request.headers.get("User-Agent", ""))[:80])
         return web.json_response({"ok": False, "msg": "Session invalid. Bot se app dobara kholo."}, status=401)
     if not rate_ok(user["id"]):
         report_err(request, "Bahut tez! (rate limit, 429)", "⏱ Too fast", tg=user)
@@ -287,9 +345,15 @@ async def auth_mw(request, handler):
             id=user["id"], username=user.get("username"), first_name=user.get("first_name")))
         i18n.remember(u["id"], u.get("lang"))
         i18n.cur.set(u.get("lang") or "en")
+        await sec.track(u["id"], ip, user, request.path)
+        sec.note_headers(request, ip)
         if u["banned"]:
             return web.json_response({"ok": False, "msg": i18n.tr("🚫 Account banned.")}, status=403)
         u = await with_device(u, request.headers.get("X-Device", ""), request.headers.get("X-Fp", ""))
+        if u.get("device_state") in ("changed", "other") and u["id"] not in config.ADMIN_IDS:
+            sec.alert("⚠️ <b>Device mismatch</b>: " + ("same Telegram ID, alag device (account share/hack?)" if u["device_state"] == "changed"
+                                                    else "ye device kisi aur account ka hai (multi-account?)"),
+                      u=user, ip=ip, path=_rp(request), every=3600, key=("dev", u["id"], u["device_state"]))
         if not u["device_ok"] and u["id"] not in config.ADMIN_IDS and request.path not in OPEN_PATHS:
             return web.json_response({"ok": False, "code": "need_verify",
                                       "msg": i18n.tr("🔐 Pehle device verify karo.")})
@@ -312,8 +376,8 @@ async def auth_mw(request, handler):
 
 
 def client_ip(request):
-    xf = request.headers.get("X-Forwarded-For", "")
-    return (xf.split(",")[0].strip() if xf else (request.remote or ""))[:64]
+    """Asli client IP (sec.client_ip): proxy ka header, X-Forwarded-For ka pehla entry nahi (wo user khud bhej sakta hai)."""
+    return sec.client_ip(request)
 
 
 _clog_n = {}
@@ -527,11 +591,14 @@ async def ads_callback(request):
     except ValueError:
         fresh = False
     exp = hmac.new(config.ADS_SIGN_SECRET.encode(), ts.encode() + b"." + eid.encode() + b"." + raw, hashlib.sha256).hexdigest()
-    if not (ts and eid and fresh and hmac.compare_digest(sig, exp)):
-        log.warning("ads callback REJECTED: headers=%s fresh=%s sig_ok=%s", bool(ts and eid), fresh, hmac.compare_digest(sig, exp))
+    sig_ok = _eq(sig, exp)
+    if not (ts and eid and fresh and sig_ok):
+        log.warning("ads callback REJECTED: headers=%s fresh=%s sig_ok=%s", bool(ts and eid), fresh, sig_ok)
         if ts and eid and time.monotonic() - _cb_warn[0] > 600:   # asli Ads Galaxy callback jaisa dikha par reject: admin ko 10 min me ek baar batao
             _cb_warn[0] = time.monotonic()
-            extras.feed(f"🚨 Ads Galaxy callback reject hua (signature ok={hmac.compare_digest(sig, exp)}, fresh={fresh}). Render me ADS_SIGN_SECRET check karo.")
+            extras.feed(f"🚨 Ads Galaxy callback reject hua (signature ok={sig_ok}, fresh={fresh}). Render me ADS_SIGN_SECRET check karo.{_ipl(request)}")
+        elif not (ts and eid):   # provider ke headers hi nahi: koi random banda endpoint try kar raha hai
+            sec.alert("🚨 <b>Ads callback bina provider headers ke</b> (hack try?)", ip=_ip(request), path=_rp(request), every=600)
         return web.json_response({"ok": False}, status=401)
     try:
         d = json.loads(raw)
@@ -554,7 +621,11 @@ async def ads_callback(request):
 async def monetag_postback(request):
     """Monetag postback (GET). Auth: URL me secret. Ek ymid = ek reward; sirf impression + valued par coins."""
     q = request.query
-    if not config.MT_ON or not hmac.compare_digest(q.get("secret", ""), config.MT_SECRET):
+    if not config.MT_ON or not _eq(q.get("secret", ""), config.MT_SECRET):
+        if config.MT_ON:   # galat secret: hack try ya Monetag me purana secret. Secret ki value kabhi log/feed me nahi daalte
+            sec.alert("🚨 <b>Monetag postback galat secret</b> (hack try ya Monetag me purana secret?)", ip=_ip(request), path=_rp(request),
+                      detail=f"ymid={str(q.get('ymid', ''))[:40]} tg_id={str(q.get('telegram_id', ''))[:20]} zone={str(q.get('zone_id', ''))[:12]}",
+                      every=600, key=("mtsec", _ip(request)))
         return web.json_response({"ok": False}, status=403)
     if q.get("event_type") != "impression" or q.get("reward_event_type") != "valued":
         return web.json_response({"ok": True, "result": "ignored"})
@@ -799,7 +870,7 @@ async def api_deposit_claim(request):
     if st == "credited":
         return ok(msg=f"✅ Payment mil gayi! +{paise} coins ad balance me add ho gaye.", credited=True)
     if st == "pending":
-        extras.feed(f"🧾 Deposit claim #{extra} ₹{paise / 100:.2f} — {extras.uname(u)}")
+        extras.feed(f"🧾 Deposit claim #{extra} ₹{paise / 100:.2f} — {extras.uname(u)}{_ipl(request)}")
         try:
             await fam.claim_alert(extra, u["id"], txn, paise)
         except Exception:
@@ -808,7 +879,11 @@ async def api_deposit_claim(request):
     if st == "dup":
         return err("Is transaction ka claim pehle se pending hai.")
     if st == "limit":
+        sec.alert("🧾 <b>Deposit claim spam</b> (limit cross)", u=_tg(request), uid=u["id"], ip=_ip(request), path=_rp(request),
+                  detail=f"txn={txn[:40]} amount=₹{paise / 100:.2f}", every=300, key=("claimlim", u["id"]))
         return err("Bahut claims. Thodi der baad try karo.")
+    sec.alert("🧾 <b>Jhoota deposit claim?</b> (txn pehle use ho chuka / amount match nahi)", u=_tg(request), uid=u["id"], ip=_ip(request), path=_rp(request),
+              detail=f"txn={txn[:40]} amount=₹{paise / 100:.2f} result={st}", every=120, key=("claimbad", u["id"], txn))
     return err("Ye transaction pehle hi use ho chuka hai ya amount match nahi karta.")
 
 
@@ -905,6 +980,11 @@ async def api_withdraw(request):
     amazon = bd.get("method") == "amazon"
     usdt_wd = bd.get("method") == "usdt"
     addr = str(bd.get("addr") or "").strip()
+    _cv = bd.get("coins")
+    if bd.get("method") not in (None, "", "upi", "gplay", "amazon", "usdt") or isinstance(_cv, (bool, list, dict)):
+        # app ka UI aisa kabhi nahi bhejta: request haath se badli gayi hai
+        sec.alert("🚨 <b>Withdraw request me jhoothi/badli hui value</b> (tamper)", u=_tg(request), uid=uid, ip=_ip(request), path=_rp(request),
+                  detail=f"method={str(bd.get('method'))[:30]} coins={str(_cv)[:30]}", every=120, key=("wdtamper", uid))
     if not u["device_ok"]:
         return err("🔐 Withdraw ke liye pehle device verify karo.")
     if not cooldown(uid, "wd", 8):
@@ -958,7 +1038,7 @@ async def api_withdraw(request):
     if not r:
         return err("❌ Withdraw nahi ho paya. Balance aur verification check karo.")
     wid, upi, fee, net = r
-    t = asyncio.create_task(_after_withdraw(request.app["bot"], u, wid, coins, fee, net, upi, pl["level"] if not is_admin_u else 0, usdt_amt))
+    t = asyncio.create_task(_after_withdraw(request.app["bot"], u, wid, coins, fee, net, upi, pl["level"] if not is_admin_u else 0, usdt_amt, ip=_ip(request)))
     _bg.add(t)
     t.add_done_callback(_bg.discard)
     if usdt_wd:
@@ -974,11 +1054,18 @@ async def api_withdraw(request):
                   f"Admin approve karega to paisa aa jayega. {pl['wd_hours']} ghante me process na hua to coins apne aap wapas aa jayenge.")
 
 
-async def _after_withdraw(bot, u, wid, coins, fee, net, upi, lvl=0, usdt=None):
+async def _after_withdraw(bot, u, wid, coins, fee, net, upi, lvl=0, usdt=None, ip=""):
     try:
+        ipl = ""
+        if ip:   # withdraw approve karne se pehle admin ko IP + us IP ke baaki accounts dikhao (multi-account pakadne ke liye)
+            try:
+                others = await db.ip_others(ip, u["id"])
+            except Exception:
+                others = []
+            ipl = f"\n🌐 IP: <code>{html.escape(ip)}</code>" + (f" — is IP par <b>{len(others)} aur account</b>: {', '.join(str(x) for x in others)}" if others else "")
         extras.feed(f"💸 <b>Withdraw request</b> [{util.tag(lvl)}] #{wid}: " + (f"{usdt} USDT" if usdt else f"₹{net:.2f}") + f" → <code>{html.escape(upi)}</code>, {coins + fee} coins kate "
-                    f"— {extras.uname(u)}")
-        why = ""
+                    f"— {extras.uname(u)}{ipl}")
+        why = ipl
         if u["suspect"]:
             why += "\n⚠️ <b>Suspect:</b> iska device fingerprint kisi aur account se match karta hai. Pehle check karo."
         if usdt:
@@ -1014,21 +1101,21 @@ def _wd_row(w):
 @routes.get("/api/admin/stats")
 async def api_adm_stats(request):
     if not adm_only(request):
-        return err("Not allowed")
+        return deny(request)
     return ok(stats=await db.adm_stats())
 
 
 @routes.get("/api/admin/users")
 async def api_adm_users(request):
     if not adm_only(request):
-        return err("Not allowed")
+        return deny(request)
     return ok(users=[_u_row(r) for r in await db.adm_users(request.query.get("q", ""))])
 
 
 @routes.get("/api/admin/user")
 async def api_adm_user(request):
     if not adm_only(request):
-        return err("Not allowed")
+        return deny(request)
     d = await db.adm_user(to_int(request.query.get("id")))
     if not d:
         return err("User nahi mila.")
@@ -1044,7 +1131,7 @@ async def api_adm_user(request):
 @routes.post("/api/admin/user/act")
 async def api_adm_user_act(request):
     if not adm_only(request):
-        return err("Not allowed")
+        return deny(request)
     d = await body(request)
     good, msg = await adminops.user_act(request.app["bot"], to_int(d.get("id")), str(d.get("act")), to_int(d.get("amount")))
     return ok(msg=msg) if good else err(msg)
@@ -1053,7 +1140,7 @@ async def api_adm_user_act(request):
 @routes.get("/api/admin/withdraws")
 async def api_adm_wd(request):
     if not is_support(request):
-        return err("Not allowed")
+        return deny(request)
     pend, rec = await db.adm_wd_list()
     if not adm_only(request):  # support agent: sirf USDT withdraws
         pend = [w for w in pend if w["method"] == "usdt"]
@@ -1064,7 +1151,7 @@ async def api_adm_wd(request):
 @routes.post("/api/admin/withdraw/act")
 async def api_adm_wd_act(request):
     if not is_support(request):
-        return err("Not allowed")
+        return deny(request)
     d = await body(request)
     act = str(d.get("act"))
     if act not in ("ok", "no", "paid", "refund"):
@@ -1072,7 +1159,7 @@ async def api_adm_wd_act(request):
     if not adm_only(request):  # support agent: sirf USDT withdraw ko approve (TxID) ya reject
         w0 = await db.wd_get(to_int(d.get("id")))
         if act not in ("ok", "no") or not w0 or w0["method"] != "usdt":
-            return err("Not allowed")
+            return deny(request)
     good, msg = await adminops.wd_act(request.app["bot"], to_int(d.get("id")), act, str(d.get("code") or ""))
     return ok(msg=msg) if good else err(msg)
 
@@ -1080,7 +1167,7 @@ async def api_adm_wd_act(request):
 @routes.get("/api/admin/deposits")
 async def api_adm_dep(request):
     if not adm_only(request):
-        return err("Not allowed")
+        return deny(request)
     claims, unm = await db.fam_review()
     return ok(claims=[{"id": c["id"], "user": c["user_id"], "txn": c["txn_id"], "inr": c["amount_paise"] / 100, "at": iso(c["created_at"])} for c in claims],
               unmatched=[{"txn": p["txn_id"], "inr": p["pay_paise"] / 100, "sender": p["sender"], "at": iso(p["created_at"])} for p in unm])
@@ -1089,7 +1176,7 @@ async def api_adm_dep(request):
 @routes.post("/api/admin/deposit/act")
 async def api_adm_dep_act(request):
     if not adm_only(request):
-        return err("Not allowed")
+        return deny(request)
     d = await body(request)
     k, bot = str(d.get("kind")), request.app["bot"]
     if k in ("claim_ok", "claim_no"):
@@ -1106,7 +1193,7 @@ async def api_adm_dep_act(request):
 @routes.get("/api/admin/tasks")
 async def api_adm_tasks(request):
     if not adm_only(request):
-        return err("Not allowed")
+        return deny(request)
     ch, bw = await db.adm_tasks()
     return ok(channels=[{"id": t["id"], "owner": t["owner_id"], "name": t["username"] or "", "title": t["title"], "target": t["target"], "done": t["joined"]} for t in ch],
               botworks=[{"id": t["id"], "owner": t["owner_id"], "name": t["username"] or "", "title": t["title"], "target": t["target"], "reward": t["reward"]} for t in bw])
@@ -1115,7 +1202,7 @@ async def api_adm_tasks(request):
 @routes.post("/api/admin/task/cancel")
 async def api_adm_task_cancel(request):
     if not adm_only(request):
-        return err("Not allowed")
+        return deny(request)
     d = await body(request)
     kind = "bw" if d.get("kind") == "bw" else "ch"
     refund = await db.adm_cancel(kind, to_int(d.get("id")))
@@ -1199,6 +1286,9 @@ async def api_support(request):
 @routes.get("/api/support/photo")
 async def api_support_photo(request):
     row = await db.sup_file(to_int(request.query.get("id")))
+    if row and row["user_id"] != request["u"]["id"] and not is_support(request):
+        sec.alert("🚨 <b>Dusre user ki support file kholne ki koshish</b> (IDOR)", u=_tg(request), ip=_ip(request), path=_rp(request),
+                  detail=f"file id={to_int(request.query.get('id'))}", every=300)
     if not row or (row["user_id"] != request["u"]["id"] and not is_support(request)):
         return web.Response(status=404, text="gone")
     data = bytes(row["data"])
@@ -1250,7 +1340,7 @@ async def api_support_send(request):
 @routes.get("/api/admin/support")
 async def api_admin_threads(request):
     if not is_support(request):
-        return err("Not allowed")
+        return deny(request)
     rows = await db.sup_threads()
     return ok(threads=[{"uid": r["user_id"], "name": ("@" + r["username"]) if r["username"] else (r["first_name"] or str(r["user_id"])),
                         "last": r["last_text"], "from": r["last_sender"], "at": iso(r["last_at"]), "lvl": r["lvl"]} for r in rows])
@@ -1259,7 +1349,7 @@ async def api_admin_threads(request):
 @routes.get("/api/admin/support/chat")
 async def api_admin_chat(request):
     if not is_support(request):
-        return err("Not allowed")
+        return deny(request)
     uid = to_int(request.query.get("uid"))
     u = await db.get_user(uid)
     if not u:
@@ -1271,7 +1361,7 @@ async def api_admin_chat(request):
 @routes.post("/api/admin/support/reply")
 async def api_admin_reply(request):
     if not is_support(request):
-        return err("Not allowed")
+        return deny(request)
     fields, photo, voice = await read_text_photo(request)
     if fields is None:
         return err(photo)
@@ -1313,6 +1403,8 @@ async def api_gift(request):
     if not u["device_ok"]:
         return err("🔐 Gift code ke liye pehle device verify karo.")
     if gift_locked(u["id"]):
+        sec.alert("🛑 <b>Gift code brute-force</b>: 5 galat attempts, user 1 ghante ke liye lock", u=_tg(request), uid=u["id"], ip=_ip(request),
+                  path=_rp(request), every=600, key=("giftlock", u["id"]))
         return err("Bahut galat attempts. 1 ghante baad try karo.")
     if not cooldown(u["id"], "gift", 3):
         return too_fast()
@@ -1321,8 +1413,10 @@ async def api_gift(request):
     res, coins = await db.gift_redeem(u["id"], code)
     if res == "invalid":
         _giftfail.setdefault(u["id"], []).append(time.time())
+        sec.alert(f"🎁 <b>Galat gift code try</b> ({len(_giftfail[u['id']])}/5 is ghante)", u=_tg(request), uid=u["id"], ip=_ip(request),
+                  path=_rp(request), detail=f"code={code}", every=60, key=("gift", u["id"]))
     if res == "ok":
-        extras.feed(f"🎁 Gift code redeem: {coins} coins — {extras.uname(request['u'])}")
+        extras.feed(f"🎁 Gift code redeem: {coins} coins — {extras.uname(request['u'])}{_ipl(request)}")
         return ok(msg=f"Gift code redeem hua! +{coins} coins balance me add ho gaye.")
     return err({"invalid": "Ye gift code galat hai.", "used_up": "Is gift code ki limit khatam ho gayi.",
                 "dup": "Tum ye code pehle use kar chuke ho."}[res])
@@ -1351,11 +1445,15 @@ async def api_verify(request):
     if not cooldown(u["id"], "verify", 3):
         return too_fast()
     if not HEX64.match(dev) or not HEX64.match(fp):
+        sec.alert("🧪 <b>Device token me jhoothi value</b> (verify tamper / purana client)", u=_tg(request), uid=u["id"], ip=_ip(request),
+                  path=_rp(request), detail=f"dev_len={len(dev)} fp_len={len(fp)}", every=300, key=("vtamper", u["id"]))
         return err("Device check fail hua. App band karke dobara kholo.")
     bot = request.app["bot"]
     if u["device_db"] or u["device_state"] == "other" or await db.set_device(u["id"], sha(dev), fp, client_ip(request)) != "ok":
         # device/ID mismatch ya device kisi aur account ka: block (self-service verify nahi)
         await db.flag_suspect(u["id"])
+        sec.alert("🚫 <b>Device verify fail</b> (device/ID mismatch, multi-account?)", u=_tg(request), uid=u["id"], ip=_ip(request), path=_rp(request),
+                  detail=f"device_state={u.get('device_state')} already_verified={bool(u.get('device_db'))}", every=600, key=("vfail", u["id"]))
         await util.notify(bot, u["id"], "🚫 <b>Device verification fail</b>\nYe device kisi aur account se linked hai "
                           "ya tumhara account pehle kisi aur device se verify tha. Account block hai, Customer service se contact karo.")
         return err("🚫 Device verification fail. Account block hai, Customer service se contact karo.")

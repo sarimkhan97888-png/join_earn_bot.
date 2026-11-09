@@ -37,6 +37,7 @@ def _add(d):
 _add({
     "Thoda ruko, bahut tez kar rahe ho.": ("थोड़ा रुको, तुम बहुत तेज़ी से कर रहे हो।", "Slow down, you're going too fast."),
     "Bahut tez! Thoda ruko.": ("बहुत तेज़! थोड़ा रुको।", "Too fast! Please wait a moment."),
+    "Bahut zyada nakli requests. Thodi der baad try karo.": ("बहुत ज़्यादा गलत रिक्वेस्ट आईं। थोड़ी देर बाद कोशिश करो।", "Too many invalid requests. Please try again later."),
     "⚠️ Server error. Thodi der baad try karo.": ("⚠️ सर्वर में गड़बड़ है। थोड़ी देर बाद कोशिश करो।", "⚠️ Server error. Please try again in a while."),
     "🚫 Account banned.": ("🚫 अकाउंट बैन है।", "🚫 Account banned."),
     "🔐 Pehle device verify karo.": ("🔐 पहले डिवाइस वेरिफाई करो।", "🔐 Please verify your device first."),
