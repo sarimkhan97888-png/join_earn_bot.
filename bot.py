@@ -709,11 +709,31 @@ async def assign_cmd(update: Update, ctx):
 
 
 # ---------------- chat member events ----------------
+async def _who(uid):
+    try:
+        u = await db.get_user(uid)
+        who = extras.uname(u) if u else f"<code>{uid}</code>"
+        ip, n = await db.ip_last(uid)
+        if ip:
+            who += f"\n🌐 IP: <code>{html.escape(ip)}</code>" + (f" — is IP par <b>{n} aur account</b>" if n else "")
+        return who, (int(u["balance"]) if u else None)
+    except Exception:
+        return f"<code>{uid}</code>", None
+
+
 async def _after_leave(bot, uid, rows):
-    """Leave par user ko DM (uski bhasha me): kitne coins kate; withdraw cancel hua ho to wo bhi."""
+    """Leave par: admin feed + user ko DM (uski bhasha me): kitne coins kate; withdraw cancel hua ho to wo bhi."""
+    if not rows:
+        return
+    who, bal = await _who(uid)
     for r in rows:
+        title = html.escape(r.get("title") or str(r.get("chat_id")))
+        msg = f"🚪 <b>Channel leave</b> {who}\n📣 {title}\n💸 <b>-{r.get('reward') or 0}</b> coins kate" + (f" · balance ab <b>{bal}</b>" if bal is not None else "")
+        for w in r.get("cancelled") or []:
+            msg += f"\n↩️ Withdraw #{w['id']} ({w['coins']} coins) auto-cancel, coins refund"
+        extras.feed(msg)
         if r.get("reward"):
-            await util.notify(bot, uid, f"⚠️ Tumne channel \"{html.escape(r.get('title') or '')}\" leave kiya, isliye <b>{r['reward']}</b> coins kat gaye. "
+            await util.notify(bot, uid, f"⚠️ Tumne channel \"{title}\" leave kiya, isliye <b>{r['reward']}</b> coins kat gaye. "
                                         f"Channel dobara join karoge to coins wapas mil jayenge.")
         for w in r.get("cancelled") or []:
             await util.notify(bot, uid, f"↩️ Tumhara withdraw #{w['id']} cancel ho gaya (channel leave kiya). Coins balance me wapas aa gaye. "
@@ -729,6 +749,9 @@ async def on_chat_member(update: Update, ctx):
     if now and not was:
         await db.record_join(cid, uid)
         back = await db.unblock(cid, uid)
+        if back is not None:
+            who, bal = await _who(uid)
+            extras.feed(f"🔁 <b>Channel rejoin</b> {who}\n📣 {html.escape(cm.chat.title or str(cid))}\n💰 <b>+{back}</b> coins wapas" + (f" · balance ab <b>{bal}</b>" if bal is not None else ""))
         if back:
             await util.notify(ctx.bot, uid, f"✅ Channel rejoin ho gaya. <b>+{back}</b> coins wapas mil gaye.")
     elif was and not now:

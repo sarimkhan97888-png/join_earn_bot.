@@ -307,6 +307,15 @@ async def ip_touch(uid, ip):
     return bool(new), int(accs or 0), int(ips or 0)
 
 
+async def ip_last(uid):
+    """User ka sabse naya IP (ya None) aur us IP par baaki accounts ki ginti."""
+    ip = await pool.fetchval("SELECT ip FROM user_ips WHERE user_id=$1 ORDER BY last_seen DESC LIMIT 1", uid)
+    if not ip:
+        return None, 0
+    n = await pool.fetchval("SELECT count(*) FROM user_ips WHERE ip=$1 AND user_id<>$2", ip, uid)
+    return ip, int(n or 0)
+
+
 async def ip_others(ip, uid, limit=5):
     """Is IP par ye user chhodke baaki (sabse nayi) account ids."""
     rows = await pool.fetch("SELECT user_id FROM user_ips WHERE ip=$1 AND user_id<>$2 ORDER BY last_seen DESC LIMIT $3", ip, uid, limit)
