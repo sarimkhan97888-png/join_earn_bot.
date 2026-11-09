@@ -58,7 +58,6 @@ WITHDRAW_TAX_PERCENT = 10   # withdraw par tax (coins me kat-ta hai)
 HOLD_HOURS = 24
 WD_LOCK_HOURS = 24           # channel-join se kamaye coins itne ghante baad withdraw hote hain
 RECHECK_DAYS = 7
-REJOIN_PERCENT = 50         # channel leave ke baad rejoin par (sirf ek baar) itna % reward wapas, 24h hold me
 MAX_DEVICE_CHANGES = 3     # device badalne par re-verify kitni baar allowed
 # Premium levels. None = unlimited. fee None = normal WITHDRAW_TAX_PERCENT. wd_hours = pending withdraw itne ghante me admin ne
 # na kiya to expire+refund (kam = tez). tasks = roz kitne task (channel+group+bot work milake) bana sakte hain. ref = refer reward.

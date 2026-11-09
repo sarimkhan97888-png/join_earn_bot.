@@ -466,13 +466,12 @@ async def api_check(request):
 async def api_rejoin(request):
     uid = request["u"]["id"]
     bot = request.app["bot"]
-    got = 0
     for r in await db.left_chats(uid):
         if await util.member_status(bot, r["chat_id"], uid):
-            got += await db.unblock(r["chat_id"], uid) or 0
+            await db.unblock(r["chat_id"], uid)
     if await db.left_chats(uid):
         return err("❌ Abhi bhi kuch channels join nahi kiye.")
-    return ok(msg="Unblocked! Ab tasks kar sakte ho.")
+    return ok(msg="Sab channel join ho gaye ✅ Coins wapas mil gaye.")
 
 
 def _lb_rows(rows, uid):
@@ -1411,7 +1410,7 @@ async def resolve_chat(request, raw, make_link, pick=None):
                     break
         if not cands:
             return (f"❌ Private channel/group ke liye pehle @{bot.username} ko us chat me Admin banao (Invite Users permission ke saath), "
-                    "phir yahi invite link dobara daalo. (Ya channel ke kisi message ka link / -100.. wali ID bhi chalegi.)")
+                    "phir us channel ka koi bhi message @{bot.username} ko forward karo aur yahi invite link dobara daalo. (Ya channel ke kisi message ka link / -100.. wali ID bhi chalegi.)")
         if len(cands) > 1:
             return {"pick": [{"id": c["chat_id"], "title": c["title"] or str(c["chat_id"])} for c in cands]}
         ident = cands[0]["chat_id"]

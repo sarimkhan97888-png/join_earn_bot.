@@ -146,7 +146,7 @@ CREATE TABLE IF NOT EXISTS ad_views(
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS ad_views_user ON ad_views(user_id, claimed_at);
-UPDATE completions SET status='ok' WHERE status='left';
+ALTER TABLE users DROP CONSTRAINT IF EXISTS users_balance_check;
 UPDATE users SET debt=0 WHERE debt<>0;
 CREATE TABLE IF NOT EXISTS lb_week(
   week DATE NOT NULL, user_id BIGINT NOT NULL, earned BIGINT NOT NULL DEFAULT 0, refs INT NOT NULL DEFAULT 0,
@@ -728,57 +728,65 @@ async def is_blocked(uid):
 
 
 async def left_chats(uid):
-    return []  # (block hata diya)
+    """Jin channels ko user ne (pehle RECHECK_DAYS din me) leave kiya aur abhi tak rejoin nahi kiya."""
     return await pool.fetch(
         """SELECT DISTINCT ON (c.chat_id) c.chat_id, t.title, t.link FROM completions c
            JOIN tasks t ON t.id=c.task_id WHERE c.user_id=$1 AND c.status='left'""", uid)
 
 
 async def unblock(chat_id, uid):
-    """Left channel dobara join kiya. Pehli baar sirf REJOIN_PERCENT% coins (24h hold me), aage 0 coins.
-    Return coins (int, 0 bhi ho sakta) ya None agar koi 'left' record nahi tha."""
+    """Channel dobara join kiya: jo coins leave par kate the wo poore wapas. Return coins (int) ya None agar kuch 'left' nahi tha."""
     async with pool.acquire() as c, c.transaction():
-        r = await c.fetchrow(
+        rows = await c.fetch(
             "SELECT * FROM completions WHERE chat_id=$1 AND user_id=$2 AND status='left' FOR UPDATE", chat_id, uid)
-        if not r:
+        if not rows:
             return None
-        if r["rejoin_paid"]:
-            await c.execute("UPDATE completions SET status='ok', reward=0, last_checked=now() WHERE id=$1", r["id"])
-            return 0
-        coins = r["reward"] * config.REJOIN_PERCENT // 100
-        await c.execute(
-            """UPDATE completions SET status='hold', reward=$2, rejoin_paid=TRUE, last_checked=now(),
-               release_at=now() + make_interval(hours => $3) WHERE id=$1""", r["id"], coins, config.HOLD_HOURS)
-        if coins:
-            await c.execute("UPDATE users SET hold=hold+$1 WHERE id=$2", coins, uid)
-            await led(c, uid, "hold", coins, r["id"])
-        return coins
+        back = 0
+        for r in rows:
+            await c.execute("UPDATE completions SET status='ok', left_at=NULL, last_checked=now() WHERE id=$1", r["id"])
+            if r["reward"]:
+                await c.execute("UPDATE users SET balance=balance+$1 WHERE id=$2", r["reward"], uid)
+                await led(c, uid, "rejoin", r["reward"], r["id"])
+                back += r["reward"]
+        return back
 
 
 async def revoke(comp_id):
+    """Leave par coins wapas. Kharch ho chuke hon to balance minus me jata hai; minus ho to pending withdraw cancel (coins refund).
+    Return row + 'cancelled' (cancel hue withdrawals ki list)."""
     async with pool.acquire() as c, c.transaction():
         r = await c.fetchrow("SELECT * FROM completions WHERE id=$1 FOR UPDATE", comp_id)
         if not r or r["status"] not in ("hold", "ok"):
             return None
-        cut = r["reward"]
+        uid = r["user_id"]
+        await c.fetchval("SELECT id FROM users WHERE id=$1 FOR UPDATE", uid)
         if r["status"] == "hold":
-            await c.execute("UPDATE users SET hold=GREATEST(hold-$1,0) WHERE id=$2", cut, r["user_id"])
-        else:
-            # coins pehle hi withdraw ho chuke ho sakte hain: jitna balance me hai utna kaato, baaki "debt" (agli kamai se kategi)
-            bal = await c.fetchval("SELECT balance FROM users WHERE id=$1 FOR UPDATE", r["user_id"])
-            cut = min(int(bal or 0), r["reward"])
-            await c.execute("UPDATE users SET balance=balance-$1, debt=debt+$2 WHERE id=$3",
-                            cut, r["reward"] - cut, r["user_id"])
+            await c.execute("UPDATE users SET hold=GREATEST(hold-$1,0) WHERE id=$2", r["reward"], uid)
+        elif r["reward"]:
+            await c.execute("UPDATE users SET balance=balance-$1 WHERE id=$2", r["reward"], uid)
+            await led(c, uid, "revoke", -r["reward"], comp_id)
         await c.execute("UPDATE completions SET status='left' WHERE id=$1", comp_id)
-        if cut:
-            await led(c, r["user_id"], "revoke", -cut, comp_id)
-        return r
+        cancelled = []
+        bal = int(await c.fetchval("SELECT balance FROM users WHERE id=$1", uid))
+        if bal < 0:
+            for w in await c.fetch("SELECT * FROM withdrawals WHERE user_id=$1 AND status='pending' ORDER BY id DESC FOR UPDATE", uid):
+                if bal >= 0:
+                    break
+                await c.execute("UPDATE withdrawals SET status='rejected', updated_at=now() WHERE id=$1", w["id"])
+                await c.execute("UPDATE users SET balance=balance+$1 WHERE id=$2", w["coins"], uid)
+                await led(c, uid, "withdraw_refund", w["coins"], w["id"])
+                bal += w["coins"]
+                cancelled.append(w)
+        out = dict(r)
+        out["cancelled"] = cancelled
+        return out
 
 
 async def revoke_by_chat(chat_id, uid):
-    return []  # leave par coins nahi kat-te
+    """Is channel ke (pehle RECHECK_DAYS din ke) completions revoke karo. Return list (har row me 'cancelled')."""
     ids = await pool.fetch(
-        "SELECT id FROM completions WHERE chat_id=$1 AND user_id=$2 AND status IN ('hold','ok')", chat_id, uid)
+        "SELECT id FROM completions WHERE chat_id=$1 AND user_id=$2 AND status IN ('hold','ok') "
+        "AND created_at > now() - make_interval(days => $3)", chat_id, uid, config.RECHECK_DAYS)
     out = []
     for row in ids:
         r = await revoke(row["id"])

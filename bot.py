@@ -704,17 +704,29 @@ async def assign_cmd(update: Update, ctx):
 
 
 # ---------------- chat member events ----------------
+async def _after_leave(bot, uid, rows):
+    """Leave par withdraw cancel hua ho to user ko seedha, chhota sa message (coins wapas balance me)."""
+    for r in rows:
+        for w in r.get("cancelled") or []:
+            await util.notify(bot, uid, f"↩️ Tumhara withdraw #{w['id']} cancel ho gaya (channel leave kiya). Coins balance me wapas aa gaye. "
+                                        f"Channel dobara join karo.")
+
+
 async def on_chat_member(update: Update, ctx):
-    """Join record karte hain (auto-check ke liye). Leave par koi coin cut / block nahi."""
+    """Join record. Leave (pehle RECHECK_DAYS din me) par us channel ke coins wapas; rejoin par poore wapas mil jate hain."""
     cm = update.chat_member
     uid = cm.new_chat_member.user.id
     cid = cm.chat.id
     was, now = util.in_chat(cm.old_chat_member), util.in_chat(cm.new_chat_member)
     if now and not was:
         await db.record_join(cid, uid)
+        back = await db.unblock(cid, uid)
+        if back:
+            await util.notify(ctx.bot, uid, f"✅ Channel rejoin ho gaya. <b>+{back}</b> coins wapas mil gaye.")
     elif was and not now:
         await db.pool.execute(
             "UPDATE completions SET left_at=now() WHERE chat_id=$1 AND user_id=$2 AND left_at IS NULL", cid, uid)
+        await _after_leave(ctx.bot, uid, await db.revoke_by_chat(cid, uid))
 
 
 async def on_join_request(update: Update, ctx):
@@ -748,6 +760,33 @@ async def on_my_chat_member(update: Update, ctx):
         await util.notify(ctx.bot, m.from_user.id, f"✅ Bot ko \"{html.escape(m.chat.title or '')}\" me Admin bana diya. Ab app me Add Task me us channel ka link (private ho to invite link) daalo.")
 
 
+async def on_forward(update: Update, ctx):
+    """Private channel/group ka koi message bot ko forward karo: chat pehchan kar yaad rakhta hai (bot admin + user admin ho to)."""
+    msg = update.effective_message
+    if not msg:
+        return
+    fo = getattr(msg, "forward_origin", None)
+    ch = getattr(fo, "chat", None) or getattr(fo, "sender_chat", None) or getattr(msg, "forward_from_chat", None)
+    if not ch or ch.type not in ("channel", "group", "supergroup"):
+        return
+    uid = update.effective_user.id
+    lang = await i18n.lang_of(uid)
+    try:
+        me = await ctx.bot.get_chat_member(ch.id, ctx.bot.id)
+    except TelegramError:
+        me = None
+    if not me or me.status != "administrator":
+        return await msg.reply_text(i18n.tr(f"❌ Bot is chat me Admin nahi hai. @{ctx.bot.username} ko Admin banao (Invite Users permission ke saath).", lang))
+    try:
+        um = await ctx.bot.get_chat_member(ch.id, uid)
+    except TelegramError:
+        um = None
+    if await db.usdt_meta_get("owner_check") != "0" and (not um or um.status not in ("creator", "administrator")):
+        return await msg.reply_text(i18n.tr("❌ Tum is chat ke admin/owner nahi ho.", lang))
+    await db.botchat_set(ch.id, ch.title, ch.type, getattr(ch, "username", None), uid, True)
+    await msg.reply_text(i18n.tr(f"✅ \"{html.escape(ch.title or '')}\" mil gaya. Ab app me Add Task me wahi private invite link daalo.", lang))
+
+
 # ---------------- background jobs ----------------
 async def _release_one(ctx, r):
     """Purane 'hold' rows (hold hatane se pehle ke) bina penalty ke release."""
@@ -775,10 +814,12 @@ async def _recheck_one(ctx, r):
     st = await util.member_status(ctx.bot, r["chat_id"], r["user_id"])
     await db.pool.execute("UPDATE completions SET last_checked=now(), left_at=CASE WHEN $2::bool THEN COALESCE(left_at, now()) ELSE left_at END WHERE id=$1",
                           r["id"], st is False)
+    if st is False:
+        await _after_leave(ctx.bot, r["user_id"], await db.revoke_by_chat(r["chat_id"], r["user_id"]))
 
 
 async def job_recheck(ctx):
-    """Sirf pehle RECHECK_DAYS din tak (sirf record, koi penalty nahi)."""
+    """Sirf pehle RECHECK_DAYS din tak chupke check: leave mila to coins wapas (revoke)."""
     rows = await db.pool.fetch(
         """SELECT id, chat_id, user_id FROM completions WHERE status='ok' AND left_at IS NULL
            AND created_at > now() - make_interval(days => $1) ORDER BY last_checked LIMIT 200""", config.RECHECK_DAYS)
@@ -1016,6 +1057,7 @@ def register(app):
     app.add_handler(MessageHandler((filters.PHOTO | filters.Document.IMAGE) & filters.CaptionRegex(r"^/snd") & filters.ChatType.PRIVATE, snd_cmd))
     app.add_handler(CallbackQueryHandler(botwork.on_cb, pattern=r"^(bws_|bwa_)"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, botwork.on_text))
+    app.add_handler(MessageHandler(filters.FORWARDED & filters.ChatType.PRIVATE, on_forward), group=1)
     app.add_handler(ChatMemberHandler(on_chat_member, ChatMemberHandler.CHAT_MEMBER))
     app.add_handler(ChatMemberHandler(on_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
     app.add_handler(ChatJoinRequestHandler(on_join_request))
