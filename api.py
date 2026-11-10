@@ -8,6 +8,7 @@ import io
 import json
 import logging
 import re
+import secrets
 import time
 import types
 from decimal import ROUND_CEILING, ROUND_DOWN, Decimal
@@ -109,7 +110,7 @@ async def body(request):
 
 
 def pub(u):
-    return {"id": u["id"], "balance": u["balance"], "hold": u["hold"], "total_earned": u["total_earned"],
+    return {"id": u["id"], "banned": bool(u.get("banned")), "balance": u["balance"], "hold": u["hold"], "total_earned": u["total_earned"],
             "ad_balance": u["ad_balance"], "premium": util.is_prem(u), "premium_until": iso(u["premium_until"]),
             "level": util.level(u), "real_level": util.real_level(u),
             "gmail": u["gmail"], "upi": u["upi"], "device_ok": u["device_ok"],
@@ -229,27 +230,49 @@ async def with_device(u, dev, fp):
 
 _fj = {}          # uid -> (member?, time)
 _fj_warn = [-1e9]
+BANNED_OK = {"/api/me", "/api/lang", "/api/clientlog", "/api/support", "/api/support/send", "/api/support/photo", "/api/support/voice"}
 FORCE_OPEN = {"/api/me", "/api/verify", "/api/lang", "/api/force/check", "/api/streak/seen", "/api/clientlog"}
 
 
-async def force_ok(bot, uid, fresh=False):
-    """True = force-join channel ka member (ya check band/ho nahi paya: tab user ko rokte nahi). Member 2 min cache, non-member 4 sec."""
-    if not config.FORCE_CHANNEL or uid in config.ADMIN_IDS:
-        return True
+def force_chans():
+    """Zaroori channels: [(chat, link, naam)] — official channel + payment (payout) channel."""
+    out = []
+    if config.FORCE_CHANNEL:
+        out.append((config.FORCE_CHANNEL, config.FORCE_LINK, "Official Channel"))
+    pc = (config.PAYOUT_CHANNEL_ID or "").strip()
+    if pc and config.PAYOUT_CHANNEL_LINK:
+        out.append((int(pc) if pc.lstrip("-").isdigit() else pc, config.PAYOUT_CHANNEL_LINK, "Payments Channel"))
+    return out
+
+
+async def force_missing(bot, uid, fresh=False):
+    """Un channels ki list (link, naam) jinme user abhi member nahi. Check na ho paye to us channel ko ignore (user ko mat roko).
+    Member 2 min cache, non-member 4 sec."""
+    chans = force_chans()
+    if not chans or uid in config.ADMIN_IDS:
+        return []
     t = time.monotonic()
     v = _fj.get(uid)
-    if not fresh and v and t - v[1] < (120 if v[0] else 4):
+    if not fresh and v and t - v[1] < (120 if not v[0] else 4):
         return v[0]
-    st = await util.member_status(bot, config.FORCE_CHANNEL, uid)
-    if st is None:  # bot channel me admin nahi / Telegram error: user ko mat roko, admin ko batao
-        if t - _fj_warn[0] > 3600:
-            _fj_warn[0] = t
-            extras.feed("🚨 Force-join check nahi ho pa raha: bot ko " + html.escape(config.FORCE_CHANNEL) + " me <b>Admin</b> banao. Tab tak sabko andar jaane de raha hu.")
-        return True
+    miss = []
+    for chat, link, name in chans:
+        st = await util.member_status(bot, chat, uid)
+        if st is None:  # bot channel me admin nahi / Telegram error: user ko mat roko, admin ko batao
+            if t - _fj_warn[0] > 3600:
+                _fj_warn[0] = t
+                extras.feed("🚨 Force-join check nahi ho pa raha: bot ko " + html.escape(str(chat)) + " me <b>Admin</b> banao. Tab tak sabko andar jaane de raha hu.")
+            continue
+        if not st:
+            miss.append({"link": link, "name": name})
     if len(_fj) > 100000:
         _fj.clear()
-    _fj[uid] = (st, t)
-    return st
+    _fj[uid] = (miss, t)
+    return miss
+
+
+async def force_ok(bot, uid, fresh=False):
+    return not await force_missing(bot, uid, fresh)
 
 
 _errseen = {}
@@ -348,7 +371,13 @@ async def auth_mw(request, handler):
         await sec.track(u["id"], ip, user, request.path)
         sec.note_headers(request, ip)
         if u["banned"]:
-            return web.json_response({"ok": False, "msg": i18n.tr("🚫 Account banned.")}, status=403)
+            if request.path not in BANNED_OK:   # banned user sirf app ka 'banned' screen aur support chat khol sakta hai
+                return web.json_response({"ok": False, "msg": i18n.tr("🚫 Account banned.")}, status=403)
+            u["need_join"] = False
+            u["join_missing"] = []
+            request["u"] = u
+            request["tg"] = user
+            return await handler(request)
         u = await with_device(u, request.headers.get("X-Device", ""), request.headers.get("X-Fp", ""))
         if u.get("device_state") in ("changed", "other") and u["id"] not in config.ADMIN_IDS:
             sec.alert("⚠️ <b>Device mismatch</b>: " + ("same Telegram ID, alag device (account share/hack?)" if u["device_state"] == "changed"
@@ -357,9 +386,11 @@ async def auth_mw(request, handler):
         if not u["device_ok"] and u["id"] not in config.ADMIN_IDS and request.path not in OPEN_PATHS:
             return web.json_response({"ok": False, "code": "need_verify",
                                       "msg": i18n.tr("🔐 Pehle device verify karo.")})
-        need_join = not await force_ok(request.app["bot"], u["id"])
+        miss = await force_missing(request.app["bot"], u["id"])
+        need_join = bool(miss)
+        u["join_missing"] = miss
         if need_join and request.path not in FORCE_OPEN:
-            return web.json_response({"ok": False, "code": "need_join", "link": config.FORCE_LINK,
+            return web.json_response({"ok": False, "code": "need_join", "link": (miss[0]["link"] if miss else config.FORCE_LINK), "links": miss,
                                       "msg": i18n.tr("📢 Pehle hamara channel join karo.")})
         u["need_join"] = need_join
         request["u"] = u
@@ -443,7 +474,8 @@ async def api_force_check(request):
     u = request["u"]
     if not cooldown(u["id"], "force", 2):
         return too_fast()
-    if await force_ok(request.app["bot"], u["id"], fresh=True):
+    miss = await force_missing(request.app["bot"], u["id"], fresh=True)
+    if not miss:
         return ok(joined=True, msg="✅ Verify ho gaya! Welcome.")
     return err("❌ Abhi channel join nahi dikha. Join karke thodi der baad Verify dabao.")
 
@@ -474,7 +506,8 @@ async def api_me(request):
     ao = await db.active_order(u["id"])
     me["active"] = None if not ao else {"method": ao["method"], "left": int(ao["left_s"]),
         "pay_amount": format(ao["pay_amount"], "f") if ao["method"] == "usdt" else f"{ao['pay_paise'] // 100}.{ao['pay_paise'] % 100:02d}"}
-    me.update(need_join=bool(u.get("need_join")), join_link=config.FORCE_LINK)
+    miss = u.get("join_missing") or []
+    me.update(need_join=bool(u.get("need_join")), join_link=(miss[0]["link"] if miss else config.FORCE_LINK), join_links=miss)
     me.update(tasks_today=tdone, wd_today=wdone, queued=[{"level": r["level"], "days": r["days"]} for r in queued])
     return ok(me=me, blocked=blocked, history=hist, cfg=cfg(request))
 
@@ -532,7 +565,9 @@ async def api_rejoin(request):
     bot = request.app["bot"]
     for r in await db.left_chats(uid):
         if await util.member_status(bot, r["chat_id"], uid):
-            await db.unblock(r["chat_id"], uid)
+            back = await db.unblock(r["chat_id"], uid)
+            if back is not None:
+                extras.feed(f"🔁 <b>Channel rejoin (Re-check)</b> {extras.uname(request['u'])}\n📣 {html.escape(r['title'] or str(r['chat_id']))}\n💰 <b>+{back}</b> coins wapas")
     if await db.left_chats(uid):
         return err("❌ Abhi bhi kuch channels join nahi kiye.")
     return ok(msg="Sab channel join ho gaye ✅ Coins wapas mil gaye.")
@@ -1107,19 +1142,22 @@ async def api_adm_stats(request):
 
 @routes.get("/api/admin/users")
 async def api_adm_users(request):
-    if not adm_only(request):
+    if not is_support(request):
         return deny(request)
     return ok(users=[_u_row(r) for r in await db.adm_users(request.query.get("q", ""))])
 
 
 @routes.get("/api/admin/user")
 async def api_adm_user(request):
-    if not adm_only(request):
+    if not is_support(request):
         return deny(request)
     d = await db.adm_user(to_int(request.query.get("id")))
     if not d:
         return err("User nahi mila.")
     out = _u_row(d)
+    if not adm_only(request):   # support agent: sirf pehchan + ban status (paise/UPI/history nahi)
+        return ok(user={"id": out["id"], "name": out["name"], "username": out["username"], "banned": out["banned"],
+                        "verified": out["verified"], "suspect": d["suspect"], "at": out["at"], "level": out["level"]})
     out.update(upi=d["upi"] or "", gmail=d["gmail"] or "", hold=d["hold"], earned=d["total_earned"], debt=d["debt"],
                suspect=d["suspect"], bypass=d["dev_bypass"], tasks_done=d["tasks_done"], refs=d["refs"],
                until=iso(d["premium_until"]),
@@ -1130,10 +1168,16 @@ async def api_adm_user(request):
 
 @routes.post("/api/admin/user/act")
 async def api_adm_user_act(request):
-    if not adm_only(request):
+    if not is_support(request):
         return deny(request)
     d = await body(request)
-    good, msg = await adminops.user_act(request.app["bot"], to_int(d.get("id")), str(d.get("act")), to_int(d.get("amount")))
+    uid2, act = to_int(d.get("id")), str(d.get("act"))
+    if not adm_only(request):   # support agent: sirf ban / unban, aur admin/support ko nahi
+        if act not in ("ban", "unban") or uid2 in config.SUPPORT_IDS or uid2 in config.ADMIN_IDS:
+            return deny(request)
+    good, msg = await adminops.user_act(request.app["bot"], uid2, act, to_int(d.get("amount")))
+    if good and not adm_only(request):
+        extras.feed(f"👮 Support {extras.uname(request['u'])} ne user <code>{uid2}</code> ko {'BAN' if act == 'ban' else 'UNBAN'} kiya{_ipl(request)}")
     return ok(msg=msg) if good else err(msg)
 
 
@@ -1164,6 +1208,25 @@ async def api_adm_wd_act(request):
     return ok(msg=msg) if good else err(msg)
 
 
+@routes.post("/api/admin/gift")
+async def api_adm_gift(request):
+    """Gift code banao (admin + support). Support ke liye limit: 1000 coins x 100 users tak."""
+    if not is_support(request):
+        return deny(request)
+    d = await body(request)
+    coins, uses = to_int(d.get("coins")), to_int(d.get("uses"))
+    code = str(d.get("code") or "").strip().upper() or secrets.token_hex(4).upper()
+    cap_c, cap_u = (100_000_000, 100_000) if adm_only(request) else (1000, 100)
+    if not (1 <= coins <= cap_c) or not (1 <= uses <= cap_u):
+        return err(f"Coins 1 se {cap_c:,} aur users 1 se {cap_u:,} ke beech rakho.")
+    if not re.fullmatch(r"[A-Z0-9]{4,20}", code):
+        return err("Code 4-20 letters/numbers ka hona chahiye.")
+    if not await db.gift_create(code, coins, uses):
+        return err("Ye code pehle se hai. Dusra code chuno.")
+    extras.feed(f"🎁 {'Admin' if adm_only(request) else 'Support ' + extras.uname(request['u'])} ne gift code banaya: <code>{code}</code> · {coins} coins × {uses} users{_ipl(request)}")
+    return ok(msg=f"Code: {code}", code=code)
+
+
 @routes.get("/api/admin/deposits")
 async def api_adm_dep(request):
     if not adm_only(request):
@@ -1192,23 +1255,27 @@ async def api_adm_dep_act(request):
 
 @routes.get("/api/admin/tasks")
 async def api_adm_tasks(request):
-    if not adm_only(request):
+    if not is_support(request):
         return deny(request)
     ch, bw = await db.adm_tasks()
+    if not adm_only(request):   # support agent: sirf channel tasks
+        bw = []
     return ok(channels=[{"id": t["id"], "owner": t["owner_id"], "name": t["username"] or "", "title": t["title"], "target": t["target"], "done": t["joined"]} for t in ch],
               botworks=[{"id": t["id"], "owner": t["owner_id"], "name": t["username"] or "", "title": t["title"], "target": t["target"], "reward": t["reward"]} for t in bw])
 
 
 @routes.post("/api/admin/task/cancel")
 async def api_adm_task_cancel(request):
-    if not adm_only(request):
+    if not is_support(request):
         return deny(request)
     d = await body(request)
     kind = "bw" if d.get("kind") == "bw" else "ch"
+    if kind == "bw" and not adm_only(request):
+        return deny(request)
     refund = await db.adm_cancel(kind, to_int(d.get("id")))
     if refund is None:
         return err("Ye task cancel nahi ho sakta.")
-    extras.feed(f"🛑 Admin ne {'bot work' if kind == 'bw' else 'task'} #{d.get('id')} cancel kiya (refund {refund} coins)")
+    extras.feed(f"🛑 {'Admin' if adm_only(request) else 'Support ' + extras.uname(request['u'])} ne {'bot work' if kind == 'bw' else 'task'} #{d.get('id')} cancel kiya (refund {refund} coins){_ipl(request)}")
     return ok(msg=f"Cancel hua. Owner ko {refund} coins refund.")
 
 

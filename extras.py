@@ -180,23 +180,48 @@ def _mask_upi(upi):
 
 
 async def post_payout(w):
-    """Withdraw sach me paid hone par public proof channel me post (UPI masked). Kabhi raise nahi karta."""
+    """Withdraw sach me paid hone par public proof channel me post: photo (UPI/USDT/GPlay/Amazon ka alag design, bot ke naam ke saath)
+    + sundar caption + 'Open Bot' button. UPI masked. Photo fail ho to sirf text. Kabhi raise nahi karta."""
     if not config.PAYOUT_CHANNEL_ID or not util.main_bot:
         return
     try:
+        import payimg
+        from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as M
+        bot = util.main_bot
         cid = int(config.PAYOUT_CHANNEL_ID) if config.PAYOUT_CHANNEL_ID.lstrip("-").isdigit() else config.PAYOUT_CHANNEL_ID
         when = datetime.now(timezone(timedelta(hours=5, minutes=30)))
+        ws = f"{when:%d %b %Y, %H:%M} IST"
+        wid = w["id"]
         if w.get("method") == "usdt":
             a = w["upi"]
-            await util.main_bot.send_message(
-                cid, f"✅ <b>Payout successful</b>\n💸 Amount: <b>{w['usdt']} USDT</b> (BEP20)\n"
-                     f"👛 Wallet: <code>{html.escape(a[:6] + '…' + a[-4:])}</code>\n🔗 <a href=\"https://bscscan.com/tx/{w['tx']}\">TxID: {w['tx'][:10]}…{w['tx'][-6:]}</a>\n"
-                     f"🆔 Withdraw #{w['id']}\n🕒 {when:%d %b %Y, %H:%M} IST", parse_mode="HTML", disable_web_page_preview=True)
-            return
-        await util.main_bot.send_message(
-            cid, f"✅ <b>Payout successful</b>\n💸 Amount: <b>₹{float(w['amount_inr']):.2f}</b>\n"
-                 f"🏦 UPI: <code>{html.escape(_mask_upi(w['upi']))}</code>\n🆔 Withdraw #{w['id']}\n"
-                 f"🕒 {when:%d %b %Y, %H:%M} IST", parse_mode="HTML", disable_web_page_preview=True)
+            kind, amt, who = "usdt", f"{w['usdt']} USDT", "Wallet: " + a[:6] + "…" + a[-4:]
+            body = (f"💸 Amount: <b>{w['usdt']} USDT</b> (BEP20)\n👛 Wallet: <code>{html.escape(a[:6] + '…' + a[-4:])}</code>\n"
+                    f"🔗 <a href=\"https://bscscan.com/tx/{w['tx']}\">TxID: {w['tx'][:10]}…{w['tx'][-6:]}</a>")
+        else:
+            inr = float(w["amount_inr"])
+            amt = f"₹{inr:.2f}"
+            if w["upi"] == db.AMAZON:
+                kind, who, body = "amz", "Amazon voucher sent", f"💸 Amount: <b>{amt}</b>\n🛒 Method: <b>Amazon Voucher</b>"
+            elif w["upi"] == db.GPLAY:
+                kind, who, body = "gp", "Google Play code sent", f"💸 Amount: <b>{amt}</b>\n🎁 Method: <b>Google Play Code</b>"
+            else:
+                kind, who = "upi", "UPI: " + _mask_upi(w["upi"])
+                body = f"💸 Amount: <b>{amt}</b>\n🏦 UPI: <code>{html.escape(_mask_upi(w['upi']))}</code>"
+        cap = (f"✅ <b>Payout Successful!</b>\n━━━━━━━━━━━━━━\n{body}\n🆔 Withdraw #{wid}\n🕒 {ws}\n━━━━━━━━━━━━━━\n"
+               f"🚀 Tum bhi kamao aur seedha withdraw lo — <b>{html.escape(config.APP_NAME)}</b>")
+        kb = M([[B(f"🚀 Open {config.APP_NAME}", url=f"https://t.me/{bot.username}")]])
+        img = None
+        try:
+            img = await asyncio.to_thread(payimg.render, kind, amt, who, config.APP_NAME, bot.username, ws, wid)
+        except Exception as e:
+            log.warning("payout image failed #%s: %s", wid, e)
+        if img:
+            try:
+                await bot.send_photo(cid, img, caption=cap, parse_mode="HTML", reply_markup=kb)
+                return
+            except Exception as e:
+                log.warning("payout photo post failed #%s: %s", wid, e)
+        await bot.send_message(cid, cap, parse_mode="HTML", reply_markup=kb, disable_web_page_preview=True)
     except Exception as e:
         log.warning("payout channel post failed #%s: %s", w.get("id"), e)
 
