@@ -695,7 +695,7 @@ async def api_ads_claim(request):
         return err("Ad verify nahi hua.")
     res, rw = await db.ad_check(u["id"], rids)
     if res == "ok":
-        return ok(msg=f"{config.ADS_BUNDLE} ads complete! +{rw} coins Ad balance me mile (ye sirf tasks me use hote hain, withdraw nahi)", reward=rw)
+        return ok(msg=f"Ad complete! +{rw} coins mil gaye", reward=rw)
     if res == "wait":
         return web.json_response({"ok": False, "code": "wait", "msg": i18n.tr("Ad verify ho raha hai, thoda ruko...")})
     return err({"bad": "Ad poori nahi dekhi, coins nahi mile.", "limit": "Aaj ki ad limit poori ho gayi. Kal dobara aana."}[res])
