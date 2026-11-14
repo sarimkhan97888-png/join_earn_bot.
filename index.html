@@ -1273,27 +1273,32 @@ const H = {
       for (let i = 0; i < 20 && !have(); i++) await new Promise(x => setTimeout(x, 200));
       if (!have()) return popup('error', 'Oops', 'Ad load nahi hui. Apna DNS / ad-blocker band karke dobara try karo.');
     }
+    const need = c.ads_bundle || 1;
+    const mk = () => 'u' + S.me.id + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    const ymids = Array.from({ length: need }, mk);
+    const pre = k => { try { const p = mtFn()({ type: 'preload', ymid: ymids[k] }); return p && p.catch ? p.catch(() => {}) : Promise.resolve(); } catch (e) { return Promise.resolve(); } };
     const srcs = [];   // pehle Ads Galaxy, na chale to Monetag
     if (c.ads_gx && typeof window.showAdsGalaxy === 'function') srcs.push(async () => { const r = await window.showAdsGalaxy(); return r && r.request_id; });
-    if (c.ads_mt && typeof mtFn() === 'function') srcs.push(async () => {
-      const ymid = 'u' + S.me.id + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-      await mtFn()({ ymid });
-      return ymid;
+    if (c.ads_mt && typeof mtFn() === 'function') srcs.push(async k => {
+      if (k === 0) { $('#loader').classList.add('open'); try { await pre(0); } finally { $('#loader').classList.remove('open'); } }   // pehli ad pehle load
+      if (k + 1 < need) pre(k + 1);   // agli ad abhi se load hone lagti hai, taaki beech me gap na ho
+      await mtFn()({ ymid: ymids[k] });
+      return ymids[k];
     });
     S.adBusy = true;
-    const need = c.ads_bundle || 1, rids = [];
+    const rids = [];
     let lastErr = null;
     for (let n = 0; n < need; n++) {   // ek ke baad ek, teeno poori dekhni hain
       let rid = null;
       for (const run of srcs) {
-        try { rid = await run(); if (rid) break; } catch (e) { lastErr = e; }
+        try { rid = await run(n); if (rid) break; } catch (e) { lastErr = e; }
       }
       if (!rid) break;
       rids.push(rid);
     }
     if (rids.length < need) {
       S.adBusy = false;
-      if (rids.length) return popup('info', 'Ads', trUI('Poori {} ads dekhni hoti hain, tumne {} dekhi. Dobara try karo.').replace('{}', need).replace('{}', rids.length));
+      if (rids.length) return popup('info', 'Ads', 'Ad poori nahi dekhi, coins nahi mile.');
       const k = lastErr && lastErr.code;
       if (k === 'NO_FILL') return popup('info', 'Ads', 'Abhi koi ad available nahi hai. Thodi der baad try karo.');
       if (k === 'INVALID_INIT_DATA') return popup('error', 'Ads', 'Ad sirf Telegram ke andar chalti hai.');
