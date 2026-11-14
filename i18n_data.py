@@ -188,7 +188,7 @@ _add({
     "Bahut claims. Thodi der baad try karo.": ("बहुत सारे क्लेम। थोड़ी देर बाद कोशिश करो।", "Too many claims. Please try again in a while."),
     "Ye transaction pehle hi use ho chuka hai ya amount match nahi karta.": ("ये ट्रांज़ैक्शन पहले ही इस्तेमाल हो चुका है या अमाउंट मैच नहीं करता।", "This transaction was already used or the amount doesn't match."),
     "Min {} aur max {} coins, 100 ke multiple me daalo.": ("कम से कम {} और ज़्यादा से ज़्यादा {} कॉइन्स, 100 के गुणक में डालो।", "Enter min {} and max {} coins, in multiples of 100."),
-    "Min {} coins aur 100 ke multiple me daalo.": ("कम से कम {} कॉइन्स और 100 के गुणक में डालो।", "Enter at least {} coins, in multiples of 100."),
+    "Min {} coins daalo.": ("कम से कम {} कॉइन्स डालो।", "Enter at least {} coins."),
     "Sahi premium level chuno.": ("सही प्रीमियम लेवल चुनो।", "Choose a valid premium level."),
     "Turant active karna hai ya purana premium khatam hone ke baad? Chuno.": ("तुरंत चालू करना है या पुराना प्रीमियम खत्म होने के बाद? चुनो।", "Activate now, or after your current premium ends? Please choose."),
     "{} din ka Premium Level {}": ("{} दिन का प्रीमियम लेवल {}", "{}-day Premium Level {}"),
@@ -320,6 +320,7 @@ _add({
 
 # ---------------- ads ----------------
 _add({
+    "{} ads complete! +{} coins Ad balance me mile (ye sirf tasks me use hote hain, withdraw nahi)": ("{} विज्ञापन पूरे! +{} कॉइन्स Ad balance में मिले (ये सिर्फ़ टास्क में इस्तेमाल होते हैं, विड्रॉ नहीं)", "{} ads complete! +{} coins added to Ad balance (usable for tasks only, not withdrawable)"),
     "Ad complete! +{} coins mil gaye": ("विज्ञापन पूरा! +{} कॉइन्स मिल गए", "Ad complete! +{} coins added"),
     "Ads abhi available nahi.": ("विज्ञापन अभी उपलब्ध नहीं हैं।", "Ads are not available right now."),
     "Ad verify nahi hua.": ("विज्ञापन वेरिफाई नहीं हुआ।", "Ad could not be verified."),

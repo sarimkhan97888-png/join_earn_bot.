@@ -146,6 +146,8 @@ CREATE TABLE IF NOT EXISTS ad_views(
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS ad_views_user ON ad_views(user_id, claimed_at);
+ALTER TABLE ad_views ADD COLUMN IF NOT EXISTS counted BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE ad_views ADD COLUMN IF NOT EXISTS to_ad BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE users DROP CONSTRAINT IF EXISTS users_balance_check;
 UPDATE users SET debt=0 WHERE debt<>0;
 CREATE TABLE IF NOT EXISTS lb_week(
@@ -287,8 +289,18 @@ class RetryPool:
 
 async def init():
     global pool
-    pool = RetryPool(await asyncpg.create_pool(config.DATABASE_URL, min_size=config.DB_POOL_MIN, max_size=config.DB_POOL_MAX,
-                                               command_timeout=30, max_inactive_connection_lifetime=1800))
+    # Deploy ke time purana + naya instance ek saath chalte hain: connection slots kam pad sakte hain -> 2 min tak retry
+    for attempt in range(24):
+        try:
+            raw = await asyncpg.create_pool(config.DATABASE_URL, min_size=config.DB_POOL_MIN, max_size=config.DB_POOL_MAX,
+                                            command_timeout=30, max_inactive_connection_lifetime=1800)
+            break
+        except (asyncpg.exceptions.TooManyConnectionsError, asyncpg.exceptions.CannotConnectNowError):
+            if attempt == 23:
+                raise
+            logging.getLogger("db").warning("DB connection slots full, retry %s/24 (purana instance band hone ka wait)", attempt + 1)
+            await asyncio.sleep(5)
+    pool = RetryPool(raw)
     async with pool.acquire() as c:
         await c.execute("SELECT pg_advisory_lock(727001)")  # 2 instance ek saath boot ho to schema DDL takrao nahi
         try:
@@ -511,7 +523,7 @@ async def claim(task_id, uid):
 # ---------- 24h withdraw lock (channel-join + ads ke coins) ----------
 _LOCK_ROWS = (f"(SELECT reward, release_at AS rel FROM completions WHERE user_id=$1 AND status='ok' AND release_at>now() "
               f"UNION ALL SELECT reward, claimed_at + make_interval(hours => {int(config.WD_LOCK_HOURS)}) AS rel FROM ad_views "
-              f"WHERE user_id=$1 AND claimed AND claimed_at + make_interval(hours => {int(config.WD_LOCK_HOURS)}) > now()) l")
+              f"WHERE user_id=$1 AND claimed AND NOT to_ad AND claimed_at + make_interval(hours => {int(config.WD_LOCK_HOURS)}) > now()) l")
 
 
 async def locked_coins(c, uid):
@@ -534,8 +546,9 @@ async def lock_next(uid):
 
 # ---------- ads (Monetag rewarded) ----------
 async def ad_credit(request_id, event_id, uid, status, reward, daily):
-    """Monetag postback: coins yahin milte hain (event/request ek hi baar).
-    'ok' | 'dup' | 'bad' | 'skip' | 'limit'"""
+    """Ad postback/callback. ADS_BUNDLE (3) ads poori hone par EK baar reward, wo bhi ad_balance me (withdraw nahi, sirf tasks me).
+    'ok' (bundle poora, coins mile) | 'part' (ek ad ginti me aayi, abhi baaki) | 'dup' | 'bad' | 'skip' | 'limit'"""
+    need = max(1, int(config.ADS_BUNDLE))
     async with pool.acquire() as c, c.transaction():
         ins = await c.fetchval(
             "INSERT INTO ad_views(request_id,event_id,user_id,status) VALUES($1,$2,$3,$4) ON CONFLICT(request_id) DO NOTHING RETURNING request_id",
@@ -547,24 +560,43 @@ async def ad_credit(request_id, event_id, uid, status, reward, daily):
         u = await c.fetchrow("SELECT id, banned FROM users WHERE id=$1 FOR UPDATE", uid)
         if not u or u["banned"]:
             return "skip"
-        n = await c.fetchval(f"SELECT count(*) FROM ad_views WHERE user_id=$1 AND claimed AND claimed_at >= {IST_DAY}", uid)
+        n = await c.fetchval(f"SELECT count(*) FROM ad_views WHERE user_id=$1 AND claimed AND reward>0 AND claimed_at >= {IST_DAY}", uid)
         if n >= daily:
             return "limit"
-        await c.execute("UPDATE ad_views SET claimed=TRUE, reward=$2, claimed_at=now() WHERE request_id=$1", request_id, reward)
-        await c.execute("UPDATE users SET balance=balance+$1, total_earned=total_earned+$1 WHERE id=$2", reward, uid)
+        await c.execute("UPDATE ad_views SET counted=TRUE WHERE request_id=$1", request_id)
+        rows = await c.fetch(
+            "SELECT request_id FROM ad_views WHERE user_id=$1 AND counted AND NOT claimed AND created_at > now() - interval '30 minutes' "
+            "ORDER BY created_at, request_id LIMIT $2", uid, need)
+        if len(rows) < need:
+            return "part"
+        for r in rows:
+            await c.execute("UPDATE ad_views SET claimed=TRUE, claimed_at=now(), to_ad=TRUE, reward=0 WHERE request_id=$1", r["request_id"])
+        await c.execute("UPDATE ad_views SET reward=$2 WHERE request_id=$1", request_id, reward)
+        await c.execute("UPDATE users SET ad_balance=ad_balance+$1, total_earned=total_earned+$1 WHERE id=$2", reward, uid)
         await led(c, uid, "ad", reward, request_id)
         await lb_add(c, uid, earned=reward)
         return "ok"
 
 
-async def ad_check(uid, request_id):
-    """Frontend poll: ('ok', reward) (credit ho gaya) | 'wait' (callback abhi nahi aaya) | 'bad' | 'limit'"""
-    r = await pool.fetchrow("SELECT claimed, status, reward FROM ad_views WHERE request_id=$1 AND user_id=$2", request_id, uid)
-    if not r:
+async def ad_check(uid, request_ids):
+    """Frontend poll (ek rid ya rid-list): ('ok', reward) | 'wait' (callback abhi baaki) | 'bad' | 'limit'"""
+    if isinstance(request_ids, str):
+        request_ids = [request_ids]
+    seen, bad = 0, False
+    for rid in request_ids[:10]:
+        r = await pool.fetchrow("SELECT claimed, status, reward FROM ad_views WHERE request_id=$1 AND user_id=$2", rid, uid)
+        if not r:
+            continue
+        seen += 1
+        if r["claimed"] and int(r["reward"]) > 0:
+            return "ok", int(r["reward"])
+        if r["status"] != "completed":
+            bad = True
+    if bad:
+        return "bad", 0
+    if seen < len(request_ids):
         return "wait", 0
-    if r["claimed"]:
-        return "ok", int(r["reward"])
-    return ("bad" if r["status"] != "completed" else "limit"), 0
+    return "limit", 0
 
 
 async def ad_recent(uid, minutes=10):
@@ -575,7 +607,7 @@ async def ad_recent(uid, minutes=10):
 
 async def ads_today(uid):
     return int(await pool.fetchval(
-        f"SELECT count(*) FROM ad_views WHERE user_id=$1 AND claimed AND claimed_at >= {IST_DAY}", uid) or 0)
+        f"SELECT count(*) FROM ad_views WHERE user_id=$1 AND claimed AND reward>0 AND claimed_at >= {IST_DAY}", uid) or 0)
 
 
 async def ad_prune():

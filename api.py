@@ -128,7 +128,7 @@ def cfg(request):
     return {"coin_per_inr": config.COIN_PER_INR, "join_reward": config.JOIN_REWARD, "ad_cost": config.AD_COST, "task_fee": config.TASK_FEE, "max_members": (None if request["u"]["id"] in config.ADMIN_IDS else util.plan(request["u"])["members"]),
             "min_task_members": config.MIN_TASK_MEMBERS, "max_task_members": config.MAX_TASK_MEMBERS,
             "min_deposit": config.MIN_DEPOSIT_COINS, "min_withdraw": config.MIN_WITHDRAW_COINS, "gplay_step": config.GPLAY_STEP_INR * config.COIN_PER_INR, "amazon_step": config.AMAZON_STEP_INR * config.COIN_PER_INR,
-            "hold_hours": config.HOLD_HOURS, "ads_on": config.ads_any(), "ads_gx": config.gx_active(), "ads_id": config.ADS_MINI_APP_ID, "ads_mt": config.mt_active(), "mt_zone": config.MT_ZONE, "ads_reward": config.ads_reward(), "ads_daily": config.ADS_DAILY, "plans": plans_json(),
+            "hold_hours": config.HOLD_HOURS, "ads_on": config.ads_any(), "ads_gx": config.gx_active(), "ads_id": config.ADS_MINI_APP_ID, "ads_mt": config.mt_active(), "mt_zone": config.MT_ZONE, "ads_reward": config.ads_reward(), "ads_daily": config.ADS_DAILY, "ads_bundle": config.ADS_BUNDLE, "plans": plans_json(),
             "bw_min_reward": config.BW_MIN_REWARD,
             "bw_min_users": config.BW_MIN_USERS, "bw_max_users": config.BW_MAX_USERS,
             "support_url": config.SUPPORT_URL, "bot_username": request.app["bot"].username,
@@ -587,7 +587,7 @@ _cb_warn = [-1e9]
 async def _ad_feed(uid, res, src, reward):
     """Ad ka nateeja admin ko: kisne pura dekha, limit par fir bhi dekha, shak wale (device match / 10 min me bahut ads). Kabhi raise nahi."""
     try:
-        if res == "dup":
+        if res in ("dup", "part"):
             return
         u = await db.get_user(uid)
         who = extras.uname(u) if u else f"<code>{uid}</code>"
@@ -599,7 +599,7 @@ async def _ad_feed(uid, res, src, reward):
             r10 = await db.ad_recent(uid, 10)
             if r10 >= 4:
                 flags.append(f"10 min me {r10} ads")
-            line = f"📺 Ad pura dekha ✅ {who} +{reward} ({n}/{config.ADS_DAILY}) [{src}]"
+            line = f"📺 Ad pura dekha ✅ ({config.ADS_BUNDLE} ads) {who} +{reward} Ad balance ({n}/{config.ADS_DAILY}) [{src}]"
         elif res == "limit":
             line = f"🚫 Daily limit ke baad bhi ad {who} ({n}/{config.ADS_DAILY}) [{src}]"
             flags.append("limit cross karne ki koshish")
@@ -688,12 +688,14 @@ async def api_ads_claim(request):
         return err("Ads abhi available nahi.")
     if not cooldown(u["id"], "ads", 1):
         return too_fast()
-    rid = str((await body(request)).get("rid") or "")
-    if not re.fullmatch(r"[\w.\-]{3,100}", rid):
+    bd = await body(request)
+    rids = bd.get("rids") if isinstance(bd.get("rids"), list) else [bd.get("rid")]
+    rids = [str(x or "") for x in rids][:10]
+    if not rids or not all(re.fullmatch(r"[\w.\-]{3,100}", x) for x in rids):
         return err("Ad verify nahi hua.")
-    res, rw = await db.ad_check(u["id"], rid)
+    res, rw = await db.ad_check(u["id"], rids)
     if res == "ok":
-        return ok(msg=f"Ad complete! +{rw} coins mil gaye", reward=rw)
+        return ok(msg=f"{config.ADS_BUNDLE} ads complete! +{rw} coins Ad balance me mile (ye sirf tasks me use hote hain, withdraw nahi)", reward=rw)
     if res == "wait":
         return web.json_response({"ok": False, "code": "wait", "msg": i18n.tr("Ad verify ho raha hai, thoda ruko...")})
     return err({"bad": "Ad poori nahi dekhi, coins nahi mile.", "limit": "Aaj ki ad limit poori ho gayi. Kal dobara aana."}[res])
@@ -1000,7 +1002,7 @@ async def api_order(request):
 
 def lock_msg(lk, bal, pct, nxt):
     free = max(0, bal - lk)
-    mx = free * 100 // (100 + pct) // 100 * 100
+    mx = free * 100 // (100 + pct)
     return (f"⏳ {lk} coins abhi 24 ghante ke andar kamaye hain, ye {nxt // 3600} ghante {nxt % 3600 // 60} min baad withdraw honge. "
             f"Abhi max withdraw: {mx} coins.")
 
@@ -1050,15 +1052,15 @@ async def api_withdraw(request):
     elif gplay:
         if coins < step or coins % step:
             return err(f"Google Play code ₹{config.GPLAY_STEP_INR} ke multiple me hota hai ({step} coins ke multiple me daalo, jaise {step}, {step * 2}, {step * 5}).")
-    elif coins < config.MIN_WITHDRAW_COINS or coins % config.COIN_PER_INR:
-        return err(f"Min {config.MIN_WITHDRAW_COINS} coins aur 100 ke multiple me daalo.")
+    elif coins < config.MIN_WITHDRAW_COINS:
+        return err(f"Min {config.MIN_WITHDRAW_COINS} coins daalo.")
     pct = pl["fee"]
     need = coins + db.wd_fee(coins, pct)
     lk, lk_left = (0, 0) if is_admin_u else await db.lock_info(uid)
     if lk and need > u["balance"] - lk and need <= u["balance"]:
         return err(lock_msg(lk, u["balance"], pct, await db.lock_next(uid)))
     if need > u["balance"]:
-        mx = u["balance"] * 100 // (100 + pct) // 100 * 100
+        mx = u["balance"] * 100 // (100 + pct)
         return err(f"{coins} coins + {db.wd_fee(coins, pct)} tax = {need} coins chahiye, balance {u['balance']}. "
                    f"Max withdraw: {mx} coins.")
     usdt_amt = (Decimal(coins) / config.COIN_PER_INR / config.USDT_INR_RATE).quantize(Decimal("0.0001"), ROUND_DOWN) if usdt_wd else None

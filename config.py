@@ -14,8 +14,8 @@ DATABASE_URL = os.environ["DATABASE_URL"]
 BASE_URL = os.environ["BASE_URL"].rstrip("/")  # e.g. https://yourbot.onrender.com
 PORT = _int("PORT", 8080)
 APP_NAME = os.getenv("APP_NAME", "Profitix")      # loading banner / welcome me dikhta hai
-DB_POOL_MAX = _int("DB_POOL_MAX", 15)
-DB_POOL_MIN = _int("DB_POOL_MIN", 4)
+DB_POOL_MAX = _int("DB_POOL_MAX", 8)
+DB_POOL_MIN = _int("DB_POOL_MIN", 2)
 BACKUP_BOT_TOKEN = os.getenv("BACKUP_BOT_TOKEN", "")  # optional: daily data backup is bot se admin ko jata hai
 PAYOUT_CHANNEL_ID = os.getenv("PAYOUT_CHANNEL_ID", "@PROFITIXPAYOUT").strip()      # public payout proof channel (-100... ya @username); khali = band
 PAYOUT_CHANNEL_LINK = os.getenv("PAYOUT_CHANNEL_LINK", "https://t.me/PROFITIXPAYOUT").strip()  # https://t.me/... app me floating button
@@ -187,7 +187,8 @@ ADS_TS_TOL = int(os.getenv("ADS_TS_TOL", "300"))      # callback timestamp toler
 ADS_ON = bool(ADS_SIGN_SECRET)
 ADS_MINI_APP_ID = os.getenv("ADS_MINI_APP_ID", "148")
 ADS_REWARD = int(os.getenv("ADS_REWARD", "5"))   # coins per ad
-ADS_DAILY = int(os.getenv("ADS_DAILY", "10"))    # ek user roz max ads
+ADS_DAILY = int(os.getenv("ADS_DAILY", "10"))    # ek user roz max bundles (1 bundle = ADS_BUNDLE ads)
+ADS_BUNDLE = max(1, int(os.getenv("ADS_BUNDLE", "3")))   # itni ads poori dekhne par ek baar coins (ad_balance me, withdraw nahi)
 
 # ---- Monetag (rewarded interstitial, video) ----
 MT_ZONE = os.getenv("MONETAG_ZONE", "12150359")
